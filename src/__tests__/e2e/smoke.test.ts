@@ -22,7 +22,7 @@ import { createMessageHandler, type HandlerDeps } from "../../handler/message-ha
 import { createStreamingBridge } from "../../handler/streaming-integration.js"
 import { EventProcessor } from "../../streaming/event-processor.js"
 import { SubAgentTracker } from "../../streaming/subagent-tracker.js"
-import { createMockLogger, createMockFeishuClient, waitFor } from "../setup.js"
+import { createMockLogger, createMockFeishuClient, createMockGateway, waitFor } from "../setup.js"
 import type { CardKitClient } from "../../feishu/cardkit-client.js"
 import type { FeishuMessageEvent } from "../../types.js"
 import type { SessionManager } from "../../session/session-manager.js"
@@ -134,14 +134,10 @@ describe("E2E Smoke Tests", () => {
     const progressTracker = createMockProgressTracker()
     const sessionManager = createMockSessionManager(sessionId)
 
-    // Mock fetch: opencode POST /session/{id}/message → 200 OK
-    globalThis.fetch = vi.fn().mockResolvedValue({
-      ok: true,
-      text: () => Promise.resolve(""),
-    }) as any
+    const opencode = createMockGateway()
 
     const eventProcessor = new EventProcessor({ ownedSessions })
-    const subAgentTracker = new SubAgentTracker({ opencode: createMockGateway() })
+    const subAgentTracker = new SubAgentTracker({ opencode })
 
     const streamingBridge = createStreamingBridge({
       cardkitClient,
@@ -152,7 +148,7 @@ describe("E2E Smoke Tests", () => {
     })
 
     const { handleMessage } = createMessageHandler({
-      opencode: createMockGateway(),
+      opencode,
       sessionManager,
       dedup: { isDuplicate: vi.fn().mockReturnValue(false), close: vi.fn() } as any,
       eventProcessor,
@@ -175,10 +171,10 @@ describe("E2E Smoke Tests", () => {
     // Verify session was added to ownedSessions
     expect(ownedSessions.has(sessionId)).toBe(true)
 
-    // Verify opencode POST was called
-    expect(globalThis.fetch).toHaveBeenCalledWith(
-      `http://127.0.0.1:4096/session/${sessionId}/message`,
-      expect.objectContaining({ method: "POST" }),
+    // Verify opencode prompt was sent
+    expect(opencode.sendPrompt).toHaveBeenCalledWith(
+      sessionId,
+      expect.objectContaining({ text: expect.stringContaining("Hello from e2e") }),
     )
 
     // Simulate SSE events: text deltas then session idle
@@ -245,23 +241,12 @@ describe("E2E Smoke Tests", () => {
       data: { message_id: "lark-msg-2" },
     })
 
-    // Mock fetch: POST /session/{id}/message → 200 + GET /session/{id}/children → child session
-    globalThis.fetch = vi.fn().mockImplementation((url: string) => {
-      if (typeof url === "string" && url.includes("/children")) {
-        return Promise.resolve({
-          ok: true,
-          json: () => Promise.resolve([{ id: childSessionId, parentID: sessionId }]),
-        })
-      }
-      // Default: opencode POST message response
-      return Promise.resolve({
-        ok: true,
-        text: () => Promise.resolve(""),
-      })
-    }) as any
+    const opencode = createMockGateway({
+      children: vi.fn().mockResolvedValue([{ id: childSessionId, parentID: sessionId }]),
+    })
 
     const eventProcessor = new EventProcessor({ ownedSessions })
-    const subAgentTracker = new SubAgentTracker({ opencode: createMockGateway() })
+    const subAgentTracker = new SubAgentTracker({ opencode })
 
     const streamingBridge = createStreamingBridge({
       cardkitClient,
@@ -272,7 +257,7 @@ describe("E2E Smoke Tests", () => {
     })
 
     const { handleMessage } = createMessageHandler({
-      opencode: createMockGateway(),
+      opencode,
       sessionManager: createMockSessionManager(sessionId),
       dedup: { isDuplicate: vi.fn().mockReturnValue(false), close: vi.fn() } as any,
       eventProcessor,
@@ -359,17 +344,14 @@ describe("E2E Smoke Tests", () => {
     const feishuClient = createMockFeishuClient()
     const progressTracker = createMockProgressTracker()
 
-    // Mock fetch: POST /session/{id}/message → 500 error
-    globalThis.fetch = vi.fn().mockResolvedValue({
-      ok: false,
-      status: 500,
-      text: () => Promise.resolve("Internal Server Error"),
-    }) as any
+    const opencode = createMockGateway({
+      sendPrompt: vi.fn().mockRejectedValue(new Error("Prompt HTTP error: 500")),
+    })
 
     const eventProcessor = new EventProcessor({ ownedSessions })
 
     const { handleMessage } = createMessageHandler({
-      opencode: createMockGateway(),
+      opencode,
       sessionManager: createMockSessionManager(sessionId),
       dedup: { isDuplicate: vi.fn().mockReturnValue(false), close: vi.fn() } as any,
       eventProcessor,
@@ -442,12 +424,7 @@ describe("session sharing", () => {
     ;(feishuClient.sendMessage as ReturnType<typeof vi.fn>).mockResolvedValue({ code: 0, msg: "ok", data: { message_id: "lark-share-1" } })
     const progressTracker = createMockProgressTracker()
 
-    // Mock fetch:
-    //   POST /session/{id}/message → 200 OK
-    globalThis.fetch = vi.fn().mockResolvedValue({
-      ok: true,
-      text: () => Promise.resolve(""),
-    }) as any
+    const opencode = createMockGateway()
 
     const eventProcessor = new EventProcessor({ ownedSessions })
     const observer = createSessionObserver({
@@ -463,7 +440,7 @@ describe("session sharing", () => {
     })
 
     const { handleMessage } = createMessageHandler({
-      opencode: createMockGateway(),
+      opencode,
       sessionManager: createMockSessionManager(sessionId),
       dedup: { isDuplicate: vi.fn().mockReturnValue(false), close: vi.fn() } as any,
       eventProcessor,
@@ -493,14 +470,10 @@ describe("session sharing", () => {
       expect(listeners!.size).toBeGreaterThanOrEqual(3)
     })
 
-    // Assert: Lark context signature included in POST (not bind notification)
-    const fetchCalls = (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls
-    const postCall = fetchCalls.find(
-      (c: unknown[]) => typeof c[0] === "string" && (c[0] as string).includes("/message"),
-    )
-    expect(postCall).toBeDefined()
-    const body = JSON.parse((postCall![1] as { body: string }).body)
-    expect(body.parts[0].text).toContain("[Lark context]")
+    // Assert: Lark context signature included in the prompt (not bind notification)
+    expect(opencode.sendPrompt).toHaveBeenCalled()
+    const promptBody = (opencode.sendPrompt as ReturnType<typeof vi.fn>).mock.calls[0]![1] as { text: string }
+    expect(promptBody.text).toContain("[Lark context]")
 
     // Assert: session is owned
     expect(ownedSessions.has(sessionId)).toBe(true)
@@ -535,10 +508,7 @@ describe("session sharing", () => {
     ;(feishuClient.sendMessage as ReturnType<typeof vi.fn>).mockResolvedValue({ code: 0, msg: "ok", data: { message_id: "lark-share-2" } })
     const progressTracker = createMockProgressTracker()
 
-    globalThis.fetch = vi.fn().mockResolvedValue({
-      ok: true,
-      text: () => Promise.resolve(""),
-    }) as any
+    const opencode = createMockGateway()
 
     const eventProcessor = new EventProcessor({ ownedSessions })
     const observer = createSessionObserver({
@@ -554,7 +524,7 @@ describe("session sharing", () => {
     })
 
     const { handleMessage } = createMessageHandler({
-      opencode: createMockGateway(),
+      opencode,
       sessionManager: createMockSessionManager(sessionId),
       dedup: { isDuplicate: vi.fn().mockReturnValue(false), close: vi.fn() } as any,
       eventProcessor,
@@ -624,10 +594,7 @@ describe("session sharing", () => {
     ;(feishuClient.sendMessage as ReturnType<typeof vi.fn>).mockResolvedValue({ code: 0, msg: "ok", data: { message_id: "lark-share-3" } })
     const progressTracker = createMockProgressTracker()
 
-    globalThis.fetch = vi.fn().mockResolvedValue({
-      ok: true,
-      text: () => Promise.resolve(""),
-    }) as any
+    const opencode = createMockGateway()
 
     const eventProcessor = new EventProcessor({ ownedSessions })
     const observer = createSessionObserver({
@@ -643,7 +610,7 @@ describe("session sharing", () => {
     })
 
     const { handleMessage } = createMessageHandler({
-      opencode: createMockGateway(),
+      opencode,
       sessionManager: createMockSessionManager(sessionId),
       dedup: { isDuplicate: vi.fn().mockReturnValue(false), close: vi.fn() } as any,
       eventProcessor,
@@ -726,10 +693,7 @@ describe("session sharing", () => {
     ;(feishuClient.sendMessage as ReturnType<typeof vi.fn>).mockResolvedValue({ code: 0, msg: "ok", data: { message_id: "lark-share-4" } })
     const progressTracker = createMockProgressTracker()
 
-    globalThis.fetch = vi.fn().mockResolvedValue({
-      ok: true,
-      text: () => Promise.resolve(""),
-    }) as any
+    const opencode = createMockGateway()
 
     const eventProcessor = new EventProcessor({ ownedSessions })
     const observer = createSessionObserver({
@@ -745,7 +709,7 @@ describe("session sharing", () => {
     })
 
     const { handleMessage } = createMessageHandler({
-      opencode: createMockGateway(),
+      opencode,
       sessionManager: createMockSessionManager(sessionId),
       dedup: { isDuplicate: vi.fn().mockReturnValue(false), close: vi.fn() } as any,
       eventProcessor,
@@ -792,14 +756,11 @@ describe("session sharing", () => {
     )
     expect(bindCalls.length).toBe(0)
 
-    // Verify first POST has full Lark context
-    const fetchCalls1 = (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls
-    const postCalls1 = fetchCalls1.filter(
-      (c: unknown[]) => typeof c[0] === "string" && (c[0] as string).includes("/message"),
-    )
-    expect(postCalls1.length).toBeGreaterThanOrEqual(1)
-    const firstBody = JSON.parse((postCalls1[0]![1] as { body: string }).body)
-    expect(firstBody.parts[0].text).toContain("[Lark context]")
+    // Verify first prompt has full Lark context
+    const promptCalls1 = (opencode.sendPrompt as ReturnType<typeof vi.fn>).mock.calls
+    expect(promptCalls1.length).toBeGreaterThanOrEqual(1)
+    const firstBody = promptCalls1[0]![1] as { text: string }
+    expect(firstBody.text).toContain("[Lark context]")
 
     // ── Second message ──
     const promise2 = handleMessage(makeFeishuEvent({
@@ -826,15 +787,12 @@ describe("session sharing", () => {
 
     await promise2
 
-    // Second POST should have lightweight tag (not full context)
-    const fetchCalls2 = (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls
-    const postCalls2 = fetchCalls2.filter(
-      (c: unknown[]) => typeof c[0] === "string" && (c[0] as string).includes("/message"),
-    )
-    expect(postCalls2.length).toBeGreaterThanOrEqual(2)
-    const secondBody = JSON.parse((postCalls2[1]![1] as { body: string }).body)
-    expect(secondBody.parts[0].text).toContain("[Lark] from:")
-    expect(secondBody.parts[0].text).not.toContain("[Lark context]")
+    // Second prompt should have lightweight tag (not full context)
+    const promptCalls2 = (opencode.sendPrompt as ReturnType<typeof vi.fn>).mock.calls
+    expect(promptCalls2.length).toBeGreaterThanOrEqual(2)
+    const secondBody = promptCalls2[1]![1] as { text: string }
+    expect(secondBody.text).toContain("[Lark] from:")
+    expect(secondBody.text).not.toContain("[Lark context]")
   })
 })
 })

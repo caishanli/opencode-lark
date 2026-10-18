@@ -2,9 +2,10 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
 import { Database } from "bun:sqlite"
 import { createSessionManager } from "./session-manager.js"
 import type { SessionManager } from "./session-manager.js"
+import { createMockGateway } from "../__tests__/setup.js"
 
-const SERVER_URL = "http://127.0.0.1:4096"
 const DEFAULT_AGENT = "claude"
+const CWD = "/test/project"
 
 function createTestDb(): Database {
   return new Database(":memory:")
@@ -13,59 +14,45 @@ function createTestDb(): Database {
 describe("session-manager", () => {
   let db: Database
   let sm: SessionManager
-  const originalFetch = globalThis.fetch
   let savedOpencodeCwd: string | undefined
 
   beforeEach(() => {
     db = createTestDb()
     savedOpencodeCwd = process.env.OPENCODE_CWD
-    process.env.OPENCODE_CWD = "/test/project"
-    globalThis.fetch = vi.fn()
+    process.env.OPENCODE_CWD = CWD
   })
 
   afterEach(() => {
     db.close()
-    globalThis.fetch = originalFetch
     if (savedOpencodeCwd === undefined) delete process.env.OPENCODE_CWD
     else process.env.OPENCODE_CWD = savedOpencodeCwd
   })
 
-  function mockFetch(impl: typeof globalThis.fetch) {
-    globalThis.fetch = vi.fn(impl)
-  }
-
   describe("getOrCreate", () => {
     it("discovers existing TUI session and returns its ID", async () => {
       const tuiSessionId = "ses-tui-abc"
-      mockFetch(async (input) => {
-        const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : (input as Request).url
-        if (url.includes("/session") && !url.includes("/session/")) {
-          // GET /session — list sessions
-          if (url.includes("roots=true")) {
-            return new Response(
-              JSON.stringify([
-                {
-                  id: tuiSessionId,
-                  title: "TUI Session",
-                  directory: "/test/project",
-                  time: { created: 1000, updated: 2000 },
-                },
-              ]),
-              { status: 200 },
-            )
-          }
-        }
-        // Validation GET /session/{id} — return 200 for the discovered session
-        if (url.includes(`/session/${tuiSessionId}`)) {
-          return new Response(JSON.stringify({ id: tuiSessionId }), { status: 200 })
-        }
-        return new Response("Not found", { status: 404 })
-      })
+      const listSessions = vi.fn().mockResolvedValue([
+        {
+          id: tuiSessionId,
+          title: "TUI Session",
+          location: { directory: CWD },
+          time: { created: 1000, updated: 2000 },
+        },
+      ])
+      const getSession = vi.fn().mockResolvedValue({ id: tuiSessionId })
+      const gateway = createMockGateway({ listSessions, getSession })
 
-      sm = createSessionManager({ opencode: createMockGateway(), db, defaultAgent: DEFAULT_AGENT })
+      sm = createSessionManager({ opencode: gateway, db, defaultAgent: DEFAULT_AGENT })
       const result = await sm.getOrCreate("chat-1")
 
       expect(result).toBe(tuiSessionId)
+
+      // Discovery must query the configured working directory
+      expect(listSessions).toHaveBeenCalledWith({ directory: CWD })
+      // Validation must check the discovered session
+      expect(getSession).toHaveBeenCalledWith(tuiSessionId)
+      // Should not create a new session when one is discovered
+      expect(gateway.createSession).not.toHaveBeenCalled()
 
       // Verify is_bound = 1 for discovered session
       const mapping = sm.getSession("chat-1")
@@ -74,26 +61,21 @@ describe("session-manager", () => {
       expect(mapping!.session_id).toBe(tuiSessionId)
     })
 
-    it("falls back to POST /session when no sessions exist", async () => {
+    it("falls back to createSession when no sessions exist", async () => {
       const createdSessionId = "ses-new-123"
-      mockFetch(async (input, init) => {
-        const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : (input as Request).url
-        const method = init?.method ?? "GET"
+      const listSessions = vi.fn().mockResolvedValue([])
+      const createSession = vi.fn().mockResolvedValue({ id: createdSessionId })
+      const gateway = createMockGateway({ listSessions, createSession })
 
-        if (url.includes("/session") && method === "GET") {
-          // Return empty array — no existing sessions
-          return new Response(JSON.stringify([]), { status: 200 })
-        }
-        if (url.includes("/session") && method === "POST") {
-          return new Response(JSON.stringify({ id: createdSessionId }), { status: 200 })
-        }
-        return new Response("Not found", { status: 404 })
-      })
-
-      sm = createSessionManager({ opencode: createMockGateway(), db, defaultAgent: DEFAULT_AGENT })
+      sm = createSessionManager({ opencode: gateway, db, defaultAgent: DEFAULT_AGENT })
       const result = await sm.getOrCreate("chat-2")
 
       expect(result).toBe(createdSessionId)
+      expect(listSessions).toHaveBeenCalledWith({ directory: CWD })
+      expect(createSession).toHaveBeenCalledWith({
+        title: "Feishu chat chat-2",
+        directory: CWD,
+      })
 
       // Verify is_bound = 0 for created session
       const mapping = sm.getSession("chat-2")
@@ -103,116 +85,100 @@ describe("session-manager", () => {
 
     it("reuses cached session without any API call", async () => {
       const tuiSessionId = "ses-cached-xyz"
-      let fetchCallCount = 0
+      const listSessions = vi.fn().mockResolvedValue([
+        {
+          id: tuiSessionId,
+          title: "TUI",
+          location: { directory: CWD },
+          time: { created: 1, updated: 2 },
+        },
+      ])
+      const getSession = vi.fn().mockResolvedValue({ id: tuiSessionId })
+      const gateway = createMockGateway({ listSessions, getSession })
 
-      mockFetch(async (input) => {
-        fetchCallCount++
-        const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : (input as Request).url
-        if (url.includes("/session") && url.includes("roots=true")) {
-          return new Response(
-            JSON.stringify([
-              { id: tuiSessionId, title: "TUI", directory: "/test/project", time: { created: 1, updated: 2 } },
-            ]),
-            { status: 200 },
-          )
-        }
-        // Validation GET /session/{id}
-        if (url.includes(`/session/${tuiSessionId}`)) {
-          return new Response(JSON.stringify({ id: tuiSessionId }), { status: 200 })
-        }
-        return new Response("Not found", { status: 404 })
-      })
-
-      sm = createSessionManager({ opencode: createMockGateway(), db, defaultAgent: DEFAULT_AGENT })
+      sm = createSessionManager({ opencode: gateway, db, defaultAgent: DEFAULT_AGENT })
 
       // First call — triggers discovery
       await sm.getOrCreate("chat-3")
-      const callsAfterFirst = fetchCallCount
+      const callsAfterFirst =
+        listSessions.mock.calls.length + getSession.mock.calls.length
+      expect(callsAfterFirst).toBeGreaterThan(0)
 
-      // Second call — should use DB cache, no new fetch
+      // Second call — should use DB cache, no new gateway calls
       const result = await sm.getOrCreate("chat-3")
       expect(result).toBe(tuiSessionId)
-      expect(fetchCallCount).toBe(callsAfterFirst)
+      expect(listSessions.mock.calls.length + getSession.mock.calls.length).toBe(
+        callsAfterFirst,
+      )
+      expect(gateway.createSession).not.toHaveBeenCalled()
     })
 
     it("sets is_bound=1 for discovered sessions, is_bound=0 for created", async () => {
-      mockFetch(async (input, init) => {
-        const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : (input as Request).url
-        const method = init?.method ?? "GET"
-
-        if (url.includes("/session") && method === "GET" && url.includes("roots=true")) {
-          if (url.includes("directory=")) {
-            return new Response(
-              JSON.stringify([
-                { id: "ses-discovered", title: "TUI", directory: "/test/project", time: { created: 1, updated: 2 } },
-              ]),
-              { status: 200 },
-            )
-          }
-        }
-        // Validation GET /session/ses-discovered
-        if (url.includes("/session/ses-discovered") && method === "GET") {
-          return new Response(JSON.stringify({ id: "ses-discovered" }), { status: 200 })
-        }
-        if (url.includes("/session") && method === "POST") {
-          return new Response(JSON.stringify({ id: "ses-created" }), { status: 200 })
-        }
-        return new Response("Not found", { status: 404 })
+      const listSessions = vi
+        .fn()
+        .mockResolvedValueOnce([
+          {
+            id: "ses-discovered",
+            title: "TUI",
+            location: { directory: CWD },
+            time: { created: 1, updated: 2 },
+          },
+        ])
+        .mockResolvedValueOnce([])
+      const getSession = vi.fn().mockResolvedValue({ id: "ses-discovered" })
+      const createSession = vi.fn().mockResolvedValue({ id: "ses-created" })
+      const gateway = createMockGateway({
+        listSessions,
+        getSession,
+        createSession,
       })
 
-      sm = createSessionManager({ opencode: createMockGateway(), db, defaultAgent: DEFAULT_AGENT })
+      sm = createSessionManager({ opencode: gateway, db, defaultAgent: DEFAULT_AGENT })
 
+      // Run where a live session is discovered
       await sm.getOrCreate("chat-discovered")
       const discovered = sm.getSession("chat-discovered")
       expect(discovered!.is_bound).toBe(1)
+      expect(discovered!.session_id).toBe("ses-discovered")
+
+      // Run where nothing is discovered → session gets created
+      await sm.getOrCreate("chat-created")
+      const created = sm.getSession("chat-created")
+      expect(created!.is_bound).toBe(0)
+      expect(created!.session_id).toBe("ses-created")
     })
 
-    it("falls back to POST silently when GET fails", async () => {
+    it("falls back to createSession silently when listSessions fails", async () => {
       const createdId = "ses-fallback-456"
-      mockFetch(async (input, init) => {
-        const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : (input as Request).url
-        const method = init?.method ?? "GET"
+      const listSessions = vi.fn().mockRejectedValue(new Error("Internal Server Error"))
+      const createSession = vi.fn().mockResolvedValue({ id: createdId })
+      const gateway = createMockGateway({ listSessions, createSession })
 
-        if (method === "GET" || (!init?.method && !init?.body)) {
-          // GET fails with 500
-          return new Response("Internal Server Error", { status: 500 })
-        }
-        if (method === "POST") {
-          return new Response(JSON.stringify({ id: createdId }), { status: 200 })
-        }
-        return new Response("Not found", { status: 404 })
-      })
-
-      sm = createSessionManager({ opencode: createMockGateway(), db, defaultAgent: DEFAULT_AGENT })
+      sm = createSessionManager({ opencode: gateway, db, defaultAgent: DEFAULT_AGENT })
       const result = await sm.getOrCreate("chat-fail")
 
-      // Should not throw, should fall back to POST
+      // Should not throw, should fall back to createSession
       expect(result).toBe(createdId)
+      expect(createSession).toHaveBeenCalledWith({
+        title: "Feishu chat chat-fail",
+        directory: CWD,
+      })
 
       const mapping = sm.getSession("chat-fail")
       expect(mapping!.is_bound).toBe(0)
     })
 
-    it("falls back to POST when GET throws network error", async () => {
+    it("falls back to createSession when listSessions throws network error", async () => {
       const createdId = "ses-net-err"
-      let callIndex = 0
-      mockFetch(async (input, init) => {
-        callIndex++
-        const method = init?.method ?? "GET"
+      const listSessions = vi.fn().mockRejectedValue(new Error("Network error"))
+      const createSession = vi.fn().mockResolvedValue({ id: createdId })
+      const gateway = createMockGateway({ listSessions, createSession })
 
-        if (method === "GET" || (!init?.method && !init?.body)) {
-          throw new Error("Network error")
-        }
-        if (method === "POST") {
-          return new Response(JSON.stringify({ id: createdId }), { status: 200 })
-        }
-        return new Response("Not found", { status: 404 })
-      })
-
-      sm = createSessionManager({ opencode: createMockGateway(), db, defaultAgent: DEFAULT_AGENT })
+      sm = createSessionManager({ opencode: gateway, db, defaultAgent: DEFAULT_AGENT })
       const result = await sm.getOrCreate("chat-neterr")
 
       expect(result).toBe(createdId)
+      expect(createSession).toHaveBeenCalledTimes(1)
       expect(sm.getSession("chat-neterr")!.is_bound).toBe(0)
     })
   })
@@ -266,59 +232,45 @@ describe("session-manager", () => {
   describe("discoverTuiSession validation", () => {
     it("skips discovered session that returns 404 from server", async () => {
       const createdSessionId = "ses-created-after-stale"
-      mockFetch(async (input, init) => {
-        const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : (input as Request).url
-        const method = init?.method ?? "GET"
-
-        if (url.includes("/session") && method === "GET" && url.includes("roots=true")) {
-          // Return a session from TUI discovery
-          return new Response(
-            JSON.stringify([
-              { id: "ses-stale", title: "Old TUI", directory: "/test/project", time: { created: 1, updated: 2 } },
-            ]),
-            { status: 200 },
-          )
-        }
-        // GET /session/ses-stale — returns 404 (session doesn't exist anymore)
-        if (url.includes("/session/ses-stale") && method === "GET") {
-          return new Response("Not found", { status: 404 })
-        }
-        if (url.includes("/session") && method === "POST") {
-          return new Response(JSON.stringify({ id: createdSessionId }), { status: 200 })
-        }
-        return new Response("Not found", { status: 404 })
+      const listSessions = vi.fn().mockResolvedValue([
+        {
+          id: "ses-stale",
+          title: "Old TUI",
+          location: { directory: CWD },
+          time: { created: 1, updated: 2 },
+        },
+      ])
+      // getSession returns null → the session 404s on the server
+      const getSession = vi.fn().mockResolvedValue(null)
+      const createSession = vi.fn().mockResolvedValue({ id: createdSessionId })
+      const gateway = createMockGateway({
+        listSessions,
+        getSession,
+        createSession,
       })
 
-      sm = createSessionManager({ opencode: createMockGateway(), db, defaultAgent: DEFAULT_AGENT })
+      sm = createSessionManager({ opencode: gateway, db, defaultAgent: DEFAULT_AGENT })
       const result = await sm.getOrCreate("chat-stale-discover")
 
-      // Should have fallen through to POST (create new session)
+      // Should have fallen through to createSession
       expect(result).toBe(createdSessionId)
       expect(sm.getSession("chat-stale-discover")!.is_bound).toBe(0)
     })
 
     it("accepts discovered session that returns 200 from server", async () => {
       const tuiSessionId = "ses-valid-tui"
-      mockFetch(async (input, init) => {
-        const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : (input as Request).url
-        const method = init?.method ?? "GET"
+      const listSessions = vi.fn().mockResolvedValue([
+        {
+          id: tuiSessionId,
+          title: "Valid TUI",
+          location: { directory: CWD },
+          time: { created: 1, updated: 2 },
+        },
+      ])
+      const getSession = vi.fn().mockResolvedValue({ id: tuiSessionId })
+      const gateway = createMockGateway({ listSessions, getSession })
 
-        if (url.includes("/session") && method === "GET" && url.includes("roots=true")) {
-          return new Response(
-            JSON.stringify([
-              { id: tuiSessionId, title: "Valid TUI", directory: "/test/project", time: { created: 1, updated: 2 } },
-            ]),
-            { status: 200 },
-          )
-        }
-        // GET /session/ses-valid-tui — 200 OK
-        if (url.includes(`/session/${tuiSessionId}`) && method === "GET") {
-          return new Response(JSON.stringify({ id: tuiSessionId }), { status: 200 })
-        }
-        return new Response("Not found", { status: 404 })
-      })
-
-      sm = createSessionManager({ opencode: createMockGateway(), db, defaultAgent: DEFAULT_AGENT })
+      sm = createSessionManager({ opencode: gateway, db, defaultAgent: DEFAULT_AGENT })
       const result = await sm.getOrCreate("chat-valid-discover")
 
       expect(result).toBe(tuiSessionId)
@@ -326,49 +278,37 @@ describe("session-manager", () => {
     })
   })
 
-    it("accepts discovered session when server returns 500 (conservative — not 404)", async () => {
+    it("accepts discovered session when getSession throws (conservative — non-404)", async () => {
       const tuiSessionId = "ses-500-tui"
-      mockFetch(async (input, init) => {
-        const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : (input as Request).url
-        const method = init?.method ?? "GET"
+      const listSessions = vi.fn().mockResolvedValue([
+        {
+          id: tuiSessionId,
+          title: "TUI",
+          location: { directory: CWD },
+          time: { created: 1, updated: 2 },
+        },
+      ])
+      // A 500 (or any non-404) surfaces as a thrown error from the gateway
+      const getSession = vi.fn().mockRejectedValue(new Error("Internal Server Error"))
+      const gateway = createMockGateway({ listSessions, getSession })
 
-        if (url.includes("/session") && method === "GET" && url.includes("roots=true")) {
-          return new Response(
-            JSON.stringify([
-              { id: tuiSessionId, title: "TUI", directory: "/test/project", time: { created: 1, updated: 2 } },
-            ]),
-            { status: 200 },
-          )
-        }
-        // GET /session/ses-500-tui — returns 500 (server error)
-        if (url.includes(`/session/${tuiSessionId}`) && method === "GET") {
-          return new Response("Internal Server Error", { status: 500 })
-        }
-        return new Response("Not found", { status: 404 })
-      })
-
-      sm = createSessionManager({ opencode: createMockGateway(), db, defaultAgent: DEFAULT_AGENT })
+      sm = createSessionManager({ opencode: gateway, db, defaultAgent: DEFAULT_AGENT })
       const result = await sm.getOrCreate("chat-500-discover")
 
-      // 500 should be treated conservatively as \"exists\" — session accepted, not skipped
+      // Non-404 errors should be treated conservatively as "exists" — session accepted, not skipped
       expect(result).toBe(tuiSessionId)
       expect(sm.getSession("chat-500-discover")!.is_bound).toBe(1)
     })
 
   describe("validateAndCleanupStale", () => {
     it("removes mappings whose sessions return 404", async () => {
-      mockFetch(async (input) => {
-        const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : (input as Request).url
-        if (url.includes("/session/ses-alive")) {
-          return new Response(JSON.stringify({ id: "ses-alive" }), { status: 200 })
-        }
-        if (url.includes("/session/ses-dead")) {
-          return new Response("Not found", { status: 404 })
-        }
-        return new Response("Not found", { status: 404 })
+      const getSession = vi.fn(async (sessionID: string) => {
+        if (sessionID === "ses-alive") return { id: "ses-alive" }
+        return null // 404 → does not exist
       })
+      const gateway = createMockGateway({ getSession })
 
-      sm = createSessionManager({ opencode: createMockGateway(), db, defaultAgent: DEFAULT_AGENT })
+      sm = createSessionManager({ opencode: gateway, db, defaultAgent: DEFAULT_AGENT })
 
       // Manually insert mappings
       const now = Date.now()
@@ -387,11 +327,10 @@ describe("session-manager", () => {
     })
 
     it("preserves all mappings when all sessions are valid", async () => {
-      mockFetch(async () => {
-        return new Response(JSON.stringify({ id: "ses-1" }), { status: 200 })
-      })
+      const getSession = vi.fn().mockResolvedValue({ id: "ses-1" })
+      const gateway = createMockGateway({ getSession })
 
-      sm = createSessionManager({ opencode: createMockGateway(), db, defaultAgent: DEFAULT_AGENT })
+      sm = createSessionManager({ opencode: gateway, db, defaultAgent: DEFAULT_AGENT })
 
       const now = Date.now()
       db.prepare(
@@ -401,20 +340,23 @@ describe("session-manager", () => {
       const cleaned = await sm.validateAndCleanupStale()
       expect(cleaned).toBe(0)
       expect(sm.getSession("key-1")).not.toBeNull()
+      expect(getSession).toHaveBeenCalledWith("ses-1")
     })
 
     it("returns 0 when no mappings exist", async () => {
-      sm = createSessionManager({ opencode: createMockGateway(), db, defaultAgent: DEFAULT_AGENT })
+      const getSession = vi.fn()
+      const gateway = createMockGateway({ getSession })
+      sm = createSessionManager({ opencode: gateway, db, defaultAgent: DEFAULT_AGENT })
       const cleaned = await sm.validateAndCleanupStale()
       expect(cleaned).toBe(0)
+      expect(getSession).not.toHaveBeenCalled()
     })
 
     it("skips mappings when server is unreachable (network error)", async () => {
-      mockFetch(async () => {
-        throw new Error("Network error")
-      })
+      const getSession = vi.fn().mockRejectedValue(new Error("Network error"))
+      const gateway = createMockGateway({ getSession })
 
-      sm = createSessionManager({ opencode: createMockGateway(), db, defaultAgent: DEFAULT_AGENT })
+      sm = createSessionManager({ opencode: gateway, db, defaultAgent: DEFAULT_AGENT })
 
       const now = Date.now()
       db.prepare(
@@ -428,22 +370,20 @@ describe("session-manager", () => {
     })
 
     it("preserves mappings when server returns 500 (not treated as missing)", async () => {
-      mockFetch(async (input) => {
-        const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : (input as Request).url
-        if (url.includes("/session/ses-500")) {
-          return new Response("Internal Server Error", { status: 500 })
-        }
-        return new Response(JSON.stringify({ id: "ses-ok" }), { status: 200 })
+      const getSession = vi.fn(async (sessionID: string) => {
+        if (sessionID === "ses-500") throw new Error("Internal Server Error")
+        return { id: sessionID }
       })
+      const gateway = createMockGateway({ getSession })
 
-      sm = createSessionManager({ opencode: createMockGateway(), db, defaultAgent: DEFAULT_AGENT })
+      sm = createSessionManager({ opencode: gateway, db, defaultAgent: DEFAULT_AGENT })
 
       const now = Date.now()
       db.prepare(
-        "INSERT INTO feishu_sessions (feishu_key, session_id, agent, created_at, last_active, is_bound) VALUES (?, ?, ?, ?, ?, ?)"
+        "INSERT INTO feishu_sessions (feishu_key, session_id, agent, created_at, last_active, is_bound) VALUES (?, ?, ?, ?, ?, ?)",
       ).run("key-500", "ses-500", "claude", now, now, 1)
       db.prepare(
-        "INSERT INTO feishu_sessions (feishu_key, session_id, agent, created_at, last_active, is_bound) VALUES (?, ?, ?, ?, ?, ?)"
+        "INSERT INTO feishu_sessions (feishu_key, session_id, agent, created_at, last_active, is_bound) VALUES (?, ?, ?, ?, ?, ?)",
       ).run("key-ok", "ses-ok", "claude", now, now, 1)
 
       const cleaned = await sm.validateAndCleanupStale()
@@ -455,15 +395,14 @@ describe("session-manager", () => {
     })
 
     it("preserves mappings when server returns 429 (rate limited)", async () => {
-      mockFetch(async () => {
-        return new Response("Too Many Requests", { status: 429 })
-      })
+      const getSession = vi.fn().mockRejectedValue(new Error("Too Many Requests"))
+      const gateway = createMockGateway({ getSession })
 
-      sm = createSessionManager({ opencode: createMockGateway(), db, defaultAgent: DEFAULT_AGENT })
+      sm = createSessionManager({ opencode: gateway, db, defaultAgent: DEFAULT_AGENT })
 
       const now = Date.now()
       db.prepare(
-        "INSERT INTO feishu_sessions (feishu_key, session_id, agent, created_at, last_active, is_bound) VALUES (?, ?, ?, ?, ?, ?)"
+        "INSERT INTO feishu_sessions (feishu_key, session_id, agent, created_at, last_active, is_bound) VALUES (?, ?, ?, ?, ?, ?)",
       ).run("key-rl", "ses-rl", "claude", now, now, 1)
 
       const cleaned = await sm.validateAndCleanupStale()

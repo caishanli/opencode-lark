@@ -32,20 +32,19 @@ describe("createCommandHandler", () => {
   let mockLogger: ReturnType<typeof createMockLogger>
   let mockFeishuClient: ReturnType<typeof createMockFeishuClient>
   let mockSessionManager: SessionManager
-  let mockFetch: ReturnType<typeof vi.fn>
+  let mockGateway: ReturnType<typeof createMockGateway>
 
   beforeEach(() => {
     mockLogger = createMockLogger()
     mockFeishuClient = createMockFeishuClient()
     mockSessionManager = createMockSessionManager(DEFAULT_MAPPING)
-    mockFetch = vi.fn()
-    globalThis.fetch = mockFetch as any
+    mockGateway = createMockGateway()
     vi.clearAllMocks()
   })
 
-  function createHandler(sm?: SessionManager) {
+  function createHandler(sm?: SessionManager, gateway = mockGateway) {
     return createCommandHandler({
-      opencode: createMockGateway(),
+      opencode: gateway,
       sessionManager: sm ?? mockSessionManager,
       feishuClient: mockFeishuClient,
       logger: mockLogger,
@@ -54,20 +53,16 @@ describe("createCommandHandler", () => {
 
   describe("/new", () => {
     it("creates a new session and binds to it via setMapping", async () => {
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve({ id: "ses-new" }),
-      })
+      mockGateway.createSession.mockResolvedValueOnce({ id: "ses-new" })
       mockFeishuClient.replyMessage = vi.fn().mockResolvedValue({ code: 0, msg: "ok" })
 
       const handler = createHandler()
       const result = await handler("chat-1", "chat-1", "msg-1", "/new")
 
       expect(result).toBe(true)
-      expect(mockFetch).toHaveBeenCalledWith("http://test:4096/session", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title: "Feishu chat chat-1" }),
+      expect(mockGateway.createSession).toHaveBeenCalledWith({
+        title: "Feishu chat chat-1",
+        directory: process.env.OPENCODE_CWD || process.cwd(),
       })
       expect(mockSessionManager.deleteMapping).toHaveBeenCalledWith("chat-1")
       expect(mockSessionManager.setMapping).toHaveBeenCalledWith("chat-1", "ses-new")
@@ -78,7 +73,7 @@ describe("createCommandHandler", () => {
     })
 
     it("replies with error when session creation fails", async () => {
-      mockFetch.mockResolvedValueOnce({ ok: false, status: 500 })
+      mockGateway.createSession.mockRejectedValueOnce(new Error("createSession failed"))
       mockFeishuClient.replyMessage = vi.fn().mockResolvedValue({ code: 0, msg: "ok" })
 
       const handler = createHandler()
@@ -94,17 +89,13 @@ describe("createCommandHandler", () => {
 
   describe("/abort", () => {
     it("aborts the current session", async () => {
-      mockFetch.mockResolvedValueOnce({ ok: true })
       mockFeishuClient.replyMessage = vi.fn().mockResolvedValue({ code: 0, msg: "ok" })
 
       const handler = createHandler()
       const result = await handler("chat-1", "chat-1", "msg-1", "/abort")
 
       expect(result).toBe(true)
-      expect(mockFetch).toHaveBeenCalledWith(
-        "http://test:4096/session/ses-123/abort",
-        { method: "POST" },
-      )
+      expect(mockGateway.abort).toHaveBeenCalledWith("ses-123")
       expect(mockFeishuClient.replyMessage).toHaveBeenCalledWith("msg-1", {
         msg_type: "text",
         content: JSON.stringify({ text: "已中止会话: ses-123" }),
@@ -119,7 +110,7 @@ describe("createCommandHandler", () => {
       const result = await handler("chat-1", "chat-1", "msg-1", "/abort")
 
       expect(result).toBe(true)
-      expect(mockFetch).not.toHaveBeenCalled()
+      expect(mockGateway.abort).not.toHaveBeenCalled()
       expect(mockFeishuClient.replyMessage).toHaveBeenCalledWith("msg-1", {
         msg_type: "text",
         content: JSON.stringify({ text: "当前没有绑定的会话。" }),
@@ -133,35 +124,33 @@ describe("createCommandHandler", () => {
       const now = new Date("2026-03-14T12:00:00.000Z")
       vi.setSystemTime(now)
 
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: () =>
-          Promise.resolve([
-            {
-              id: "ses-1",
-              title: "Analysis report SSE timeout error",
-              time: {
-                created: now.getTime() - 10_000,
-                updated: now.getTime() - 3 * 60 * 60 * 1000,
-              },
-              summary: { additions: 1, deletions: 2, files: 363 },
-            },
-            {
-              id: "ses-2",
-              time: {
-                created: now.getTime() - 20_000,
-                updated: now.getTime() - 2 * 60 * 1000,
-              },
-            },
-          ]),
-      })
+      mockGateway.listSessions.mockResolvedValueOnce([
+        {
+          id: "ses-1",
+          title: "Analysis report SSE timeout error",
+          time: {
+            created: now.getTime() - 10_000,
+            updated: now.getTime() - 3 * 60 * 60 * 1000,
+          },
+          summary: { additions: 1, deletions: 2, files: 363 },
+        },
+        {
+          id: "ses-2",
+          time: {
+            created: now.getTime() - 20_000,
+            updated: now.getTime() - 2 * 60 * 1000,
+          },
+        },
+      ])
       mockFeishuClient.replyMessage = vi.fn().mockResolvedValue({ code: 0, msg: "ok" })
 
       const handler = createHandler()
       const result = await handler("chat-1", "chat-1", "msg-1", "/sessions")
 
       expect(result).toBe(true)
-      expect(mockFetch).toHaveBeenCalledWith("http://test:4096/session")
+      expect(mockGateway.listSessions).toHaveBeenCalledWith({
+        directory: process.env.OPENCODE_CWD || process.cwd(),
+      })
       expect(mockFeishuClient.replyMessage).toHaveBeenCalledWith("msg-1", {
         msg_type: "interactive",
         content: expect.any(String),
@@ -190,11 +179,37 @@ describe("createCommandHandler", () => {
       vi.useRealTimers()
     })
 
+    it("pins the current session to the top when it is present in the list", async () => {
+      vi.useFakeTimers()
+      const now = new Date("2026-03-14T12:00:00.000Z")
+      vi.setSystemTime(now)
+
+      mockGateway.listSessions.mockResolvedValueOnce([
+        { id: "ses-1", title: "First", time: { created: now.getTime(), updated: now.getTime() } },
+        { id: "ses-123", title: "Current", time: { created: now.getTime(), updated: now.getTime() } },
+        { id: "ses-2", title: "Second", time: { created: now.getTime(), updated: now.getTime() } },
+      ])
+      mockFeishuClient.replyMessage = vi.fn().mockResolvedValue({ code: 0, msg: "ok" })
+
+      const handler = createHandler()
+      const result = await handler("chat-1", "chat-1", "msg-1", "/sessions")
+
+      expect(result).toBe(true)
+      const callArgs = (mockFeishuClient.replyMessage as any).mock.calls[0]
+      const content = JSON.parse(callArgs?.[1]?.content as string)
+      const actionElements = content.elements?.filter((e: any) => e.tag === "action")
+      expect(actionElements).toHaveLength(3)
+      const buttonTexts = actionElements.map((el: any) => el.actions?.[0]?.text?.content)
+      // Current session moved to the top and marked with ▶ (existing entry, not duplicated)
+      expect(buttonTexts[0]).toBe("▶ Current · 刚刚")
+      expect(buttonTexts[1]).toBe("First · 刚刚")
+      expect(buttonTexts[2]).toBe("Second · 刚刚")
+
+      vi.useRealTimers()
+    })
+
     it("replies with text when no sessions exist", async () => {
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve([]),
-      })
+      mockGateway.listSessions.mockResolvedValueOnce([])
       mockFeishuClient.replyMessage = vi.fn().mockResolvedValue({ code: 0, msg: "ok" })
 
       const handler = createHandler()
@@ -210,17 +225,15 @@ describe("createCommandHandler", () => {
 
   describe("/connect", () => {
     it("connects to a valid session", async () => {
-      mockFetch
-        .mockResolvedValueOnce({ ok: true })
-        .mockResolvedValueOnce({ ok: true })
+      mockGateway.getSession.mockResolvedValueOnce({ id: "ses-456" })
       mockFeishuClient.replyMessage = vi.fn().mockResolvedValue({ code: 0, msg: "ok" })
 
       const handler = createHandler()
       const result = await handler("chat-1", "chat-1", "msg-1", "/connect ses-456")
 
       expect(result).toBe(true)
-      // First fetch: validate session exists
-      expect(mockFetch).toHaveBeenNthCalledWith(1, "http://test:4096/session/ses-456")
+      // Gateway validates the session exists
+      expect(mockGateway.getSession).toHaveBeenCalledWith("ses-456")
       // deleteMapping called
       expect(mockSessionManager.deleteMapping).toHaveBeenCalledWith("chat-1")
       // setMapping called
@@ -232,13 +245,15 @@ describe("createCommandHandler", () => {
     })
 
     it("replies when session does not exist", async () => {
-      mockFetch.mockResolvedValueOnce({ ok: false, status: 404 })
+      mockGateway.getSession.mockResolvedValueOnce(null)
       mockFeishuClient.replyMessage = vi.fn().mockResolvedValue({ code: 0, msg: "ok" })
 
       const handler = createHandler()
       const result = await handler("chat-1", "chat-1", "msg-1", "/connect ses-invalid")
 
       expect(result).toBe(true)
+      expect(mockGateway.getSession).toHaveBeenCalledWith("ses-invalid")
+      expect(mockSessionManager.setMapping).not.toHaveBeenCalled()
       expect(mockFeishuClient.replyMessage).toHaveBeenCalledWith("msg-1", {
         msg_type: "text",
         content: JSON.stringify({ text: "会话不存在。" }),
@@ -252,7 +267,7 @@ describe("createCommandHandler", () => {
       const result = await handler("chat-1", "chat-1", "msg-1", "/connect")
 
       expect(result).toBe(true)
-      expect(mockFetch).not.toHaveBeenCalled()
+      expect(mockGateway.getSession).not.toHaveBeenCalled()
       expect(mockFeishuClient.replyMessage).toHaveBeenCalledWith("msg-1", {
         msg_type: "text",
         content: JSON.stringify({ text: "用法: /connect {session_id}" }),
@@ -308,7 +323,10 @@ describe("createCommandHandler", () => {
       const result = await handler("chat-1", "chat-1", "msg-1", "/unknown")
 
       expect(result).toBe(false)
-      expect(mockFetch).not.toHaveBeenCalled()
+      expect(mockGateway.listSessions).not.toHaveBeenCalled()
+      expect(mockGateway.getSession).not.toHaveBeenCalled()
+      expect(mockGateway.createSession).not.toHaveBeenCalled()
+      expect(mockGateway.abort).not.toHaveBeenCalled()
       expect(mockFeishuClient.replyMessage).not.toHaveBeenCalled()
     })
 
@@ -322,7 +340,7 @@ describe("createCommandHandler", () => {
 
   describe("error handling", () => {
     it("catches errors and replies with error message", async () => {
-      mockFetch.mockRejectedValueOnce(new Error("Network error"))
+      mockGateway.createSession.mockRejectedValueOnce(new Error("Network error"))
       mockFeishuClient.replyMessage = vi.fn().mockResolvedValue({ code: 0, msg: "ok" })
 
       const handler = createHandler()
@@ -339,7 +357,7 @@ describe("createCommandHandler", () => {
     })
 
     it("does not crash when error reply also fails", async () => {
-      mockFetch.mockRejectedValueOnce(new Error("Network error"))
+      mockGateway.createSession.mockRejectedValueOnce(new Error("Network error"))
       mockFeishuClient.replyMessage = vi.fn().mockRejectedValue(new Error("Reply failed"))
 
       const handler = createHandler()
@@ -354,10 +372,7 @@ describe("createCommandHandler", () => {
 
   describe("case insensitivity", () => {
     it("handles /NEW as /new", async () => {
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve({ id: "ses-new" }),
-      })
+      mockGateway.createSession.mockResolvedValueOnce({ id: "ses-new" })
       mockFeishuClient.replyMessage = vi.fn().mockResolvedValue({ code: 0, msg: "ok" })
 
       const handler = createHandler()

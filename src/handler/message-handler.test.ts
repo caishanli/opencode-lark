@@ -72,19 +72,17 @@ function makeDeps(overrides: Partial<HandlerDeps> = {}): HandlerDeps {
   }
 }
 
-function mockFetchOk(body = ""): void {
-  globalThis.fetch = vi.fn().mockResolvedValue({
-    ok: true,
-    text: () => Promise.resolve(body),
-  }) as any
-}
-
-function mockFetchError(status = 500): void {
-  globalThis.fetch = vi.fn().mockResolvedValue({
-    ok: false,
-    status,
-    text: () => Promise.resolve(""),
-  }) as any
+/**
+ * Returns the payload passed to the gateway's sendPrompt.
+ * Defaults to the most recent call; pass an explicit index for earlier calls.
+ */
+function sentPrompt(
+  opencode: any,
+  index = -1,
+): { text: string; files?: Array<{ uri: string; name?: string }> } {
+  const calls = opencode.sendPrompt.mock.calls
+  const call = index < 0 ? calls[calls.length + index] : calls[index]
+  return { text: "", ...(call?.[1] ?? {}) }
 }
 
 describe("createMessageHandler", () => {
@@ -122,7 +120,6 @@ describe("createMessageHandler", () => {
   })
 
   it("handles post message type — extracts text from rich content", async () => {
-    mockFetchOk("")
     const deps = makeDeps()
     const { handleMessage: handler } = createMessageHandler(deps)
 
@@ -162,7 +159,6 @@ describe("createMessageHandler", () => {
   })
 
   it("handles post message with multiple paragraphs", async () => {
-    mockFetchOk("")
     const deps = makeDeps()
     const { handleMessage: handler } = createMessageHandler(deps)
 
@@ -197,7 +193,6 @@ describe("createMessageHandler", () => {
   })
 
   it("handles post message with empty content gracefully", async () => {
-    mockFetchOk("")
     const deps = makeDeps()
     const { handleMessage: handler } = createMessageHandler(deps)
 
@@ -213,7 +208,6 @@ describe("createMessageHandler", () => {
   })
 
   it("handles flat post format (WebSocket)", async () => {
-    mockFetchOk("")
     const deps = makeDeps()
     const { handleMessage: handler } = createMessageHandler(deps)
 
@@ -248,19 +242,14 @@ describe("createMessageHandler", () => {
 
     await handlerPromise
 
-    // Verify fetch was called with parts containing extracted text
-    const fetchCalls = (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls
-    const postCall = fetchCalls.find(
-      (c: unknown[]) => typeof c[0] === "string" && (c[0] as string).includes("/message"),
-    )
-    expect(postCall).toBeDefined()
-    const body = JSON.parse((postCall![1] as { body: string }).body)
-    expect(body.parts[0].text).toContain("1. first item")
-    expect(body.parts[0].text).toContain("2. second item")
+    // Verify sendPrompt was called with the extracted text
+    const prompt = sentPrompt(deps.opencode)
+    expect(prompt.text).toContain("1. first item")
+    expect(prompt.text).toContain("2. second item")
+    expect(prompt.files).toBeUndefined()
   })
 
   it("resolves text message mention placeholders and strips the bot mention", async () => {
-    mockFetchOk("")
     const deps = makeDeps({ botOpenId: "bot-1" })
     const { handleMessage: handler } = createMessageHandler(deps)
 
@@ -291,13 +280,7 @@ describe("createMessageHandler", () => {
 
     await handlerPromise
 
-    const fetchCalls = (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls
-    const postCall = fetchCalls.find(
-      (c: unknown[]) => typeof c[0] === "string" && (c[0] as string).includes("/message"),
-    )
-    expect(postCall).toBeDefined()
-    const body = JSON.parse((postCall![1] as { body: string }).body) as { parts: Array<{ text: string }> }
-    const postedText = body.parts[0]?.text
+    const postedText = sentPrompt(deps.opencode).text
     expect(postedText).toContain("please ask @Alice to review")
     expect(postedText).not.toContain("@_user_1")
     expect(postedText).not.toContain("@_user_2")
@@ -305,7 +288,6 @@ describe("createMessageHandler", () => {
   })
 
   it("resolves post message mention placeholders and strips the bot mention", async () => {
-    mockFetchOk("")
     const deps = makeDeps({ botOpenId: "bot-1" })
     const { handleMessage: handler } = createMessageHandler(deps)
 
@@ -341,13 +323,7 @@ describe("createMessageHandler", () => {
 
     await handlerPromise
 
-    const fetchCalls = (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls
-    const postCall = fetchCalls.find(
-      (c: unknown[]) => typeof c[0] === "string" && (c[0] as string).includes("/message"),
-    )
-    expect(postCall).toBeDefined()
-    const body = JSON.parse((postCall![1] as { body: string }).body) as { parts: Array<{ text: string }> }
-    const postedText = body.parts[0]?.text
+    const postedText = sentPrompt(deps.opencode).text
     expect(postedText).toContain("please sync with @Bob")
     expect(postedText).not.toContain("@_user_1")
     expect(postedText).not.toContain("@_user_2")
@@ -366,8 +342,11 @@ describe("createMessageHandler", () => {
   })
 
   it("handles POST failure with error card", async () => {
-    mockFetchError(500)
-    const deps = makeDeps()
+    const deps = makeDeps({
+      opencode: createMockGateway({
+        sendPrompt: vi.fn().mockRejectedValue(new Error("sendPrompt failed: HTTP 500")),
+      }),
+    })
     const { handleMessage: handler } = createMessageHandler(deps)
 
     await handler(makeEvent())
@@ -379,8 +358,10 @@ describe("createMessageHandler", () => {
   })
 
   it("handles POST failure without thinking card — sends direct message", async () => {
-    mockFetchError(500)
     const deps = makeDeps({
+      opencode: createMockGateway({
+        sendPrompt: vi.fn().mockRejectedValue(new Error("sendPrompt failed: HTTP 500")),
+      }),
       progressTracker: {
         sendThinking: vi.fn().mockResolvedValue(null),
         updateWithResponse: vi.fn().mockResolvedValue(undefined),
@@ -402,7 +383,6 @@ describe("createMessageHandler", () => {
   })
 
   it("event-driven flow: collects TextDelta and responds on SessionIdle", async () => {
-    mockFetchOk("")
     const deps = makeDeps()
     const { handleMessage: handler } = createMessageHandler(deps)
 
@@ -417,7 +397,7 @@ describe("createMessageHandler", () => {
 
     listener({
       type: "message.part.updated",
-      properties: {
+      data: {
         part: { sessionID: "ses-1", messageID: "msg-1", type: "text", text: "Hello" },
         delta: "Hello ",
       },
@@ -425,7 +405,7 @@ describe("createMessageHandler", () => {
 
     listener({
       type: "message.part.updated",
-      properties: {
+      data: {
         part: { sessionID: "ses-1", messageID: "msg-1", type: "text", text: "Hello World" },
         delta: "World",
       },
@@ -433,7 +413,7 @@ describe("createMessageHandler", () => {
 
     listener({
       type: "session.status",
-      properties: { sessionID: "ses-1", status: { type: "idle" } },
+      data: { sessionID: "ses-1", status: { type: "idle" } },
     })
 
     await handlerPromise
@@ -445,7 +425,6 @@ describe("createMessageHandler", () => {
   })
 
   it("event-driven flow: removes listener after SessionIdle", async () => {
-    mockFetchOk("")
     const deps = makeDeps()
     const { handleMessage: handler } = createMessageHandler(deps)
 
@@ -468,7 +447,6 @@ describe("createMessageHandler", () => {
   })
 
   it("event-driven flow: responds with default text when no TextDelta received", async () => {
-    mockFetchOk("")
     const deps = makeDeps()
     const { handleMessage: handler } = createMessageHandler(deps)
 
@@ -496,10 +474,6 @@ describe("createMessageHandler", () => {
   it("falls back to sync mode on event-driven timeout", async () => {
     vi.useFakeTimers()
 
-    const syncBody = JSON.stringify({
-      parts: [{ type: "text", text: "Sync response" }],
-    })
-    mockFetchOk(syncBody)
     const deps = makeDeps()
     const { handleMessage: handler } = createMessageHandler(deps)
 
@@ -513,16 +487,16 @@ describe("createMessageHandler", () => {
 
     await handlerPromise
 
-    expect(deps.progressTracker.updateWithResponse).toHaveBeenCalledWith(
+    // v2's sendPrompt returns no body, so the sync fallback reports the empty response.
+    expect(deps.progressTracker.updateWithError).toHaveBeenCalledWith(
       "thinking-msg-1",
-      "Sync response",
+      "服务器返回了空响应。",
     )
     expect(deps.eventListeners.size).toBe(0)
 
   })
 
   it("suppresses SessionObserver forwarding while event-driven fallback owns the session", async () => {
-    mockFetchOk("")
 
     const feishuClient = createMockFeishuClient()
     ;(feishuClient.sendMessage as ReturnType<typeof vi.fn>).mockResolvedValue(undefined)
@@ -599,10 +573,6 @@ describe("createMessageHandler", () => {
   it("marks observer busy/free when event-driven timeout falls back to sync", async () => {
     vi.useFakeTimers()
 
-    const syncBody = JSON.stringify({
-      parts: [{ type: "text", text: "Sync response" }],
-    })
-    mockFetchOk(syncBody)
     const observer = {
       observe: vi.fn(),
       markOwned: vi.fn(),
@@ -628,9 +598,10 @@ describe("createMessageHandler", () => {
 
     await handlerPromise
 
-    expect(deps.progressTracker.updateWithResponse).toHaveBeenCalledWith(
+    // Sync fallback has no response body in v2 — it reports the empty response.
+    expect(deps.progressTracker.updateWithError).toHaveBeenCalledWith(
       "thinking-msg-1",
-      "Sync response",
+      "服务器返回了空响应。",
     )
     expect(observer.markSessionFree).toHaveBeenCalledWith("ses-1")
     expect(observer.markSessionBusy.mock.invocationCallOrder[0]).toBeLessThan(
@@ -642,7 +613,6 @@ describe("createMessageHandler", () => {
   it("sync fallback handles empty response body", async () => {
     vi.useFakeTimers()
 
-    mockFetchOk("   ")
     const deps = makeDeps()
     const { handleMessage: handler } = createMessageHandler(deps)
 
@@ -664,7 +634,6 @@ describe("createMessageHandler", () => {
   })
 
   it("adds sessionId to ownedSessions", async () => {
-    mockFetchOk("")
     const deps = makeDeps()
     const { handleMessage: handler } = createMessageHandler(deps)
 
@@ -685,7 +654,6 @@ describe("createMessageHandler", () => {
   })
 
   it("group chat replies to message instead of sending to chat", async () => {
-    mockFetchOk("")
     const deps = makeDeps({
       botOpenId: "bot-1",
       progressTracker: {
@@ -739,7 +707,6 @@ describe("createMessageHandler", () => {
 
 
   it("processes solo group messages without @mention", async () => {
-    mockFetchOk("")
     const feishuClient = createMockFeishuClient()
     ;(feishuClient.getChatInfo as ReturnType<typeof vi.fn>).mockResolvedValue({
       name: "Solo Group",
@@ -777,7 +744,6 @@ describe("createMessageHandler", () => {
   })
 
   it("skips group messages without @mention when the group has multiple humans", async () => {
-    mockFetchOk("")
     const feishuClient = createMockFeishuClient()
     ;(feishuClient.getChatInfo as ReturnType<typeof vi.fn>).mockResolvedValue({
       name: "Busy Group",
@@ -799,7 +765,6 @@ describe("createMessageHandler", () => {
   })
 
   it("includes Lark context with chat and sender info on first message", async () => {
-    mockFetchOk("")
     const deps = makeDeps()
     const { handleMessage: handler } = createMessageHandler(deps)
 
@@ -818,20 +783,14 @@ describe("createMessageHandler", () => {
 
     await handlerPromise
 
-    // Verify POST body contains Lark context signature with sender info
-    const fetchCalls = (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls
-    const postCall = fetchCalls.find(
-      (c: unknown[]) => typeof c[0] === "string" && (c[0] as string).includes("/message"),
-    )
-    expect(postCall).toBeDefined()
-    const body = JSON.parse((postCall![1] as { body: string }).body)
-    expect(body.parts[0].text).toContain("[Lark context]")
-    expect(body.parts[0].text).toContain("Sender: Test User")
-    expect(body.parts[0].text).toContain("Save files")
+    // Verify sendPrompt text contains Lark context signature with sender info
+    const promptText = sentPrompt(deps.opencode).text
+    expect(promptText).toContain("[Lark context]")
+    expect(promptText).toContain("Sender: Test User")
+    expect(promptText).toContain("Save files")
   })
 
   it("includes lightweight Lark tag with sender on subsequent messages", async () => {
-    mockFetchOk("")
     const deps = makeDeps()
     const { handleMessage: handler } = createMessageHandler(deps)
 
@@ -857,19 +816,15 @@ describe("createMessageHandler", () => {
     })
     await p2
 
-    // Second POST should have lightweight tag with sender name
-    const fetchCalls = (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls
-    const postCalls = fetchCalls.filter(
-      (c: unknown[]) => typeof c[0] === "string" && (c[0] as string).includes("/message"),
-    )
-    expect(postCalls.length).toBeGreaterThanOrEqual(2)
-    const secondBody = JSON.parse((postCalls[1]![1] as { body: string }).body)
-    expect(secondBody.parts[0].text).toContain("[Lark] from: Test User")
-    expect(secondBody.parts[0].text).not.toContain("[Lark context]")
+    // Second sendPrompt should have lightweight tag with sender name
+    const sendCalls = (deps.opencode.sendPrompt as any).mock.calls
+    expect(sendCalls.length).toBeGreaterThanOrEqual(2)
+    const secondText = sentPrompt(deps.opencode, 1).text
+    expect(secondText).toContain("[Lark] from: Test User")
+    expect(secondText).not.toContain("[Lark context]")
   })
 
   it("includes group chat name in Lark context for group messages", async () => {
-    mockFetchOk("")
     const feishuClient = createMockFeishuClient()
     ;(feishuClient.getChatInfo as ReturnType<typeof vi.fn>).mockResolvedValue({
       name: "My Project Group", chat_type: "group",
@@ -907,18 +862,12 @@ describe("createMessageHandler", () => {
 
     await handlerPromise
 
-    const fetchCalls = (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls
-    const postCall = fetchCalls.find(
-      (c: unknown[]) => typeof c[0] === "string" && (c[0] as string).includes("/message"),
-    )
-    expect(postCall).toBeDefined()
-    const body = JSON.parse((postCall![1] as { body: string }).body)
-    expect(body.parts[0].text).toContain("Chat: My Project Group (group)")
-    expect(body.parts[0].text).toContain("[Lark context]")
+    const promptText = sentPrompt(deps.opencode).text
+    expect(promptText).toContain("Chat: My Project Group (group)")
+    expect(promptText).toContain("[Lark context]")
   })
 
   it("does not send bind notification on any message", async () => {
-    mockFetchOk("")
     const deps = makeDeps()
     const { handleMessage: handler } = createMessageHandler(deps)
 
@@ -950,7 +899,6 @@ describe("createMessageHandler", () => {
   })
 
   it("calls observer.observe() with correct args after session resolution", async () => {
-    mockFetchOk("")
     const observer = {
       observe: vi.fn(),
       markOwned: vi.fn(),
@@ -981,7 +929,6 @@ describe("createMessageHandler", () => {
   })
 
   it("calls observer.markOwned() with messageId from events in event-driven path", async () => {
-    mockFetchOk("")
     const observer = {
       observe: vi.fn(),
       markOwned: vi.fn(),
@@ -999,11 +946,11 @@ describe("createMessageHandler", () => {
       expect(deps.eventListeners.size).toBe(1)
     })
 
-    // Dispatch event with messageID
+    // Dispatch a v2-shaped event (payload under `data`) carrying a messageID
     ;[...deps.eventListeners.get("ses-1")!].forEach((fn) => {
       fn({
         type: "message.part.updated",
-        properties: {
+        data: {
           part: { sessionID: "ses-1", messageID: "oc-msg-42", type: "text", text: "Hello" },
           delta: "Hello",
         },
@@ -1013,7 +960,7 @@ describe("createMessageHandler", () => {
     ;[...deps.eventListeners.get("ses-1")!].forEach((fn) => {
       fn({
         type: "session.status",
-        properties: { sessionID: "ses-1", status: { type: "idle" } },
+        data: { sessionID: "ses-1", status: { type: "idle" } },
       })
     })
 
@@ -1023,7 +970,6 @@ describe("createMessageHandler", () => {
   })
 
   it("works without observer (backward compatible)", async () => {
-    mockFetchOk("")
     const deps = makeDeps() // No observer
     const { handleMessage: handler } = createMessageHandler(deps)
 
@@ -1047,7 +993,6 @@ describe("createMessageHandler", () => {
   })
 
   it("calls observer.markSessionBusy/Free when streaming bridge is used", async () => {
-    mockFetchOk("")
     const observer = {
       observe: vi.fn(),
       markOwned: vi.fn(),
@@ -1081,7 +1026,6 @@ describe("createMessageHandler", () => {
   })
 
   it("includes quoted message context when parent_id is present", async () => {
-    mockFetchOk("")
     const feishuClient = createMockFeishuClient()
     ;(feishuClient.getMessage as ReturnType<typeof vi.fn>).mockResolvedValue({
       code: 0,
@@ -1115,19 +1059,13 @@ describe("createMessageHandler", () => {
 
     expect(feishuClient.getMessage).toHaveBeenCalledWith("parent-msg-1")
 
-    // Verify the POST body contains quoted context
-    const fetchCalls = (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls
-    const postCall = fetchCalls.find(
-      (c: unknown[]) => typeof c[0] === "string" && (c[0] as string).includes("/message"),
-    )
-    expect(postCall).toBeDefined()
-    const body = JSON.parse((postCall![1] as { body: string }).body)
-    expect(body.parts[0].text).toContain("> original question")
-    expect(body.parts[0].text).toContain("Hello")
+    // Verify the prompt text contains quoted context
+    const promptText = sentPrompt(deps.opencode).text
+    expect(promptText).toContain("> original question")
+    expect(promptText).toContain("Hello")
   })
 
   it("handles getMessage failure gracefully (still sends user message)", async () => {
-    mockFetchOk("")
     const feishuClient = createMockFeishuClient()
     ;(feishuClient.getMessage as ReturnType<typeof vi.fn>).mockRejectedValue(
       new Error("API error"),
@@ -1153,18 +1091,12 @@ describe("createMessageHandler", () => {
     await handlerPromise
 
     // Should still have sent the original message without quoted context
-    const fetchCalls = (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls
-    const postCall = fetchCalls.find(
-      (c: unknown[]) => typeof c[0] === "string" && (c[0] as string).includes("/message"),
-    )
-    expect(postCall).toBeDefined()
-    const body = JSON.parse((postCall![1] as { body: string }).body)
-    expect(body.parts[0].text).toContain("Hello")
-    expect(body.parts[0].text).not.toContain("> original question")
+    const promptText = sentPrompt(deps.opencode).text
+    expect(promptText).toContain("Hello")
+    expect(promptText).not.toContain("> original question")
   })
 
   it("does not fetch quoted message when parent_id is absent", async () => {
-    mockFetchOk("")
     const feishuClient = createMockFeishuClient()
     const deps = makeDeps({ feishuClient })
     const { handleMessage: handler } = createMessageHandler(deps)
@@ -1188,7 +1120,6 @@ describe("createMessageHandler", () => {
   })
 
   it("handles image message — downloads and forwards as text", async () => {
-    mockFetchOk("")
     const feishuClient = createMockFeishuClient()
     ;(feishuClient.downloadResource as ReturnType<typeof vi.fn>).mockResolvedValue({
       data: Buffer.from("fake-png-data"),
@@ -1218,20 +1149,17 @@ describe("createMessageHandler", () => {
     // Verify downloadResource was called with correct args
     expect(feishuClient.downloadResource).toHaveBeenCalledWith("msg-1", "img_abc123", "image")
 
-    // Verify POST to opencode contains the file reference text
-    const fetchCalls = (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls
-    const postCall = fetchCalls.find(
-      (c: unknown[]) => typeof c[0] === "string" && (c[0] as string).includes("/message"),
-    )
-    expect(postCall).toBeDefined()
-    const body = JSON.parse((postCall![1] as { body: string }).body)
-    expect(body.parts[0].text).toContain("User sent an image.")
-    expect(body.parts[0].text).toContain("Saved to:")
-    expect(body.parts[0].text).toContain("Please look at this image.")
+    // Verify sendPrompt text contains the file reference text.
+    // NOTE: message-handler never constructs a `type: "file"` part, so the
+    // gateway's `files` argument stays undefined (reported as a finding).
+    const prompt = sentPrompt(deps.opencode)
+    expect(prompt.text).toContain("User sent an image.")
+    expect(prompt.text).toContain("Saved to:")
+    expect(prompt.text).toContain("Please look at this image.")
+    expect(prompt.files).toBeUndefined()
   })
 
   it("handles JPEG image message — saves with .jpg extension", async () => {
-    mockFetchOk("")
     const feishuClient = createMockFeishuClient()
     ;(feishuClient.downloadResource as ReturnType<typeof vi.fn>).mockResolvedValue({
       data: Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46]),
@@ -1258,18 +1186,12 @@ describe("createMessageHandler", () => {
 
     await handlerPromise
 
-    const fetchCalls = (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls
-    const postCall = fetchCalls.find(
-      (c: unknown[]) => typeof c[0] === "string" && (c[0] as string).includes("/message"),
-    )
-    expect(postCall).toBeDefined()
-    const body = JSON.parse((postCall![1] as { body: string }).body)
-    expect(body.parts[0].text).toMatch(/Saved to: .+image\.jpg/)
-    expect(body.parts[0].text).not.toMatch(/Saved to: .+image\.png/)
+    const promptText = sentPrompt(deps.opencode).text
+    expect(promptText).toMatch(/Saved to: .+image\.jpg/)
+    expect(promptText).not.toMatch(/Saved to: .+image\.png/)
   })
 
   it("handles file message — downloads and forwards as text", async () => {
-    mockFetchOk("")
     const feishuClient = createMockFeishuClient()
     ;(feishuClient.downloadResource as ReturnType<typeof vi.fn>).mockResolvedValue({
       data: Buffer.from("fake-file-data"),
@@ -1299,20 +1221,15 @@ describe("createMessageHandler", () => {
     // Verify downloadResource was called with correct args
     expect(feishuClient.downloadResource).toHaveBeenCalledWith("msg-1", "file_xyz789", "file")
 
-    // Verify POST to opencode contains the file reference text
-    const fetchCalls = (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls
-    const postCall = fetchCalls.find(
-      (c: unknown[]) => typeof c[0] === "string" && (c[0] as string).includes("/message"),
-    )
-    expect(postCall).toBeDefined()
-    const body = JSON.parse((postCall![1] as { body: string }).body)
-    expect(body.parts[0].text).toContain("User sent a file: report.pdf")
-    expect(body.parts[0].text).toContain("Saved to:")
-    expect(body.parts[0].text).toContain("Please review this file.")
+    // Verify sendPrompt text contains the file reference text.
+    const prompt = sentPrompt(deps.opencode)
+    expect(prompt.text).toContain("User sent a file: report.pdf")
+    expect(prompt.text).toContain("Saved to:")
+    expect(prompt.text).toContain("Please review this file.")
+    expect(prompt.files).toBeUndefined()
   })
 
   it("handles file download failure — forwards error to opencode", async () => {
-    mockFetchOk("")
     const feishuClient = createMockFeishuClient()
     ;(feishuClient.downloadResource as ReturnType<typeof vi.fn>).mockRejectedValue(
       new Error("Download failed"),
@@ -1345,18 +1262,12 @@ describe("createMessageHandler", () => {
 
     // Error message should be forwarded to opencode
     expect(deps.sessionManager.getOrCreate).toHaveBeenCalled()
-    const fetchCalls = (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls
-    const postCall = fetchCalls.find(
-      (c: unknown[]) => typeof c[0] === "string" && (c[0] as string).includes("/message"),
-    )
-    expect(postCall).toBeDefined()
-    const body = JSON.parse((postCall![1] as { body: string }).body)
-    expect(body.parts[0].text).toContain("download failed")
-    expect(body.parts[0].text).toContain("file_key: img_bad")
+    const promptText = sentPrompt(deps.opencode).text
+    expect(promptText).toContain("download failed")
+    expect(promptText).toContain("file_key: img_bad")
   })
 
   it("handles image message with missing image_key — forwards error", async () => {
-    mockFetchOk("")
     const deps = makeDeps()
     const { handleMessage: handler } = createMessageHandler(deps)
 
@@ -1386,7 +1297,6 @@ describe("createMessageHandler", () => {
   })
 
   it("handles FileTooLargeError — sends size limit message to opencode", async () => {
-    mockFetchOk("")
     const feishuClient = createMockFeishuClient()
     ;(feishuClient.downloadResource as ReturnType<typeof vi.fn>).mockRejectedValue(
       new FileTooLargeError("big_file.zip", 60 * 1024 * 1024),
@@ -1413,21 +1323,17 @@ describe("createMessageHandler", () => {
     await handlerPromise
 
     // Should forward specific size-limit message
-    const fetchCalls = (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls
-    const postCall = fetchCalls.find(
-      (c: unknown[]) => typeof c[0] === "string" && (c[0] as string).includes("/message"),
-    )
-    expect(postCall).toBeDefined()
-    const body = JSON.parse((postCall![1] as { body: string }).body)
-    expect(body.parts[0].text).toContain("exceeds the 50MB size limit")
-    expect(body.parts[0].text).toContain("big_file.zip")
+    const promptText = sentPrompt(deps.opencode).text
+    expect(promptText).toContain("exceeds the 50MB size limit")
+    expect(promptText).toContain("big_file.zip")
   })
 })
 
 describe("createMessageHandler — debounce race condition", () => {
   beforeEach(() => {
     vi.restoreAllMocks()
-    mockFetchOk("")
+    // Ensure fake timers from a previous test in this block don't leak in.
+    vi.useRealTimers()
   })
 
   it("media1 starts init, media2 arrives → must not flush before init completes", async () => {
@@ -1576,11 +1482,6 @@ describe("createMessageHandler — debounce race condition", () => {
   it("debounced event-driven timeout marks observer busy/free around sync fallback", async () => {
     vi.useFakeTimers()
 
-    const syncBody = JSON.stringify({
-      parts: [{ type: "text", text: "Sync response" }],
-    })
-    mockFetchOk(syncBody)
-
     const observer = {
       observe: vi.fn(),
       markOwned: vi.fn(),
@@ -1611,15 +1512,90 @@ describe("createMessageHandler — debounce race condition", () => {
     await advanceTimers(5 * 60 * 1000 + 100)
 
     await waitFor(() => {
-      expect(deps.progressTracker.updateWithResponse).toHaveBeenCalledWith(
+      // v2's sendPrompt returns no body → the sync fallback reports the empty response.
+      expect(deps.progressTracker.updateWithError).toHaveBeenCalledWith(
         "thinking-msg-1",
-        "Sync response",
+        "服务器返回了空响应。",
       )
     })
 
     expect(observer.markSessionFree).toHaveBeenCalledWith("ses-1")
     expect(observer.markSessionBusy.mock.invocationCallOrder[0]).toBeLessThan(
       observer.markSessionFree.mock.invocationCallOrder[0],
+    )
+    dispose()
+  })
+
+  it("debounced branch: 404 self-heals in handleBatchFlush and retries exactly once", async () => {
+    const sendPrompt = vi.fn()
+      .mockRejectedValueOnce(new Error("sendPrompt failed: HTTP 404"))
+      .mockResolvedValueOnce(undefined)
+
+    const feishuClient = createMockFeishuClient()
+    ;(feishuClient.addReaction as ReturnType<typeof vi.fn>).mockResolvedValue({
+      data: { reaction_id: "r-1" },
+    })
+
+    const sessionManager = {
+      getOrCreate: vi.fn()
+        .mockResolvedValueOnce("ses-stale")
+        .mockResolvedValueOnce("ses-new"),
+      getExisting: vi.fn().mockResolvedValue(undefined),
+      getSession: vi.fn().mockReturnValue(null),
+      deleteMapping: vi.fn().mockReturnValue(true),
+      setMapping: vi.fn().mockReturnValue(true),
+      cleanup: vi.fn().mockReturnValue(0),
+      validateAndCleanupStale: vi.fn().mockResolvedValue(0),
+    }
+
+    const bridgeCalls: string[] = []
+    const streamingBridge = {
+      handleMessage: vi.fn().mockImplementation(
+        async (
+          _chatId: string, sid: string, _el: EventListenerMap,
+          _ep: unknown, sendMessage: () => Promise<string>,
+          onComplete: (text: string) => void,
+        ) => {
+          bridgeCalls.push(sid)
+          await sendMessage()
+          onComplete("done")
+        },
+      ),
+    }
+
+    const deps = makeDeps({
+      feishuClient,
+      streamingBridge,
+      sessionManager,
+      debounceMs: 100,
+      opencode: createMockGateway({ sendPrompt }),
+    })
+    const { handleMessage: handler, dispose } = createMessageHandler(deps)
+
+    // Image buffers + starts init
+    await handler(makeEvent({
+      event_id: "evt-img-1",
+      message_id: "msg-img-1",
+      message: { message_type: "image", content: JSON.stringify({ image_key: "img-1" }) },
+    }))
+
+    // Follow-up text triggers an immediate flush of the batch
+    const p2 = handler(makeEvent({
+      event_id: "evt-text-1",
+      message_id: "msg-text-1",
+      message: { message_type: "text", content: JSON.stringify({ text: "go" }) },
+    }))
+
+    await waitFor(() => {
+      expect(bridgeCalls).toEqual(["ses-stale", "ses-new"])
+    })
+    await p2
+
+    expect(sessionManager.deleteMapping).toHaveBeenCalledWith("chat-1")
+    expect(sessionManager.getOrCreate).toHaveBeenCalledTimes(2)
+    expect(streamingBridge.handleMessage).toHaveBeenCalledTimes(2)
+    expect(deps.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("returned 404"),
     )
     dispose()
   })
@@ -1636,19 +1612,9 @@ describe("createMessageHandler — 404 session self-healing", () => {
   })
 
   it("recovers from 404 by clearing mapping and retrying with new session", async () => {
-    let callCount = 0
-    globalThis.fetch = vi.fn().mockImplementation(async (input: string) => {
-      if (input.includes("/message")) {
-        callCount++
-        if (callCount === 1) {
-          // First POST — 404 (stale session)
-          return { ok: false, status: 404, text: () => Promise.resolve("") }
-        }
-        // Retry POST — success
-        return { ok: true, text: () => Promise.resolve("") }
-      }
-      return { ok: true, text: () => Promise.resolve("") }
-    }) as any
+    const sendPrompt = vi.fn()
+      .mockRejectedValueOnce(new Error("sendPrompt failed: HTTP 404"))
+      .mockResolvedValueOnce(undefined)
 
     const sessionManager = {
       getOrCreate: vi.fn()
@@ -1661,7 +1627,7 @@ describe("createMessageHandler — 404 session self-healing", () => {
       cleanup: vi.fn().mockReturnValue(0),
       validateAndCleanupStale: vi.fn().mockResolvedValue(0),
     }
-    const deps = makeDeps({ sessionManager })
+    const deps = makeDeps({ sessionManager, opencode: createMockGateway({ sendPrompt }) })
     const { handleMessage: handler } = createMessageHandler(deps)
 
     const handlerPromise = handler(makeEvent())
@@ -1686,11 +1652,8 @@ describe("createMessageHandler — 404 session self-healing", () => {
     expect(sessionManager.deleteMapping).toHaveBeenCalledWith("chat-1")
     // Verify: getOrCreate was called twice (initial + recovery)
     expect(sessionManager.getOrCreate).toHaveBeenCalledTimes(2)
-    // Verify: 2 POSTs to /message (original + retry)
-    const messagePosts = (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.filter(
-      (c: unknown[]) => typeof c[0] === "string" && (c[0] as string).includes("/message"),
-    )
-    expect(messagePosts).toHaveLength(2)
+    // Verify: 2 sendPrompt calls (original + retry)
+    expect(sendPrompt).toHaveBeenCalledTimes(2)
     // Verify: self-healing logged
     expect(deps.logger.warn).toHaveBeenCalledWith(
       expect.stringContaining("returned 404"),
@@ -1698,12 +1661,8 @@ describe("createMessageHandler — 404 session self-healing", () => {
   })
 
   it("does not retry more than once on repeated 404s", async () => {
-    // Both POSTs return 404 — should fail after one retry
-    globalThis.fetch = vi.fn().mockResolvedValue({
-      ok: false,
-      status: 404,
-      text: () => Promise.resolve(""),
-    }) as any
+    // Both sendPrompt calls reject with 404 — should fail after one retry
+    const sendPrompt = vi.fn().mockRejectedValue(new Error("sendPrompt failed: HTTP 404"))
 
     const sessionManager = {
       getOrCreate: vi.fn()
@@ -1716,7 +1675,7 @@ describe("createMessageHandler — 404 session self-healing", () => {
       cleanup: vi.fn().mockReturnValue(0),
       validateAndCleanupStale: vi.fn().mockResolvedValue(0),
     }
-    const deps = makeDeps({ sessionManager })
+    const deps = makeDeps({ sessionManager, opencode: createMockGateway({ sendPrompt }) })
     const { handleMessage: handler } = createMessageHandler(deps)
 
     await handler(makeEvent())
@@ -1728,11 +1687,15 @@ describe("createMessageHandler — 404 session self-healing", () => {
     )
     // Only one retry
     expect(sessionManager.getOrCreate).toHaveBeenCalledTimes(2)
+    expect(sendPrompt).toHaveBeenCalledTimes(2)
   })
 
   it("non-404 errors are not treated as session-gone", async () => {
-    mockFetchError(500)
-    const deps = makeDeps()
+    const deps = makeDeps({
+      opencode: createMockGateway({
+        sendPrompt: vi.fn().mockRejectedValue(new Error("sendPrompt failed: HTTP 500")),
+      }),
+    })
     const { handleMessage: handler } = createMessageHandler(deps)
 
     await handler(makeEvent())
@@ -1754,20 +1717,10 @@ describe("createMessageHandler — streaming 404 session self-healing", () => {
   })
 
   it("streaming branch: 404 triggers session switch with new listener on new session", async () => {
-    // Setup: first POST returns 404 (stale session), second POST succeeds on new session
-    let postCallCount = 0
-    globalThis.fetch = vi.fn().mockImplementation(async (input: string) => {
-      if (input.includes("/message")) {
-        postCallCount++
-        if (postCallCount === 1) {
-          // First POST — 404 (stale session)
-          return { ok: false, status: 404, text: () => Promise.resolve("") }
-        }
-        // Second POST — success (new session)
-        return { ok: true, text: () => Promise.resolve("") }
-      }
-      return { ok: true, text: () => Promise.resolve("") }
-    }) as any
+    // Setup: first sendPrompt rejects with 404 (stale session), second succeeds
+    const sendPrompt = vi.fn()
+      .mockRejectedValueOnce(new Error("sendPrompt failed: HTTP 404"))
+      .mockResolvedValueOnce(undefined)
 
     const sessionManager = {
       getOrCreate: vi.fn()
@@ -1812,7 +1765,7 @@ describe("createMessageHandler — streaming 404 session self-healing", () => {
       code: 0, msg: "ok", data: { reaction_id: "r-1" },
     })
 
-    const deps = makeDeps({ sessionManager, observer, streamingBridge, feishuClient })
+    const deps = makeDeps({ sessionManager, observer, streamingBridge, feishuClient, opencode: createMockGateway({ sendPrompt }) })
     const { handleMessage: handler } = createMessageHandler(deps)
 
     await handler(makeEvent())
@@ -1831,12 +1784,8 @@ describe("createMessageHandler — streaming 404 session self-healing", () => {
   })
 
   it("streaming branch: does not retry more than once on repeated 404s", async () => {
-    // Both POSTs return 404
-    globalThis.fetch = vi.fn().mockResolvedValue({
-      ok: false,
-      status: 404,
-      text: () => Promise.resolve(""),
-    }) as any
+    // Every sendPrompt rejects with 404
+    const sendPrompt = vi.fn().mockRejectedValue(new Error("sendPrompt failed: HTTP 404"))
 
     const sessionManager = {
       getOrCreate: vi.fn()
@@ -1867,7 +1816,7 @@ describe("createMessageHandler — streaming 404 session self-healing", () => {
     })
     ;(feishuClient.deleteReaction as ReturnType<typeof vi.fn>).mockResolvedValue({ code: 0 })
 
-    const deps = makeDeps({ sessionManager, streamingBridge, feishuClient })
+    const deps = makeDeps({ sessionManager, streamingBridge, feishuClient, opencode: createMockGateway({ sendPrompt }) })
     const { handleMessage: handler } = createMessageHandler(deps)
 
     await handler(makeEvent())

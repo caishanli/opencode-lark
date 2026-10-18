@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
 import { createInteractivePoller } from "../interactive-poller.js"
 import { ExpiringSet } from "../../utils/expiring-set.js"
 import { interactiveCardKey } from "../../feishu/interactive-card-registry.js"
+import { createMockGateway } from "../../__tests__/setup.js"
 
 function createMockInteractiveCardRegistry() {
   const cards = new Map<string, {
@@ -80,40 +81,9 @@ function createMockLogger() {
   }
 }
 
-function mockFetchPerUrl(
-  questionResp: (() => Promise<unknown>) | Error,
-  permissionResp: (() => Promise<unknown>) | Error,
-) {
-  const mock = vi.fn().mockImplementation(async (input: string | URL | Request) => {
-    const url = typeof input === "string"
-      ? input
-      : input instanceof URL
-        ? input.toString()
-        : input.url
-
-    if (typeof url === "string" && url.includes("/question")) {
-      if (questionResp instanceof Error) throw questionResp
-      return questionResp()
-    }
-    if (typeof url === "string" && url.includes("/permission")) {
-      if (permissionResp instanceof Error) throw permissionResp
-      return permissionResp()
-    }
-    return { ok: false, status: 404, json: () => Promise.resolve(null) }
-  })
-
-  return Object.assign(mock, {
-    preconnect: globalThis.fetch.preconnect.bind(globalThis.fetch),
-  })
-}
-
-const okJson = (data: unknown) => () =>
-  Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(data) })
-const notOk = () => () =>
-  Promise.resolve({ ok: false, status: 500, json: () => Promise.resolve(null) })
-const badJson = () => () =>
-  Promise.resolve({ ok: true, status: 200, json: () => Promise.reject(new Error("parse error")) })
-
+// Shapes below mirror the gateway contract:
+//   QuestionRequest  = { id, sessionID, questions: [{ question, header, options, multiple?, custom? }] }
+//   PermissionRequest = { id, sessionID, action, resources, save?, metadata? }
 const SAMPLE_QUESTION = {
   id: "q_1",
   sessionID: "ses_abc",
@@ -125,23 +95,20 @@ const SAMPLE_QUESTION = {
 const SAMPLE_PERMISSION = {
   id: "p_1",
   sessionID: "ses_abc",
-  permission: "file_edit",
-  patterns: ["/src/foo.ts"],
+  action: "file_edit",
+  resources: ["/src/foo.ts"],
   metadata: { tool: "edit" },
 }
 
 describe("interactive-poller", () => {
-  let originalFetch: typeof globalThis.fetch
   const createdSeenInteractiveIds: ExpiringSet<string>[] = []
 
   beforeEach(() => {
-    originalFetch = globalThis.fetch
     vi.useFakeTimers()
     vi.clearAllMocks()
   })
 
   afterEach(() => {
-    globalThis.fetch = originalFetch
     vi.useRealTimers()
     vi.restoreAllMocks()
     for (const seenSet of createdSeenInteractiveIds.splice(0)) {
@@ -176,7 +143,6 @@ describe("interactive-poller", () => {
   describe("start/stop lifecycle", () => {
     it("start() logs and begins polling", () => {
       const deps = createDeps()
-      globalThis.fetch = mockFetchPerUrl(okJson([]), okJson([]))
       const poller = createInteractivePoller(deps)
       poller.start()
 
@@ -187,24 +153,16 @@ describe("interactive-poller", () => {
 
     it("start() runs first poll immediately", async () => {
       const deps = createDeps()
-      globalThis.fetch = mockFetchPerUrl(okJson([]), okJson([]))
       const poller = createInteractivePoller(deps)
       poller.start()
       await advanceTimers(0)
 
-      expect(globalThis.fetch).toHaveBeenCalledWith(
-        "http://test:4096/question",
-        expect.anything(),
-      )
-      expect(globalThis.fetch).toHaveBeenCalledWith(
-        "http://test:4096/permission",
-        expect.anything(),
-      )
+      expect(deps.opencode.listQuestions).toHaveBeenCalled()
+      expect(deps.opencode.listPermissions).toHaveBeenCalled()
     })
 
     it("start() when already started is a no-op", () => {
       const deps = createDeps()
-      globalThis.fetch = mockFetchPerUrl(okJson([]), okJson([]))
       const poller = createInteractivePoller(deps)
       poller.start()
       poller.start()
@@ -216,7 +174,6 @@ describe("interactive-poller", () => {
 
     it("stop() clears interval and logs", () => {
       const deps = createDeps()
-      globalThis.fetch = mockFetchPerUrl(okJson([]), okJson([]))
       const poller = createInteractivePoller(deps)
       poller.start()
       poller.stop()
@@ -236,8 +193,11 @@ describe("interactive-poller", () => {
 
   describe("pollQuestions", () => {
     it("sends card for pending question", async () => {
-      const deps = createDeps()
-      globalThis.fetch = mockFetchPerUrl(okJson([SAMPLE_QUESTION]), okJson([]))
+      const deps = createDeps({
+        opencode: createMockGateway({
+          listQuestions: vi.fn().mockResolvedValue([SAMPLE_QUESTION]),
+        }),
+      })
       const poller = createInteractivePoller(deps)
       poller.start()
       await advanceTimers(0)
@@ -252,9 +212,12 @@ describe("interactive-poller", () => {
     })
 
     it("deduplicates already-seen question IDs", async () => {
-      const deps = createDeps()
+      const deps = createDeps({
+        opencode: createMockGateway({
+          listQuestions: vi.fn().mockResolvedValue([SAMPLE_QUESTION]),
+        }),
+      })
       deps.seenInteractiveIds.add(interactiveCardKey("question", "q_1"))
-      globalThis.fetch = mockFetchPerUrl(okJson([SAMPLE_QUESTION]), okJson([]))
       const poller = createInteractivePoller(deps)
       poller.start()
       await advanceTimers(0)
@@ -264,9 +227,11 @@ describe("interactive-poller", () => {
 
     it("skips question when no chatId for session", async () => {
       const deps = createDeps({
+        opencode: createMockGateway({
+          listQuestions: vi.fn().mockResolvedValue([SAMPLE_QUESTION]),
+        }),
         getChatForSession: vi.fn().mockReturnValue(undefined),
       })
-      globalThis.fetch = mockFetchPerUrl(okJson([SAMPLE_QUESTION]), okJson([]))
       const poller = createInteractivePoller(deps)
       poller.start()
       await advanceTimers(0)
@@ -275,13 +240,15 @@ describe("interactive-poller", () => {
     })
 
     it("skips question missing required fields", async () => {
-      const deps = createDeps()
-      const incomplete = [
-        { id: "", sessionID: "ses_abc", questions: [] },
-        { id: "q_2", sessionID: "", questions: [] },
-        { id: "q_3", sessionID: "ses_abc", questions: "not_array" },
-      ]
-      globalThis.fetch = mockFetchPerUrl(okJson(incomplete), okJson([]))
+      const deps = createDeps({
+        opencode: createMockGateway({
+          listQuestions: vi.fn().mockResolvedValue([
+            { id: "", sessionID: "ses_abc", questions: [] },
+            { id: "q_2", sessionID: "", questions: [] },
+            { id: "q_3", sessionID: "ses_abc", questions: "not_array" },
+          ]),
+        }),
+      })
       const poller = createInteractivePoller(deps)
       poller.start()
       await advanceTimers(0)
@@ -289,9 +256,14 @@ describe("interactive-poller", () => {
       expect(deps.feishuClient.sendMessage).not.toHaveBeenCalled()
     })
 
-    it("handles GET /question non-ok response", async () => {
-      const deps = createDeps()
-      globalThis.fetch = mockFetchPerUrl(notOk(), okJson([]))
+    it("handles non-ok question response degrading to an empty list", async () => {
+      // The gateway maps any non-ok HTTP response (404/500) to [] rather than
+      // rejecting, so this must be expressed as a RESOLVING [].
+      const deps = createDeps({
+        opencode: createMockGateway({
+          listQuestions: vi.fn().mockResolvedValue([]),
+        }),
+      })
       const poller = createInteractivePoller(deps)
       poller.start()
       await advanceTimers(0)
@@ -299,9 +271,12 @@ describe("interactive-poller", () => {
       expect(deps.feishuClient.sendMessage).not.toHaveBeenCalled()
     })
 
-    it("handles GET /question network failure", async () => {
-      const deps = createDeps()
-      globalThis.fetch = mockFetchPerUrl(new Error("ECONNREFUSED"), okJson([]))
+    it("handles listQuestions network failure", async () => {
+      const deps = createDeps({
+        opencode: createMockGateway({
+          listQuestions: vi.fn().mockRejectedValue(new Error("ECONNREFUSED")),
+        }),
+      })
       const poller = createInteractivePoller(deps)
       poller.start()
       await advanceTimers(0)
@@ -309,9 +284,12 @@ describe("interactive-poller", () => {
       expect(deps.feishuClient.sendMessage).not.toHaveBeenCalled()
     })
 
-    it("handles GET /question non-array JSON", async () => {
-      const deps = createDeps()
-      globalThis.fetch = mockFetchPerUrl(okJson({ not: "array" }), okJson([]))
+    it("handles non-array question response", async () => {
+      const deps = createDeps({
+        opencode: createMockGateway({
+          listQuestions: vi.fn().mockResolvedValue({ not: "array" }),
+        }),
+      })
       const poller = createInteractivePoller(deps)
       poller.start()
       await advanceTimers(0)
@@ -319,9 +297,12 @@ describe("interactive-poller", () => {
       expect(deps.feishuClient.sendMessage).not.toHaveBeenCalled()
     })
 
-    it("handles GET /question invalid JSON", async () => {
-      const deps = createDeps()
-      globalThis.fetch = mockFetchPerUrl(badJson(), okJson([]))
+    it("handles malformed question response", async () => {
+      const deps = createDeps({
+        opencode: createMockGateway({
+          listQuestions: vi.fn().mockRejectedValue(new Error("parse error")),
+        }),
+      })
       const poller = createInteractivePoller(deps)
       poller.start()
       await advanceTimers(0)
@@ -330,9 +311,12 @@ describe("interactive-poller", () => {
     })
 
     it("logs warning when sendMessage fails for question", async () => {
-      const deps = createDeps()
+      const deps = createDeps({
+        opencode: createMockGateway({
+          listQuestions: vi.fn().mockResolvedValue([SAMPLE_QUESTION]),
+        }),
+      })
       deps.feishuClient.sendMessage.mockRejectedValue(new Error("send failed"))
-      globalThis.fetch = mockFetchPerUrl(okJson([SAMPLE_QUESTION]), okJson([]))
       const poller = createInteractivePoller(deps)
       poller.start()
       await advanceTimers(10)
@@ -347,8 +331,11 @@ describe("interactive-poller", () => {
 
   describe("pollPermissions", () => {
     it("sends card for pending permission", async () => {
-      const deps = createDeps()
-      globalThis.fetch = mockFetchPerUrl(okJson([]), okJson([SAMPLE_PERMISSION]))
+      const deps = createDeps({
+        opencode: createMockGateway({
+          listPermissions: vi.fn().mockResolvedValue([SAMPLE_PERMISSION]),
+        }),
+      })
       const poller = createInteractivePoller(deps)
       poller.start()
       await advanceTimers(0)
@@ -363,9 +350,12 @@ describe("interactive-poller", () => {
     })
 
     it("deduplicates already-seen permission IDs", async () => {
-      const deps = createDeps()
+      const deps = createDeps({
+        opencode: createMockGateway({
+          listPermissions: vi.fn().mockResolvedValue([SAMPLE_PERMISSION]),
+        }),
+      })
       deps.seenInteractiveIds.add(interactiveCardKey("permission", "p_1"))
-      globalThis.fetch = mockFetchPerUrl(okJson([]), okJson([SAMPLE_PERMISSION]))
       const poller = createInteractivePoller(deps)
       poller.start()
       await advanceTimers(0)
@@ -375,9 +365,11 @@ describe("interactive-poller", () => {
 
     it("skips permission when no chatId for session", async () => {
       const deps = createDeps({
+        opencode: createMockGateway({
+          listPermissions: vi.fn().mockResolvedValue([SAMPLE_PERMISSION]),
+        }),
         getChatForSession: vi.fn().mockReturnValue(undefined),
       })
-      globalThis.fetch = mockFetchPerUrl(okJson([]), okJson([SAMPLE_PERMISSION]))
       const poller = createInteractivePoller(deps)
       poller.start()
       await advanceTimers(0)
@@ -386,12 +378,14 @@ describe("interactive-poller", () => {
     })
 
     it("skips permission missing id or sessionID", async () => {
-      const deps = createDeps()
-      const incomplete = [
-        { id: "", sessionID: "ses_abc", permission: "bash", patterns: [], metadata: {} },
-        { id: "p_2", sessionID: "", permission: "bash", patterns: [], metadata: {} },
-      ]
-      globalThis.fetch = mockFetchPerUrl(okJson([]), okJson(incomplete))
+      const deps = createDeps({
+        opencode: createMockGateway({
+          listPermissions: vi.fn().mockResolvedValue([
+            { id: "", sessionID: "ses_abc", action: "bash", resources: [], metadata: {} },
+            { id: "p_2", sessionID: "", action: "bash", resources: [], metadata: {} },
+          ]),
+        }),
+      })
       const poller = createInteractivePoller(deps)
       poller.start()
       await advanceTimers(0)
@@ -399,9 +393,13 @@ describe("interactive-poller", () => {
       expect(deps.feishuClient.sendMessage).not.toHaveBeenCalled()
     })
 
-    it("handles GET /permission non-ok response", async () => {
-      const deps = createDeps()
-      globalThis.fetch = mockFetchPerUrl(okJson([]), notOk())
+    it("handles non-ok permission response degrading to an empty list", async () => {
+      // Non-ok HTTP responses degrade to [] in the gateway, not a rejection.
+      const deps = createDeps({
+        opencode: createMockGateway({
+          listPermissions: vi.fn().mockResolvedValue([]),
+        }),
+      })
       const poller = createInteractivePoller(deps)
       poller.start()
       await advanceTimers(0)
@@ -409,9 +407,12 @@ describe("interactive-poller", () => {
       expect(deps.feishuClient.sendMessage).not.toHaveBeenCalled()
     })
 
-    it("handles GET /permission network failure", async () => {
-      const deps = createDeps()
-      globalThis.fetch = mockFetchPerUrl(okJson([]), new Error("ECONNREFUSED"))
+    it("handles listPermissions network failure", async () => {
+      const deps = createDeps({
+        opencode: createMockGateway({
+          listPermissions: vi.fn().mockRejectedValue(new Error("ECONNREFUSED")),
+        }),
+      })
       const poller = createInteractivePoller(deps)
       poller.start()
       await advanceTimers(0)
@@ -419,10 +420,27 @@ describe("interactive-poller", () => {
       expect(deps.feishuClient.sendMessage).not.toHaveBeenCalled()
     })
 
-    it("uses joined patterns as permission title", async () => {
-      const deps = createDeps()
-      const perm = { ...SAMPLE_PERMISSION, patterns: ["/src/a.ts", "/src/b.ts"] }
-      globalThis.fetch = mockFetchPerUrl(okJson([]), okJson([perm]))
+    it("handles non-array permission response", async () => {
+      const deps = createDeps({
+        opencode: createMockGateway({
+          listPermissions: vi.fn().mockResolvedValue({ not: "array" }),
+        }),
+      })
+      const poller = createInteractivePoller(deps)
+      poller.start()
+      await advanceTimers(0)
+
+      expect(deps.feishuClient.sendMessage).not.toHaveBeenCalled()
+    })
+
+    it("uses joined resources as permission title", async () => {
+      const deps = createDeps({
+        opencode: createMockGateway({
+          listPermissions: vi.fn().mockResolvedValue([
+            { ...SAMPLE_PERMISSION, resources: ["/src/a.ts", "/src/b.ts"] },
+          ]),
+        }),
+      })
       const poller = createInteractivePoller(deps)
       poller.start()
       await advanceTimers(0)
@@ -434,10 +452,14 @@ describe("interactive-poller", () => {
       expect(card.elements[0].text.content).toBe("/src/a.ts, /src/b.ts")
     })
 
-    it("falls back to permission type when patterns empty", async () => {
-      const deps = createDeps()
-      const perm = { ...SAMPLE_PERMISSION, patterns: [] }
-      globalThis.fetch = mockFetchPerUrl(okJson([]), okJson([perm]))
+    it("falls back to action when resources empty", async () => {
+      const deps = createDeps({
+        opencode: createMockGateway({
+          listPermissions: vi.fn().mockResolvedValue([
+            { ...SAMPLE_PERMISSION, resources: [] },
+          ]),
+        }),
+      })
       const poller = createInteractivePoller(deps)
       poller.start()
       await advanceTimers(0)
@@ -449,9 +471,12 @@ describe("interactive-poller", () => {
     })
 
     it("logs warning when sendMessage fails for permission", async () => {
-      const deps = createDeps()
+      const deps = createDeps({
+        opencode: createMockGateway({
+          listPermissions: vi.fn().mockResolvedValue([SAMPLE_PERMISSION]),
+        }),
+      })
       deps.feishuClient.sendMessage.mockRejectedValue(new Error("send failed"))
-      globalThis.fetch = mockFetchPerUrl(okJson([]), okJson([SAMPLE_PERMISSION]))
       const poller = createInteractivePoller(deps)
       poller.start()
       await advanceTimers(10)
@@ -466,11 +491,12 @@ describe("interactive-poller", () => {
 
   describe("cross-cutting", () => {
     it("adds processed IDs to seenInteractiveIds", async () => {
-      const deps = createDeps()
-      globalThis.fetch = mockFetchPerUrl(
-        okJson([SAMPLE_QUESTION]),
-        okJson([SAMPLE_PERMISSION]),
-      )
+      const deps = createDeps({
+        opencode: createMockGateway({
+          listQuestions: vi.fn().mockResolvedValue([SAMPLE_QUESTION]),
+          listPermissions: vi.fn().mockResolvedValue([SAMPLE_PERMISSION]),
+        }),
+      })
       const poller = createInteractivePoller(deps)
       poller.start()
       await advanceTimers(0)
@@ -481,42 +507,43 @@ describe("interactive-poller", () => {
 
     it("polls again after 3s interval", async () => {
       const deps = createDeps()
-      const fetchMock = mockFetchPerUrl(okJson([]), okJson([]))
-      globalThis.fetch = fetchMock
       const poller = createInteractivePoller(deps)
       poller.start()
       await advanceTimers(0)
-      const callsAfterFirst = fetchMock.mock.calls.length
+      const callsAfterFirst = (deps.opencode.listQuestions as ReturnType<typeof vi.fn>).mock.calls.length
 
       await advanceTimers(3000)
-      expect(fetchMock.mock.calls.length).toBeGreaterThan(callsAfterFirst)
+      expect((deps.opencode.listQuestions as ReturnType<typeof vi.fn>).mock.calls.length)
+        .toBeGreaterThan(callsAfterFirst)
 
       poller.stop()
     })
 
     it("stop prevents further polling", async () => {
       const deps = createDeps()
-      const fetchMock = mockFetchPerUrl(okJson([]), okJson([]))
-      globalThis.fetch = fetchMock
       const poller = createInteractivePoller(deps)
       poller.start()
       await advanceTimers(0)
       poller.stop()
 
-      const callsAtStop = fetchMock.mock.calls.length
+      const callsAtStop = (deps.opencode.listQuestions as ReturnType<typeof vi.fn>).mock.calls.length
       await advanceTimers(10000)
-      expect(fetchMock.mock.calls.length).toBe(callsAtStop)
+      expect((deps.opencode.listQuestions as ReturnType<typeof vi.fn>).mock.calls.length)
+        .toBe(callsAtStop)
     })
 
     it("updates tracked question cards once answered in TUI", async () => {
-      const deps = createDeps()
-      globalThis.fetch = mockFetchPerUrl(okJson([SAMPLE_QUESTION]), okJson([]))
+      const deps = createDeps({
+        opencode: createMockGateway({
+          listQuestions: vi.fn().mockResolvedValue([SAMPLE_QUESTION]),
+        }),
+      })
       const poller = createInteractivePoller(deps)
 
       poller.start()
       await advanceTimers(0)
 
-      globalThis.fetch = mockFetchPerUrl(okJson([]), okJson([]))
+      deps.opencode.listQuestions.mockResolvedValue([])
       await advanceTimers(3000)
 
       expect(deps.feishuClient.updateMessage).toHaveBeenCalledWith(
@@ -531,29 +558,35 @@ describe("interactive-poller", () => {
     })
 
     it("does not overwrite cards while a Feishu reply is resolving", async () => {
-      const deps = createDeps()
-      globalThis.fetch = mockFetchPerUrl(okJson([SAMPLE_QUESTION]), okJson([]))
+      const deps = createDeps({
+        opencode: createMockGateway({
+          listQuestions: vi.fn().mockResolvedValue([SAMPLE_QUESTION]),
+        }),
+      })
       const poller = createInteractivePoller(deps)
 
       poller.start()
       await advanceTimers(0)
 
       deps.interactiveCardRegistry.markFeishuResolving("question", "q_1")
-      globalThis.fetch = mockFetchPerUrl(okJson([]), okJson([]))
+      deps.opencode.listQuestions.mockResolvedValue([])
       await advanceTimers(3000)
 
       expect(deps.feishuClient.updateMessage).not.toHaveBeenCalled()
     })
 
     it("updates tracked permission cards once handled in TUI", async () => {
-      const deps = createDeps()
-      globalThis.fetch = mockFetchPerUrl(okJson([]), okJson([SAMPLE_PERMISSION]))
+      const deps = createDeps({
+        opencode: createMockGateway({
+          listPermissions: vi.fn().mockResolvedValue([SAMPLE_PERMISSION]),
+        }),
+      })
       const poller = createInteractivePoller(deps)
 
       poller.start()
       await advanceTimers(0)
 
-      globalThis.fetch = mockFetchPerUrl(okJson([]), okJson([]))
+      deps.opencode.listPermissions.mockResolvedValue([])
       await advanceTimers(3000)
 
       expect(deps.feishuClient.updateMessage).toHaveBeenCalledWith(
@@ -568,14 +601,17 @@ describe("interactive-poller", () => {
     })
 
     it("does not resolve question cards when the question endpoint failed", async () => {
-      const deps = createDeps()
-      globalThis.fetch = mockFetchPerUrl(okJson([SAMPLE_QUESTION]), okJson([]))
+      const deps = createDeps({
+        opencode: createMockGateway({
+          listQuestions: vi.fn().mockResolvedValue([SAMPLE_QUESTION]),
+        }),
+      })
       const poller = createInteractivePoller(deps)
 
       poller.start()
       await advanceTimers(0)
 
-      globalThis.fetch = mockFetchPerUrl(new Error("ECONNREFUSED"), okJson([]))
+      deps.opencode.listQuestions.mockRejectedValue(new Error("ECONNREFUSED"))
       await advanceTimers(3000)
 
       expect(deps.feishuClient.updateMessage).not.toHaveBeenCalled()

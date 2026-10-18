@@ -5,6 +5,7 @@ import {
   type MessageSummary,
 } from "./subagent-tracker.js"
 import type { SubtaskDiscovered } from "./event-processor.js"
+import { createMockGateway } from "../__tests__/setup.js"
 
 /** Advance timers by a bounded amount and flush microtasks. */
 const advanceAndFlush = async (ms = 20_000) => {
@@ -20,8 +21,6 @@ const advanceAndFlush = async (ms = 20_000) => {
 // Helpers
 // ---------------------------------------------------------------------------
 
-const SERVER_URL = "http://127.0.0.1:4096"
-
 function makeAction(overrides?: Partial<SubtaskDiscovered>): SubtaskDiscovered {
   return {
     type: "SubtaskDiscovered",
@@ -33,48 +32,26 @@ function makeAction(overrides?: Partial<SubtaskDiscovered>): SubtaskDiscovered {
   }
 }
 
-function mockFetchResponse(body: unknown, ok = true) {
-  return vi.fn().mockResolvedValue({
-    ok,
-    json: async () => body,
-  })
-}
-
-function mockFetchSequence(responses: Array<{ body: unknown; ok?: boolean }>) {
-  const fn = vi.fn()
-  for (const [i, resp] of responses.entries()) {
-    fn.mockResolvedValueOnce({
-      ok: resp.ok ?? true,
-      json: async () => resp.body,
-    })
-  }
-  return fn
-}
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
 describe("SubAgentTracker", () => {
-  let originalFetch: typeof globalThis.fetch
-
   beforeEach(() => {
-    originalFetch = globalThis.fetch
     vi.useFakeTimers()
   })
 
   afterEach(() => {
-    globalThis.fetch = originalFetch
     vi.useRealTimers()
   })
 
   // 1. Child found on 1st poll → discovering → active
   it("transitions discovering → active when child found on 1st poll", async () => {
-    globalThis.fetch = mockFetchResponse([
-      { id: "ses-child-1", parentID: "ses-parent" },
-    ])
+    const gateway = createMockGateway({
+      children: vi.fn().mockResolvedValue([{ id: "ses-child-1" }]),
+    })
 
-    const tracker = new SubAgentTracker({ opencode: createMockGateway() })
+    const tracker = new SubAgentTracker({ opencode: gateway })
     const agent = await tracker.onSubtaskDiscovered(makeAction())
 
     expect(agent.status).toBe("discovering")
@@ -89,12 +66,12 @@ describe("SubAgentTracker", () => {
 
   // 2. Child found on 2nd poll → retry works
   it("finds child on 2nd poll after retry", async () => {
-    globalThis.fetch = mockFetchSequence([
-      { body: [] },  // 1st attempt: empty
-      { body: [{ id: "ses-child-2", parentID: "ses-parent" }] },  // 2nd attempt: found
-    ])
+    const children = vi.fn()
+      .mockResolvedValueOnce([]) // 1st attempt: empty
+      .mockResolvedValueOnce([{ id: "ses-child-2" }]) // 2nd attempt: found
+    const gateway = createMockGateway({ children })
 
-    const tracker = new SubAgentTracker({ opencode: createMockGateway() })
+    const tracker = new SubAgentTracker({ opencode: gateway })
     const agent = await tracker.onSubtaskDiscovered(makeAction())
 
     // Let all timers and promises resolve (2 polls with backoff)
@@ -102,14 +79,15 @@ describe("SubAgentTracker", () => {
 
     expect(agent.status).toBe("active")
     expect(agent.childSessionId).toBe("ses-child-2")
-    expect(globalThis.fetch).toHaveBeenCalledTimes(2)
+    expect(children).toHaveBeenCalledTimes(2)
   })
 
   // 3. Child not found after 5 retries → failed
   it("status becomes failed after 5 retries with no child", async () => {
-    globalThis.fetch = mockFetchResponse([]) // always empty
+    const children = vi.fn().mockResolvedValue([]) // always empty
+    const gateway = createMockGateway({ children })
 
-    const tracker = new SubAgentTracker({ opencode: createMockGateway() })
+    const tracker = new SubAgentTracker({ opencode: gateway })
     const agent = await tracker.onSubtaskDiscovered(makeAction())
 
     // Advance through all 5 retries with backoff timers
@@ -117,12 +95,12 @@ describe("SubAgentTracker", () => {
 
     expect(agent.status).toBe("failed")
     expect(agent.childSessionId).toBeUndefined()
-    expect(globalThis.fetch).toHaveBeenCalledTimes(5)
+    expect(children).toHaveBeenCalledTimes(5)
   })
 
   // 4. getChildMessages returns formatted messages
   it("getChildMessages returns formatted messages", async () => {
-    globalThis.fetch = mockFetchResponse([
+    const messages = vi.fn().mockResolvedValue([
       { role: "user", text: "Hello" },
       {
         role: "assistant",
@@ -130,21 +108,23 @@ describe("SubAgentTracker", () => {
         toolCalls: [{ name: "readFile" }, { name: "writeFile" }],
       },
     ])
+    const gateway = createMockGateway({ messages })
 
-    const tracker = new SubAgentTracker({ opencode: createMockGateway() })
-    const messages = await tracker.getChildMessages("ses-child-1")
+    const tracker = new SubAgentTracker({ opencode: gateway })
+    const result = await tracker.getChildMessages("ses-child-1")
 
-    expect(messages).toEqual<MessageSummary[]>([
+    expect(result).toEqual<MessageSummary[]>([
       { role: "user", text: "Hello" },
       { role: "assistant", text: "Hi there", toolCalls: ["readFile", "writeFile"] },
     ])
+    expect(messages).toHaveBeenCalledWith("ses-child-1", { limit: 20, order: "desc" })
   })
 
   // 5. getChildMessages with empty response → empty array
   it("getChildMessages returns empty array for empty response", async () => {
-    globalThis.fetch = mockFetchResponse([])
+    const gateway = createMockGateway({ messages: vi.fn().mockResolvedValue([]) })
 
-    const tracker = new SubAgentTracker({ opencode: createMockGateway() })
+    const tracker = new SubAgentTracker({ opencode: gateway })
     const messages = await tracker.getChildMessages("ses-child-1")
 
     expect(messages).toEqual([])
@@ -162,17 +142,14 @@ describe("SubAgentTracker", () => {
   // 7. Multiple sub-agents tracked simultaneously
   it("tracks multiple sub-agents simultaneously", async () => {
     let callCount = 0
-    globalThis.fetch = vi.fn().mockImplementation(async () => {
+    const children = vi.fn().mockImplementation(async () => {
       callCount++
-      // First sub-agent's poll finds child immediately
-      // Second sub-agent's poll also finds child immediately
-      return {
-        ok: true,
-        json: async () => [{ id: `ses-child-${callCount}`, parentID: "ses-parent" }],
-      }
+      // Each sub-agent's poll finds its own child immediately
+      return [{ id: `ses-child-${callCount}` }]
     })
+    const gateway = createMockGateway({ children })
 
-    const tracker = new SubAgentTracker({ opencode: createMockGateway() })
+    const tracker = new SubAgentTracker({ opencode: gateway })
 
     const agent1 = await tracker.onSubtaskDiscovered(
       makeAction({ prompt: "Task 1" }),
@@ -193,9 +170,9 @@ describe("SubAgentTracker", () => {
 
   // 8. getTrackedSubAgents returns all tracked agents (snapshot, not reference)
   it("getTrackedSubAgents returns all agents as a copy", async () => {
-    globalThis.fetch = mockFetchResponse([])
+    const gateway = createMockGateway()
 
-    const tracker = new SubAgentTracker({ opencode: createMockGateway() })
+    const tracker = new SubAgentTracker({ opencode: gateway })
     await tracker.onSubtaskDiscovered(makeAction({ prompt: "A" }))
     await tracker.onSubtaskDiscovered(makeAction({ prompt: "B" }))
 
@@ -209,26 +186,25 @@ describe("SubAgentTracker", () => {
     expect(tracker.getTrackedSubAgents()).toHaveLength(2)
   })
 
-  // 9. pollChildSession uses correct URL
+  // 9. pollChildSession asks the gateway for children of the parent session
   it("pollChildSession calls correct REST endpoint", async () => {
-    globalThis.fetch = mockFetchResponse([
-      { id: "child-abc", parentID: "parent-xyz" },
-    ])
+    const children = vi.fn().mockResolvedValue([{ id: "child-abc" }])
+    const gateway = createMockGateway({ children })
 
-    const tracker = new SubAgentTracker({ opencode: createMockGateway() })
+    const tracker = new SubAgentTracker({ opencode: gateway })
     const result = await tracker.pollChildSession("parent-xyz")
 
     expect(result).toBe("child-abc")
-    expect(globalThis.fetch).toHaveBeenCalledWith(
-      `${SERVER_URL}/session/parent-xyz/children`,
-    )
+    expect(children).toHaveBeenCalledWith("parent-xyz")
   })
 
-  // 10. getChildMessages handles fetch failure gracefully
+  // 10. getChildMessages handles gateway failure gracefully
   it("getChildMessages returns empty array on fetch failure", async () => {
-    globalThis.fetch = vi.fn().mockRejectedValue(new Error("network error"))
+    const gateway = createMockGateway({
+      messages: vi.fn().mockRejectedValue(new Error("network error")),
+    })
 
-    const tracker = new SubAgentTracker({ opencode: createMockGateway() })
+    const tracker = new SubAgentTracker({ opencode: gateway })
     const messages = await tracker.getChildMessages("ses-child-1")
 
     expect(messages).toEqual([])
@@ -242,7 +218,6 @@ describe("SubAgentTracker", () => {
     })
 
     // depth=1 should still work
-    globalThis.fetch = mockFetchResponse([])
     const agent = await tracker.onSubtaskDiscovered(makeAction(), 1)
     expect(agent).toBeDefined()
 
@@ -254,9 +229,9 @@ describe("SubAgentTracker", () => {
 
   // 12. Failed sub-agents have resolvedAt set
   it("sets resolvedAt when status becomes failed", async () => {
-    globalThis.fetch = mockFetchResponse([]) // always empty → will fail
+    const gateway = createMockGateway({ children: vi.fn().mockResolvedValue([]) }) // always empty → will fail
 
-    const tracker = new SubAgentTracker({ opencode: createMockGateway() })
+    const tracker = new SubAgentTracker({ opencode: gateway })
     const agent = await tracker.onSubtaskDiscovered(makeAction())
 
     // Advance through all retries
@@ -271,9 +246,9 @@ describe("SubAgentTracker", () => {
 
   // 13. getTrackedSubAgents filters out expired completed agents
   it("getTrackedSubAgents excludes expired completed sub-agents", async () => {
-    globalThis.fetch = mockFetchResponse([]) // all will fail
+    const gateway = createMockGateway({ children: vi.fn().mockResolvedValue([]) }) // all will fail
 
-    const tracker = new SubAgentTracker({ opencode: createMockGateway() })
+    const tracker = new SubAgentTracker({ opencode: gateway })
     await tracker.onSubtaskDiscovered(makeAction({ prompt: "Old task" }))
 
     // Resolve all polls so agent becomes failed with resolvedAt
@@ -293,9 +268,10 @@ describe("SubAgentTracker", () => {
 
   // 14. Periodic cleanup evicts expired entries from tracked array
   it("periodic cleanup evicts expired completed sub-agents", async () => {
-    globalThis.fetch = mockFetchResponse([]) // all will fail
+    const children = vi.fn().mockResolvedValue([]) // all will fail
+    const gateway = createMockGateway({ children })
 
-    const tracker = new SubAgentTracker({ opencode: createMockGateway() })
+    const tracker = new SubAgentTracker({ opencode: gateway })
     await tracker.onSubtaskDiscovered(makeAction({ prompt: "Expired" }))
 
     // Resolve polls
@@ -305,9 +281,7 @@ describe("SubAgentTracker", () => {
     vi.advanceTimersByTime(30 * 60 * 1000 + 10 * 60 * 1000 + 1)
 
     // Add a fresh sub-agent to verify it's NOT evicted
-    globalThis.fetch = mockFetchResponse([
-      { id: "ses-fresh", parentID: "ses-parent" },
-    ])
+    children.mockResolvedValue([{ id: "ses-fresh" }])
     await tracker.onSubtaskDiscovered(makeAction({ prompt: "Fresh" }))
     await advanceAndFlush()
 
