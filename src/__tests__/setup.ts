@@ -38,10 +38,27 @@ export function createMockDb(): AppDatabase {
   }
 }
 /**
- * Creates a mock fetch function that can be configured per test.
+ * Creates a mock OpencodeGateway with all methods stubbed.
  */
-export function createMockFetch() {
-  return vi.fn()
+export function createMockGateway(overrides: Record<string, unknown> = {}): any {
+  return {
+    listSessions: vi.fn().mockResolvedValue([]),
+    getSession: vi.fn().mockResolvedValue(null),
+    createSession: vi.fn().mockResolvedValue({ id: "ses-new" }),
+    children: vi.fn().mockResolvedValue([]),
+    messages: vi.fn().mockResolvedValue([]),
+    sendPrompt: vi.fn().mockResolvedValue(undefined),
+    abort: vi.fn().mockResolvedValue(undefined),
+    activeStatuses: vi.fn().mockResolvedValue({}),
+    listPermissions: vi.fn().mockResolvedValue([]),
+    replyPermission: vi.fn().mockResolvedValue(undefined),
+    listQuestions: vi.fn().mockResolvedValue([]),
+    replyQuestion: vi.fn().mockResolvedValue(undefined),
+    commands: vi.fn().mockResolvedValue([]),
+    subscribeEvents: vi.fn(),
+    ping: vi.fn().mockResolvedValue(undefined),
+    ...overrides,
+  }
 }
 
 /**

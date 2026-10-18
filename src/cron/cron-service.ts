@@ -2,12 +2,13 @@ import type { CronConfig, CronJobConfig } from "../utils/config.js"
 import type { SessionManager } from "../session/session-manager.js"
 import type { FeishuApiClient } from "../feishu/api-client.js"
 import type { Logger } from "../utils/logger.js"
+import type { OpencodeGateway } from "../opencode/gateway.js"
 
 export interface CronServiceOptions {
   config: CronConfig
   sessionManager: SessionManager
   feishuClient: FeishuApiClient
-  serverUrl: string
+  opencode: OpencodeGateway
   logger: Logger
 }
 
@@ -119,7 +120,7 @@ export class CronService {
   }
 
   private async executeJob(job: CronJobConfig): Promise<void> {
-    const { sessionManager, feishuClient, serverUrl, logger } = this.options
+    const { sessionManager, feishuClient, opencode, logger } = this.options
     const cronKey = `cron:${job.name}`
 
     try {
@@ -127,18 +128,7 @@ export class CronService {
 
       const sessionId = await sessionManager.getOrCreate(cronKey)
 
-      const resp = await fetch(`${serverUrl}/session/${sessionId}/message`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          parts: [{ type: "text", text: job.prompt }],
-        }),
-      })
-
-      if (!resp.ok) {
-        logger.error(`Cron job "${job.name}": POST failed with HTTP ${resp.status}`)
-        return
-      }
+      await opencode.sendPrompt(sessionId, { text: job.prompt })
 
       const result = await this.waitForResponse(sessionId)
 
@@ -154,26 +144,29 @@ export class CronService {
   }
 
   private async waitForResponse(sessionId: string, maxWaitMs = 300_000): Promise<string> {
-    const { serverUrl } = this.options
+    const { opencode } = this.options
     const start = Date.now()
     const pollInterval = 2_000
 
     while (Date.now() - start < maxWaitMs) {
       await new Promise((r) => setTimeout(r, pollInterval))
 
-      const statusResp = await fetch(`${serverUrl}/session/${sessionId}`)
-      if (!statusResp.ok) continue
+      const active = await opencode.activeStatuses()
+      if (sessionId in active) continue // still busy
 
-      const session = (await statusResp.json()) as { status?: { type?: string } }
-      if (session.status?.type === "idle") {
-        const msgResp = await fetch(`${serverUrl}/session/${sessionId}/message?limit=1`)
-        if (msgResp.ok) {
-          const messages = (await msgResp.json()) as Array<{ role?: string; text?: string }>
-          const last = messages.find((m) => m.role === "assistant")
-          return last?.text ?? "(no response)"
+      // idle / finished
+      const messages = await opencode.messages(sessionId, { limit: 1, order: "desc" })
+      const last = messages.find((m: any) => m.type === "assistant" || m.role === "assistant")
+      if (last) {
+        if (typeof last.text === "string") return last.text
+        if (Array.isArray(last.content)) {
+          return last.content
+            .filter((p: any) => p?.type === "text")
+            .map((p: any) => p.text)
+            .join("")
         }
-        return "(failed to retrieve response)"
       }
+      return "(failed to retrieve response)"
     }
 
     return "(timed out waiting for response)"

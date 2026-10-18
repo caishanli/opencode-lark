@@ -3,6 +3,7 @@ import type { EventListenerMap } from "../utils/event-listeners.js"
 import { createMessageHandler, type HandlerDeps } from "./message-handler.js"
 import { EventProcessor } from "../streaming/event-processor.js"
 import { createMockLogger, createMockFeishuClient, waitFor } from "../__tests__/setup.js"
+import { createMockGateway } from "../__tests__/setup.js"
 import { createSessionObserver } from "../streaming/session-observer.js"
 import { ExpiringSet } from "../utils/expiring-set.js"
 
@@ -43,7 +44,7 @@ function makeDeps(overrides: Partial<HandlerDeps> = {}): HandlerDeps {
   const eventListeners: EventListenerMap = new Map()
 
   return {
-    serverUrl: "http://127.0.0.1:4096",
+    opencode: createMockGateway(),
     sessionManager: {
       getOrCreate: vi.fn().mockResolvedValue("ses-1"),
       getExisting: vi.fn().mockResolvedValue(undefined),

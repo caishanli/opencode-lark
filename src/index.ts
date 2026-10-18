@@ -15,7 +15,8 @@
  *   9. Graceful shutdown
  */
 
-import { createOpencodeClient } from "@opencode-ai/sdk/v2"
+import { createOpencodeGateway } from "./opencode/gateway.js"
+import { eventPayload } from "./opencode/events.js"
 import { loadConfig } from "./utils/config.js"
 import { initDatabase } from "./utils/db.js"
 import { createLogger } from "./utils/logger.js"
@@ -88,21 +89,33 @@ async function main(): Promise<void> {
   const serverUrl = (
     process.env.OPENCODE_SERVER_URL ?? "http://localhost:4096"
   ).replace("localhost", "127.0.0.1")
+  const username = process.env.OPENCODE_SERVER_USERNAME ?? "opencode"
+  const password = process.env.OPENCODE_SERVER_PASSWORD ?? ""
+  if (!password) {
+    logger.warn(
+      "OPENCODE_SERVER_PASSWORD is not set. opencode v2 requires Basic auth; " +
+        "set it in .env or run `opencode-lark init`.",
+    )
+  }
   logger.info(`Connecting to opencode server at ${serverUrl}`)
-  const client = createOpencodeClient({
+  const gateway = createOpencodeGateway({
     baseUrl: serverUrl,
+    username,
+    password,
+    directory: config.opencode?.cwd || process.env.OPENCODE_CWD || process.cwd(),
+    logger,
   })
 
   async function waitForServer(maxRetries = 10): Promise<void> {
     let delay = 250
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
-        await client.session.status()
+        await gateway.ping()
         return
-      } catch {
+      } catch (err) {
         if (attempt === maxRetries) {
           throw new Error(
-            `Opencode server not reachable after ${maxRetries} attempts`,
+            `Opencode server not reachable after ${maxRetries} attempts: ${err}`,
           )
         }
         logger.info(
@@ -149,7 +162,7 @@ async function main(): Promise<void> {
   })
 
   const sessionManager = createSessionManager({
-    serverUrl,
+    opencode: gateway,
     db: db.sessions,
     defaultAgent: config.defaultAgent,
   })
@@ -177,7 +190,7 @@ async function main(): Promise<void> {
 
   const eventProcessor = new EventProcessor({ ownedSessions, logger })
 
-  const subAgentTracker = new SubAgentTracker({ serverUrl })
+  const subAgentTracker = new SubAgentTracker({ opencode: gateway })
 
   const outboundMedia = createOutboundMediaHandler({
     feishuClient,
@@ -206,14 +219,14 @@ async function main(): Promise<void> {
 
 
   const commandHandler = createCommandHandler({
-    serverUrl,
+    opencode: gateway,
     sessionManager,
     feishuClient,
     logger,
   })
 
   const { handleMessage, dispose: disposeDebouncer } = createMessageHandler({
-    serverUrl,
+    opencode: gateway,
     sessionManager,
     dedup,
     eventProcessor,
@@ -238,13 +251,13 @@ async function main(): Promise<void> {
   })
 
   const interactiveHandler = createInteractiveHandler({
-    serverUrl,
+    opencode: gateway,
     logger,
     interactiveCardRegistry,
   })
 
   const interactivePoller = createInteractivePoller({
-    serverUrl,
+    opencode: gateway,
     feishuClient,
     logger,
     getChatForSession: (sessionId) => observer.getChatForSession(sessionId),
@@ -281,12 +294,15 @@ async function main(): Promise<void> {
 
   ;(async () => {
     try {
-      const events = await client.event.subscribe()
       logger.info("SSE event stream connected")
-      for await (const event of events.stream) {
-        const eventType = (event as Record<string, unknown>)?.type as string | undefined
-        const props = (event as Record<string, unknown>)?.properties as Record<string, unknown> | undefined
-        const sessionID = props?.sessionID ?? (props?.part && typeof props.part === "object" ? (props.part as Record<string, unknown>).sessionID : undefined)
+      for await (const event of gateway.subscribeEvents()) {
+        const eventType = event?.type
+        const payload = eventPayload(event)
+        const sessionID =
+          (typeof payload?.sessionID === "string" ? payload.sessionID : undefined) ??
+          (payload?.part && typeof payload.part === "object"
+            ? (payload.part as Record<string, unknown>).sessionID
+            : undefined)
         if (eventType) {
           logger.debug(`SSE: ${eventType} session=${sessionID ?? "n/a"}`)
         }
@@ -371,7 +387,7 @@ async function main(): Promise<void> {
       config: config.cron,
       sessionManager,
       feishuClient,
-      serverUrl,
+      opencode: gateway,
       logger,
     })
     cronService.start()
@@ -381,7 +397,7 @@ async function main(): Promise<void> {
     logger.info("Starting heartbeat service...")
     heartbeatService = new HeartbeatService({
       intervalMs: config.heartbeat.intervalMs,
-      serverUrl,
+      opencode: gateway,
       feishuClient,
       statusChatId: config.heartbeat.statusChatId,
       logger,

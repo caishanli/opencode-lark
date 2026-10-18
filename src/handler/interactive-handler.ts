@@ -2,19 +2,17 @@
  * Interactive card action handler.
  * Handles question answers and permission replies from Feishu card button clicks,
  * forwarding responses back to the opencode server.
- *
- * Feedback to the user is handled by the card callback response (toast + card update)
- * in ws-client.ts — this module only handles the opencode POST.
  */
 
 import type { Logger } from "../utils/logger.js"
 import type { FeishuCardAction } from "../types.js"
 import type { InteractiveCardRegistry } from "../feishu/interactive-card-registry.js"
+import type { OpencodeGateway } from "../opencode/gateway.js"
 
 // ── Types ──
 
 export interface InteractiveHandlerDeps {
-  serverUrl: string
+  opencode: OpencodeGateway
   logger: Logger
   interactiveCardRegistry?: InteractiveCardRegistry
 }
@@ -22,7 +20,7 @@ export interface InteractiveHandlerDeps {
 // ── Factory ──
 
 export function createInteractiveHandler(deps: InteractiveHandlerDeps) {
-  const { serverUrl, logger } = deps
+  const { opencode, logger } = deps
 
   return async (action: FeishuCardAction): Promise<void> => {
     const actionValue = action.action?.value
@@ -31,12 +29,12 @@ export function createInteractiveHandler(deps: InteractiveHandlerDeps) {
     const actionType = actionValue.action
 
     if (actionType === "question_answer") {
-      await handleQuestionAnswer(actionValue)
+      await handleQuestionAnswer(actionValue as Record<string, string>)
       return
     }
 
     if (actionType === "permission_reply") {
-      await handlePermissionReply(actionValue)
+      await handlePermissionReply(actionValue as Record<string, string>)
       return
     }
   }
@@ -44,9 +42,13 @@ export function createInteractiveHandler(deps: InteractiveHandlerDeps) {
   async function handleQuestionAnswer(
     value: Record<string, string>,
   ): Promise<void> {
-    const { requestId, answers } = value
+    const { requestId, answers, sessionId } = value
     if (!requestId || !answers) {
       logger.warn("Missing requestId or answers in question_answer action")
+      return
+    }
+    if (!sessionId) {
+      logger.warn("Question card missing sessionId; cannot reply on v2")
       return
     }
 
@@ -60,18 +62,9 @@ export function createInteractiveHandler(deps: InteractiveHandlerDeps) {
 
     try {
       deps.interactiveCardRegistry?.markFeishuResolving("question", requestId)
-      const resp = await fetch(`${serverUrl}/question/${requestId}/reply`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ answers: parsedAnswers }),
-      })
-      if (!resp.ok) {
-        deps.interactiveCardRegistry?.clearFeishuResolving("question", requestId)
-        logger.warn(`Question reply failed: ${resp.status} ${resp.statusText}`)
-      } else {
-        deps.interactiveCardRegistry?.untrack("question", requestId)
-        logger.info(`Question ${requestId} answered: ${parsedAnswers[0]?.[0] ?? ""}`)
-      }
+      await opencode.replyQuestion(sessionId, requestId, parsedAnswers)
+      deps.interactiveCardRegistry?.untrack("question", requestId)
+      logger.info(`Question ${requestId} answered: ${parsedAnswers[0]?.[0] ?? ""}`)
     } catch (err) {
       deps.interactiveCardRegistry?.clearFeishuResolving("question", requestId)
       logger.warn(`Question reply request failed: ${err}`)
@@ -81,31 +74,26 @@ export function createInteractiveHandler(deps: InteractiveHandlerDeps) {
   async function handlePermissionReply(
     value: Record<string, string>,
   ): Promise<void> {
-    const { requestId, reply } = value
+    const { requestId, reply, sessionId } = value
     if (!requestId || !reply) {
       logger.warn("Missing requestId or reply in permission_reply action")
+      return
+    }
+    if (!sessionId) {
+      logger.warn("Permission card missing sessionId; cannot reply on v2")
       return
     }
 
     try {
       deps.interactiveCardRegistry?.markFeishuResolving("permission", requestId)
-      const resp = await fetch(`${serverUrl}/permission/${requestId}/reply`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ reply }),
-      })
-      if (!resp.ok) {
-        deps.interactiveCardRegistry?.clearFeishuResolving("permission", requestId)
-        logger.warn(`Permission reply failed: ${resp.status} ${resp.statusText}`)
-      } else {
-        deps.interactiveCardRegistry?.untrack("permission", requestId)
-        const labelMap: Record<string, string> = {
-          once: "Allowed (once)",
-          always: "Always allowed",
-          reject: "Rejected",
-        }
-        logger.info(`Permission ${requestId}: ${labelMap[reply] ?? reply}`)
+      await opencode.replyPermission(sessionId, requestId, reply as "once" | "always" | "reject")
+      deps.interactiveCardRegistry?.untrack("permission", requestId)
+      const labelMap: Record<string, string> = {
+        once: "Allowed (once)",
+        always: "Always allowed",
+        reject: "Rejected",
       }
+      logger.info(`Permission ${requestId}: ${labelMap[reply] ?? reply}`)
     } catch (err) {
       deps.interactiveCardRegistry?.clearFeishuResolving("permission", requestId)
       logger.warn(`Permission reply request failed: ${err}`)

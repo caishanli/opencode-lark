@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest"
 import { createCommandHandler } from "../command-handler.js"
 import { createMockLogger, createMockFeishuClient } from "../../__tests__/setup.js"
+import { createMockGateway } from "../../__tests__/setup.js"
 import type { SessionManager } from "../../session/session-manager.js"
 import type { SessionMapping } from "../../types.js"
 
@@ -44,7 +45,7 @@ describe("createCommandHandler", () => {
 
   function createHandler(sm?: SessionManager) {
     return createCommandHandler({
-      serverUrl: "http://test:4096",
+      opencode: createMockGateway(),
       sessionManager: sm ?? mockSessionManager,
       feishuClient: mockFeishuClient,
       logger: mockLogger,

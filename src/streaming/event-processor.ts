@@ -3,6 +3,8 @@
 // Parses raw opencode SSE events into typed actions.
 // ═══════════════════════════════════════════
 
+import { eventPayload } from "../opencode/events.js"
+
 // ---------------------------------------------------------------------------
 // Output action types
 // ---------------------------------------------------------------------------
@@ -179,13 +181,16 @@ function hasType(v: unknown): v is { type: string } {
 const KNOWN_TYPES = new Set([
   "message.part.updated",
   "message.part.delta",
+  "session.next.text.delta",
   "session.status",
   "session.idle",
   "question.asked",
+  "question.v2.asked",
   "permission.asked",
+  "permission.v2.asked",
 ])
 
-function isKnownEvent(v: unknown): v is KnownEvent {
+function isKnownEvent(v: unknown): v is { type: string } {
   if (!hasType(v)) return false
   return KNOWN_TYPES.has(v.type)
 }
@@ -218,13 +223,17 @@ export class EventProcessor {
           return this.processMessagePartUpdated(raw)
         case "message.part.delta":
           return this.processMessagePartDelta(raw)
+        case "session.next.text.delta":
+          return this.processSessionNextTextDelta(raw)
         case "session.status":
           return this.processSessionStatus(raw)
         case "session.idle":
           return this.processSessionIdle(raw)
         case "question.asked":
+        case "question.v2.asked":
           return this.processQuestionAsked(raw)
         case "permission.asked":
+        case "permission.v2.asked":
           return this.processPermissionAsked(raw)
         default:
           return null
@@ -241,9 +250,11 @@ export class EventProcessor {
   // -------------------------------------------------------------------------
 
   private processMessagePartUpdated(
-    event: MessagePartUpdatedEvent,
+    event: any,
   ): ProcessedAction | null {
-    const { part, delta } = event.properties
+    const props = eventPayload(event)
+    if (!props) return null
+    const { part, delta } = props as { part?: unknown; delta?: string }
     if (!part || !isObject(part)) return null
 
     const sessionId = (part as Record<string, unknown>).sessionID
@@ -265,19 +276,19 @@ export class EventProcessor {
       case "reasoning":
         return this.processReasoningPart(sessionId, delta)
       case "tool":
-        return this.processToolPart(sessionId, part)
+        return this.processToolPart(sessionId, part as any)
       case "subtask":
-        return this.processSubtaskPart(sessionId, part)
+        return this.processSubtaskPart(sessionId, part as any)
       default:
         return null
     }
   }
 
   private processMessagePartDelta(
-    event: MessagePartDeltaEvent,
+    event: any,
   ): TextDelta | null {
-    const props = event.properties
-    if (!isObject(props)) return null
+    const props = eventPayload(event)
+    if (!props) return null
 
     const sessionId = (props as Record<string, unknown>).sessionID
     if (typeof sessionId !== "string") return null
@@ -295,6 +306,17 @@ export class EventProcessor {
       return null
     }
 
+    return { type: "TextDelta", sessionId, text: delta }
+  }
+
+  private processSessionNextTextDelta(event: any): TextDelta | null {
+    const props = eventPayload(event)
+    if (!props) return null
+    const sessionId = props.sessionID
+    if (typeof sessionId !== "string") return null
+    if (!this.ownedSessions.has(sessionId)) return null
+    const delta = props.delta
+    if (typeof delta !== "string" || delta.length === 0) return null
     return { type: "TextDelta", sessionId, text: delta }
   }
 
@@ -356,10 +378,10 @@ export class EventProcessor {
   }
 
   private processSessionStatus(
-    event: SessionStatusEvent,
+    event: any,
   ): SessionIdle | null {
-    const props = event.properties
-    if (!isObject(props)) return null
+    const props = eventPayload(event)
+    if (!props) return null
 
     const sessionId = (props as Record<string, unknown>).sessionID
     if (typeof sessionId !== "string") return null
@@ -382,10 +404,10 @@ export class EventProcessor {
   }
 
   private processSessionIdle(
-    event: SessionIdleEvent,
+    event: any,
   ): SessionIdle | null {
-    const props = event.properties
-    if (!isObject(props)) return null
+    const props = eventPayload(event)
+    if (!props) return null
 
     const sessionId = (props as Record<string, unknown>).sessionID
     if (typeof sessionId !== "string") return null
@@ -395,10 +417,10 @@ export class EventProcessor {
   }
 
   private processQuestionAsked(
-    event: QuestionAskedEvent,
+    event: any,
   ): QuestionAsked | null {
-    const props = event.properties
-    if (!isObject(props)) return null
+    const props = eventPayload(event)
+    if (!props) return null
 
     const requestId = (props as Record<string, unknown>).id
     if (typeof requestId !== "string") return null
@@ -418,10 +440,10 @@ export class EventProcessor {
   }
 
   private processPermissionAsked(
-    event: PermissionAskedEvent,
+    event: any,
   ): PermissionRequested | null {
-    const props = event.properties
-    if (!isObject(props)) return null
+    const props = eventPayload(event)
+    if (!props) return null
 
     const requestId = (props as Record<string, unknown>).id
     if (typeof requestId !== "string") return null
@@ -429,12 +451,12 @@ export class EventProcessor {
     const sessionId = (props as Record<string, unknown>).sessionID
     if (typeof sessionId !== "string") return null
 
-    const permissionType = (props as Record<string, unknown>).permission
+    const permissionType = (props as Record<string, unknown>).action ?? (props as Record<string, unknown>).permission
     if (typeof permissionType !== "string") return null
 
-    const patterns = (props as Record<string, unknown>).patterns
-    const patternList = Array.isArray(patterns) ? patterns.filter((p): p is string => typeof p === "string") : []
-    const title = patternList.length > 0 ? patternList.join(", ") : permissionType
+    const resources = (props as Record<string, unknown>).resources ?? (props as Record<string, unknown>).patterns
+    const resourceList = Array.isArray(resources) ? resources.filter((p): p is string => typeof p === "string") : []
+    const title = resourceList.length > 0 ? resourceList.join(", ") : String(permissionType)
 
     const metadata = (props as Record<string, unknown>).metadata
 

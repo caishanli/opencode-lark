@@ -62,7 +62,7 @@ describe("session-manager", () => {
         return new Response("Not found", { status: 404 })
       })
 
-      sm = createSessionManager({ serverUrl: SERVER_URL, db, defaultAgent: DEFAULT_AGENT })
+      sm = createSessionManager({ opencode: createMockGateway(), db, defaultAgent: DEFAULT_AGENT })
       const result = await sm.getOrCreate("chat-1")
 
       expect(result).toBe(tuiSessionId)
@@ -90,7 +90,7 @@ describe("session-manager", () => {
         return new Response("Not found", { status: 404 })
       })
 
-      sm = createSessionManager({ serverUrl: SERVER_URL, db, defaultAgent: DEFAULT_AGENT })
+      sm = createSessionManager({ opencode: createMockGateway(), db, defaultAgent: DEFAULT_AGENT })
       const result = await sm.getOrCreate("chat-2")
 
       expect(result).toBe(createdSessionId)
@@ -123,7 +123,7 @@ describe("session-manager", () => {
         return new Response("Not found", { status: 404 })
       })
 
-      sm = createSessionManager({ serverUrl: SERVER_URL, db, defaultAgent: DEFAULT_AGENT })
+      sm = createSessionManager({ opencode: createMockGateway(), db, defaultAgent: DEFAULT_AGENT })
 
       // First call — triggers discovery
       await sm.getOrCreate("chat-3")
@@ -160,7 +160,7 @@ describe("session-manager", () => {
         return new Response("Not found", { status: 404 })
       })
 
-      sm = createSessionManager({ serverUrl: SERVER_URL, db, defaultAgent: DEFAULT_AGENT })
+      sm = createSessionManager({ opencode: createMockGateway(), db, defaultAgent: DEFAULT_AGENT })
 
       await sm.getOrCreate("chat-discovered")
       const discovered = sm.getSession("chat-discovered")
@@ -183,7 +183,7 @@ describe("session-manager", () => {
         return new Response("Not found", { status: 404 })
       })
 
-      sm = createSessionManager({ serverUrl: SERVER_URL, db, defaultAgent: DEFAULT_AGENT })
+      sm = createSessionManager({ opencode: createMockGateway(), db, defaultAgent: DEFAULT_AGENT })
       const result = await sm.getOrCreate("chat-fail")
 
       // Should not throw, should fall back to POST
@@ -209,7 +209,7 @@ describe("session-manager", () => {
         return new Response("Not found", { status: 404 })
       })
 
-      sm = createSessionManager({ serverUrl: SERVER_URL, db, defaultAgent: DEFAULT_AGENT })
+      sm = createSessionManager({ opencode: createMockGateway(), db, defaultAgent: DEFAULT_AGENT })
       const result = await sm.getOrCreate("chat-neterr")
 
       expect(result).toBe(createdId)
@@ -219,7 +219,7 @@ describe("session-manager", () => {
 
   describe("cleanup", () => {
     it("does not break with is_bound column", () => {
-      sm = createSessionManager({ serverUrl: SERVER_URL, db, defaultAgent: DEFAULT_AGENT })
+      sm = createSessionManager({ opencode: createMockGateway(), db, defaultAgent: DEFAULT_AGENT })
       // Just verify cleanup still works
       const result = sm.cleanup(0)
       expect(result).toBe(0)
@@ -240,7 +240,7 @@ describe("session-manager", () => {
       `)
 
       // Should not throw — ALTER TABLE in try/catch
-      sm = createSessionManager({ serverUrl: SERVER_URL, db, defaultAgent: DEFAULT_AGENT })
+      sm = createSessionManager({ opencode: createMockGateway(), db, defaultAgent: DEFAULT_AGENT })
       expect(sm).toBeDefined()
     })
 
@@ -258,7 +258,7 @@ describe("session-manager", () => {
       `)
 
       // Second createSessionManager should not throw even though column exists
-      sm = createSessionManager({ serverUrl: SERVER_URL, db, defaultAgent: DEFAULT_AGENT })
+      sm = createSessionManager({ opencode: createMockGateway(), db, defaultAgent: DEFAULT_AGENT })
       expect(sm).toBeDefined()
     })
   })
@@ -289,7 +289,7 @@ describe("session-manager", () => {
         return new Response("Not found", { status: 404 })
       })
 
-      sm = createSessionManager({ serverUrl: SERVER_URL, db, defaultAgent: DEFAULT_AGENT })
+      sm = createSessionManager({ opencode: createMockGateway(), db, defaultAgent: DEFAULT_AGENT })
       const result = await sm.getOrCreate("chat-stale-discover")
 
       // Should have fallen through to POST (create new session)
@@ -318,7 +318,7 @@ describe("session-manager", () => {
         return new Response("Not found", { status: 404 })
       })
 
-      sm = createSessionManager({ serverUrl: SERVER_URL, db, defaultAgent: DEFAULT_AGENT })
+      sm = createSessionManager({ opencode: createMockGateway(), db, defaultAgent: DEFAULT_AGENT })
       const result = await sm.getOrCreate("chat-valid-discover")
 
       expect(result).toBe(tuiSessionId)
@@ -347,7 +347,7 @@ describe("session-manager", () => {
         return new Response("Not found", { status: 404 })
       })
 
-      sm = createSessionManager({ serverUrl: SERVER_URL, db, defaultAgent: DEFAULT_AGENT })
+      sm = createSessionManager({ opencode: createMockGateway(), db, defaultAgent: DEFAULT_AGENT })
       const result = await sm.getOrCreate("chat-500-discover")
 
       // 500 should be treated conservatively as \"exists\" — session accepted, not skipped
@@ -368,7 +368,7 @@ describe("session-manager", () => {
         return new Response("Not found", { status: 404 })
       })
 
-      sm = createSessionManager({ serverUrl: SERVER_URL, db, defaultAgent: DEFAULT_AGENT })
+      sm = createSessionManager({ opencode: createMockGateway(), db, defaultAgent: DEFAULT_AGENT })
 
       // Manually insert mappings
       const now = Date.now()
@@ -391,7 +391,7 @@ describe("session-manager", () => {
         return new Response(JSON.stringify({ id: "ses-1" }), { status: 200 })
       })
 
-      sm = createSessionManager({ serverUrl: SERVER_URL, db, defaultAgent: DEFAULT_AGENT })
+      sm = createSessionManager({ opencode: createMockGateway(), db, defaultAgent: DEFAULT_AGENT })
 
       const now = Date.now()
       db.prepare(
@@ -404,7 +404,7 @@ describe("session-manager", () => {
     })
 
     it("returns 0 when no mappings exist", async () => {
-      sm = createSessionManager({ serverUrl: SERVER_URL, db, defaultAgent: DEFAULT_AGENT })
+      sm = createSessionManager({ opencode: createMockGateway(), db, defaultAgent: DEFAULT_AGENT })
       const cleaned = await sm.validateAndCleanupStale()
       expect(cleaned).toBe(0)
     })
@@ -414,7 +414,7 @@ describe("session-manager", () => {
         throw new Error("Network error")
       })
 
-      sm = createSessionManager({ serverUrl: SERVER_URL, db, defaultAgent: DEFAULT_AGENT })
+      sm = createSessionManager({ opencode: createMockGateway(), db, defaultAgent: DEFAULT_AGENT })
 
       const now = Date.now()
       db.prepare(
@@ -436,7 +436,7 @@ describe("session-manager", () => {
         return new Response(JSON.stringify({ id: "ses-ok" }), { status: 200 })
       })
 
-      sm = createSessionManager({ serverUrl: SERVER_URL, db, defaultAgent: DEFAULT_AGENT })
+      sm = createSessionManager({ opencode: createMockGateway(), db, defaultAgent: DEFAULT_AGENT })
 
       const now = Date.now()
       db.prepare(
@@ -459,7 +459,7 @@ describe("session-manager", () => {
         return new Response("Too Many Requests", { status: 429 })
       })
 
-      sm = createSessionManager({ serverUrl: SERVER_URL, db, defaultAgent: DEFAULT_AGENT })
+      sm = createSessionManager({ opencode: createMockGateway(), db, defaultAgent: DEFAULT_AGENT })
 
       const now = Date.now()
       db.prepare(

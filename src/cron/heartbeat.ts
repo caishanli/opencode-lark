@@ -1,9 +1,10 @@
 import type { Logger } from "../utils/logger.js"
 import type { FeishuApiClient } from "../feishu/api-client.js"
+import type { OpencodeGateway } from "../opencode/gateway.js"
 
 export interface HeartbeatOptions {
   intervalMs: number
-  serverUrl: string
+  opencode: OpencodeGateway
   feishuClient?: FeishuApiClient
   statusChatId?: string
   logger: Logger
@@ -50,22 +51,12 @@ export class HeartbeatService {
   }
 
   private async tick(): Promise<void> {
-    const { serverUrl, logger, feishuClient, statusChatId } = this.options
+    const { opencode, logger, feishuClient, statusChatId } = this.options
 
     try {
-      const resp = await globalThis.fetch(`${serverUrl}/session/status`)
-
-      if (resp.ok) {
-        this.successCount++
-        logger.info("Server healthy")
-      } else {
-        this.failCount++
-        logger.error(`Server health check failed with HTTP ${resp.status}`)
-
-        if (feishuClient && statusChatId) {
-          await this.sendAlert(feishuClient, statusChatId, `HTTP ${resp.status}`)
-        }
-      }
+      await opencode.ping()
+      this.successCount++
+      logger.info("Server healthy")
     } catch (err) {
       this.failCount++
       const message = err instanceof Error ? err.message : String(err)

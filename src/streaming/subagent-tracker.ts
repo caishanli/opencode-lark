@@ -5,6 +5,7 @@
 
 import type { SubtaskDiscovered } from "./event-processor.js"
 import { createLogger } from "../utils/logger.js"
+import type { OpencodeGateway } from "../opencode/gateway.js"
 
 const logger = createLogger("subagent-tracker")
 
@@ -30,7 +31,7 @@ export interface MessageSummary {
 }
 
 export interface SubAgentTrackerOptions {
-  serverUrl: string
+  opencode: OpencodeGateway
   maxDepth?: number // default 1, max 1
 }
 
@@ -48,14 +49,14 @@ const CLEANUP_INTERVAL_MS = 10 * 60 * 1000 // 10 minutes
 // ---------------------------------------------------------------------------
 
 export class SubAgentTracker {
-  private readonly serverUrl: string
+  private readonly opencode: OpencodeGateway
   private readonly maxDepth: number
   private tracked: TrackedSubAgent[] = []
 
   private cleanupTimer: ReturnType<typeof setInterval> | null = null
 
   constructor(options: SubAgentTrackerOptions) {
-    this.serverUrl = options.serverUrl
+    this.opencode = options.opencode
     this.maxDepth = Math.min(options.maxDepth ?? 1, 1)
     this.cleanupTimer = setInterval(() => this.evictCompleted(), CLEANUP_INTERVAL_MS)
   }
@@ -115,18 +116,10 @@ export class SubAgentTracker {
   ): Promise<string | null> {
     for (let attempt = 0; attempt < retries; attempt++) {
       try {
-        const response = await fetch(
-          `${this.serverUrl}/session/${parentSessionId}/children`,
-        )
-        if (response.ok) {
-          const children = (await response.json()) as Array<{
-            id: string
-            parentID: string
-          }>
-          if (children.length > 0) {
-            // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-            return children[children.length - 1]!.id
-          }
+        const children = await this.opencode.children(parentSessionId)
+        if (children.length > 0) {
+          // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+          return children[children.length - 1]!.id
         }
       } catch {
         // Network error — will retry
@@ -151,24 +144,21 @@ export class SubAgentTracker {
     limit: number = 20,
   ): Promise<MessageSummary[]> {
     try {
-      const response = await fetch(
-        `${this.serverUrl}/session/${childSessionId}/message?limit=${limit}`,
-      )
-      if (!response.ok) return []
+      const messages = await this.opencode.messages(childSessionId, { limit, order: "desc" })
 
-      const messages = (await response.json()) as Array<{
-        role?: string
-        text?: string
-        toolCalls?: Array<{ name?: string }>
-      }>
-
-      return messages.map((msg) => {
-        const summary: MessageSummary = {
-          role: msg.role ?? "unknown",
-          text: msg.text ?? "",
+      return messages.map((msg: any) => {
+        const role = msg.type ?? msg.role ?? "unknown"
+        let text = ""
+        if (typeof msg.text === "string") text = msg.text
+        else if (Array.isArray(msg.content)) {
+          text = msg.content
+            .filter((p: any) => p?.type === "text" && typeof p.text === "string")
+            .map((p: any) => p.text)
+            .join("")
         }
-        if (msg.toolCalls && msg.toolCalls.length > 0) {
-          summary.toolCalls = msg.toolCalls.map((tc) => tc.name ?? "unknown")
+        const summary: MessageSummary = { role, text }
+        if (Array.isArray(msg.toolCalls) && msg.toolCalls.length > 0) {
+          summary.toolCalls = msg.toolCalls.map((tc: any) => tc.name ?? "unknown")
         }
         return summary
       })

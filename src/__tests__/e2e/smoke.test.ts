@@ -141,7 +141,7 @@ describe("E2E Smoke Tests", () => {
     }) as any
 
     const eventProcessor = new EventProcessor({ ownedSessions })
-    const subAgentTracker = new SubAgentTracker({ serverUrl: "http://127.0.0.1:4096" })
+    const subAgentTracker = new SubAgentTracker({ opencode: createMockGateway() })
 
     const streamingBridge = createStreamingBridge({
       cardkitClient,
@@ -152,7 +152,7 @@ describe("E2E Smoke Tests", () => {
     })
 
     const { handleMessage } = createMessageHandler({
-      serverUrl: "http://127.0.0.1:4096",
+      opencode: createMockGateway(),
       sessionManager,
       dedup: { isDuplicate: vi.fn().mockReturnValue(false), close: vi.fn() } as any,
       eventProcessor,
@@ -261,7 +261,7 @@ describe("E2E Smoke Tests", () => {
     }) as any
 
     const eventProcessor = new EventProcessor({ ownedSessions })
-    const subAgentTracker = new SubAgentTracker({ serverUrl: "http://127.0.0.1:4096" })
+    const subAgentTracker = new SubAgentTracker({ opencode: createMockGateway() })
 
     const streamingBridge = createStreamingBridge({
       cardkitClient,
@@ -272,7 +272,7 @@ describe("E2E Smoke Tests", () => {
     })
 
     const { handleMessage } = createMessageHandler({
-      serverUrl: "http://127.0.0.1:4096",
+      opencode: createMockGateway(),
       sessionManager: createMockSessionManager(sessionId),
       dedup: { isDuplicate: vi.fn().mockReturnValue(false), close: vi.fn() } as any,
       eventProcessor,
@@ -369,7 +369,7 @@ describe("E2E Smoke Tests", () => {
     const eventProcessor = new EventProcessor({ ownedSessions })
 
     const { handleMessage } = createMessageHandler({
-      serverUrl: "http://127.0.0.1:4096",
+      opencode: createMockGateway(),
       sessionManager: createMockSessionManager(sessionId),
       dedup: { isDuplicate: vi.fn().mockReturnValue(false), close: vi.fn() } as any,
       eventProcessor,
@@ -463,7 +463,7 @@ describe("session sharing", () => {
     })
 
     const { handleMessage } = createMessageHandler({
-      serverUrl: "http://127.0.0.1:4096",
+      opencode: createMockGateway(),
       sessionManager: createMockSessionManager(sessionId),
       dedup: { isDuplicate: vi.fn().mockReturnValue(false), close: vi.fn() } as any,
       eventProcessor,
@@ -554,7 +554,7 @@ describe("session sharing", () => {
     })
 
     const { handleMessage } = createMessageHandler({
-      serverUrl: "http://127.0.0.1:4096",
+      opencode: createMockGateway(),
       sessionManager: createMockSessionManager(sessionId),
       dedup: { isDuplicate: vi.fn().mockReturnValue(false), close: vi.fn() } as any,
       eventProcessor,
@@ -643,7 +643,7 @@ describe("session sharing", () => {
     })
 
     const { handleMessage } = createMessageHandler({
-      serverUrl: "http://127.0.0.1:4096",
+      opencode: createMockGateway(),
       sessionManager: createMockSessionManager(sessionId),
       dedup: { isDuplicate: vi.fn().mockReturnValue(false), close: vi.fn() } as any,
       eventProcessor,
@@ -745,7 +745,7 @@ describe("session sharing", () => {
     })
 
     const { handleMessage } = createMessageHandler({
-      serverUrl: "http://127.0.0.1:4096",
+      opencode: createMockGateway(),
       sessionManager: createMockSessionManager(sessionId),
       dedup: { isDuplicate: vi.fn().mockReturnValue(false), close: vi.fn() } as any,
       eventProcessor,

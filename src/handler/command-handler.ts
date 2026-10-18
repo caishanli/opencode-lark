@@ -9,11 +9,12 @@
 import type { SessionManager } from "../session/session-manager.js"
 import type { FeishuApiClient } from "../feishu/api-client.js"
 import type { Logger } from "../utils/logger.js"
+import type { OpencodeGateway } from "../opencode/gateway.js"
 
 // ── Dependency injection interface ──
 
 export interface CommandHandlerDeps {
-  serverUrl: string
+  opencode: OpencodeGateway
   sessionManager: SessionManager
   feishuClient: FeishuApiClient
   logger: Logger
@@ -152,7 +153,7 @@ function buildHelpCard(): Record<string, unknown> {
 // ── Factory ──
 
 export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
-  const { serverUrl, sessionManager, feishuClient, logger } = deps
+  const { opencode, sessionManager, feishuClient, logger } = deps
 
   async function replyText(
     _chatId: string,
@@ -170,17 +171,11 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
     chatId: string,
     messageId: string,
   ): Promise<void> {
-    const resp = await fetch(`${serverUrl}/session`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title: `Feishu chat ${feishuKey}` }),
+    const data = await opencode.createSession({
+      title: `Feishu chat ${feishuKey}`,
+      directory: process.env.OPENCODE_CWD || process.cwd(),
     })
 
-    if (!resp.ok) {
-      throw new Error(`Failed to create session: HTTP ${resp.status}`)
-    }
-
-    const data = (await resp.json()) as { id: string }
     sessionManager.deleteMapping(feishuKey)
     sessionManager.setMapping(feishuKey, data.id)
     logger.info(`/new: created session ${data.id}, bound ${feishuKey}`)
@@ -198,13 +193,10 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
       return
     }
 
-    const resp = await fetch(
-      `${serverUrl}/session/${mapping.session_id}/abort`,
-      { method: "POST" },
-    )
-
-    if (!resp.ok) {
-      throw new Error(`Abort failed: HTTP ${resp.status}`)
+    try {
+      await opencode.abort(mapping.session_id)
+    } catch (e) {
+      throw new Error(`Abort failed: ${e}`)
     }
 
     logger.info(`/abort: aborted session ${mapping.session_id}`)
@@ -216,12 +208,7 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
     chatId: string,
     messageId: string,
   ): Promise<void> {
-    const resp = await fetch(`${serverUrl}/session`)
-    if (!resp.ok) {
-      throw new Error(`List sessions failed: HTTP ${resp.status}`)
-    }
-
-    let sessions = (await resp.json()) as Session[]
+    const sessions = (await opencode.listSessions({ directory: process.env.OPENCODE_CWD || process.cwd() })) as Session[]
     if (sessions.length === 0) {
       await replyText(chatId, messageId, "暂无会话。")
       return
@@ -259,9 +246,8 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
     messageId: string,
     targetSessionId: string,
   ): Promise<void> {
-    // Validate session exists
-    const checkResp = await fetch(`${serverUrl}/session/${targetSessionId}`)
-    if (!checkResp.ok) {
+    const existing = await opencode.getSession(targetSessionId)
+    if (!existing) {
       await replyText(chatId, messageId, "会话不存在。")
       return
     }

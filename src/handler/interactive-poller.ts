@@ -6,6 +6,7 @@
 
 import type { FeishuApiClient } from "../feishu/api-client.js"
 import type { Logger } from "../utils/logger.js"
+import type { OpencodeGateway } from "../opencode/gateway.js"
 import type { QuestionAsked, PermissionRequested } from "../streaming/event-processor.js"
 import { buildQuestionCard, buildPermissionCard } from "./streaming-integration.js"
 import type { ExpiringSet } from "../utils/expiring-set.js"
@@ -24,7 +25,7 @@ import {
 // ---------------------------------------------------------------------------
 
 export interface InteractivePollerDeps {
-  serverUrl: string
+  opencode: OpencodeGateway
   feishuClient: Pick<FeishuApiClient, "sendMessage" | "updateMessage">
   logger: Logger
   getChatForSession: (sessionId: string) => string | undefined
@@ -51,12 +52,12 @@ interface PendingQuestion {
   }>
 }
 
-/** Shape returned by GET /permission */
+/** Shape returned by gateway listPermissions */
 interface PendingPermission {
   id: string
   sessionID: string
-  permission: string
-  patterns: string[]
+  action: string
+  resources: string[]
   metadata: Record<string, unknown>
 }
 
@@ -74,7 +75,7 @@ const FETCH_TIMEOUT_MS = 5_000
 export function createInteractivePoller(
   deps: InteractivePollerDeps,
 ): InteractivePoller {
-  const { serverUrl, feishuClient, logger, getChatForSession, seenInteractiveIds } = deps
+  const { opencode, feishuClient, logger, getChatForSession, seenInteractiveIds } = deps
   let timer: ReturnType<typeof setInterval> | null = null
 
   async function poll(): Promise<void> {
@@ -90,19 +91,9 @@ export function createInteractivePoller(
   }
 
   async function pollQuestions(): Promise<Set<string> | null> {
-    let resp: Response
-    try {
-      resp = await fetch(`${serverUrl}/question`, {
-        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-      })
-    } catch {
-      return null
-    }
-    if (!resp.ok) return null
-
     let questions: unknown
     try {
-      questions = await resp.json()
+      questions = await opencode.listQuestions()
     } catch {
       return null
     }
@@ -160,19 +151,9 @@ export function createInteractivePoller(
   }
 
   async function pollPermissions(): Promise<Set<string> | null> {
-    let resp: Response
-    try {
-      resp = await fetch(`${serverUrl}/permission`, {
-        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-      })
-    } catch {
-      return null
-    }
-    if (!resp.ok) return null
-
     let permissions: unknown
     try {
-      permissions = await resp.json()
+      permissions = await opencode.listPermissions()
     } catch {
       return null
     }
@@ -194,16 +175,16 @@ export function createInteractivePoller(
         `Poller: pending permission ${p.id} for session ${p.sessionID}`,
       )
 
-      const patternList = Array.isArray(p.patterns)
-        ? p.patterns.filter((s): s is string => typeof s === "string")
+      const patternList = Array.isArray(p.resources)
+        ? p.resources.filter((s): s is string => typeof s === "string")
         : []
 
       const action: PermissionRequested = {
         type: "PermissionRequested",
         sessionId: p.sessionID,
         requestId: p.id,
-        permissionType: p.permission ?? "unknown",
-        title: patternList.length > 0 ? patternList.join(", ") : (p.permission ?? "Permission"),
+        permissionType: p.action ?? "unknown",
+        title: patternList.length > 0 ? patternList.join(", ") : (p.action ?? "Permission"),
         metadata: p.metadata ?? {},
       }
       const card = buildPermissionCard(action)

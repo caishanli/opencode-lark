@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
 import { parseSchedule, CronService } from "../cron/cron-service.js"
 import type { CronServiceOptions } from "../cron/cron-service.js"
 import { createMockLogger, createMockFeishuClient } from "../__tests__/setup.js"
+import { createMockGateway } from "../__tests__/setup.js"
 import type { SessionManager } from "../session/session-manager.js"
 import type { CronConfig } from "../utils/config.js"
 
@@ -23,6 +24,14 @@ function createMockSessionManager(): SessionManager {
   }
 }
 
+function makeGateway() {
+  return {
+    sendPrompt: vi.fn().mockResolvedValue(undefined),
+    messages: vi.fn().mockResolvedValue([{ type: "assistant", content: [{ type: "text", text: "response" }] }]),
+    activeStatuses: vi.fn().mockResolvedValue({}),
+  } as any
+}
+
 function makeOptions(overrides: Partial<CronServiceOptions> = {}): CronServiceOptions {
   const config: CronConfig = {
     jobs: [
@@ -33,7 +42,7 @@ function makeOptions(overrides: Partial<CronServiceOptions> = {}): CronServiceOp
     config,
     sessionManager: createMockSessionManager(),
     feishuClient: createMockFeishuClient(),
-    serverUrl: "http://127.0.0.1:4096",
+    opencode: makeGateway(),
     logger: createMockLogger(),
     ...overrides,
   }
@@ -157,8 +166,6 @@ describe("CronService", () => {
   })
 
   it("interval job fires executeJob at scheduled time", async () => {
-    const mockFetch = vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) })
-    globalThis.fetch = mockFetch
     const options = makeOptions({
       config: {
         jobs: [

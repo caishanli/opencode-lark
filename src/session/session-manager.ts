@@ -1,11 +1,12 @@
 import { type Database } from "bun:sqlite"
 import { createLogger } from "../utils/logger.js"
 import type { SessionMapping } from "../types.js"
+import type { OpencodeGateway } from "../opencode/gateway.js"
 
 const logger = createLogger("session-manager")
 
 interface SessionManagerOptions {
-  serverUrl: string
+  opencode: OpencodeGateway
   db: Database
   defaultAgent: string
 }
@@ -35,7 +36,7 @@ interface TuiSession {
 export function createSessionManager(
   options: SessionManagerOptions,
 ): SessionManager {
-  const { serverUrl, db, defaultAgent } = options
+  const { opencode, db, defaultAgent } = options
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS feishu_sessions (
@@ -80,10 +81,8 @@ export function createSessionManager(
    *  Returns false ONLY on 404. All other errors (500, 429, network) return true (conservative). */
   async function sessionExistsOnServer(sessionId: string): Promise<boolean> {
     try {
-      const resp = await fetch(`${serverUrl}/session/${sessionId}`)
-      if (resp.status === 404) return false
-      // Any other status (200, 500, 429, 401, etc.) — conservatively assume exists
-      return true
+      const s = await opencode.getSession(sessionId)
+      return s !== null
     } catch {
       // Network error — assume session exists to avoid false cleanup
       return true
@@ -92,13 +91,9 @@ export function createSessionManager(
 
   async function discoverTuiSession(): Promise<TuiSession | null> {
     const cwd = getWorkingDirectory()
-    const url = `${serverUrl}/session?roots=true&limit=1&directory=${encodeURIComponent(cwd)}`
 
     try {
-      const resp = await fetch(url)
-      if (!resp.ok) return null
-
-      const sessions = (await resp.json()) as TuiSession[]
+      const sessions = await opencode.listSessions({ directory: cwd })
       const candidate = sessions[0] ?? null
       if (!candidate) return null
 
@@ -109,25 +104,18 @@ export function createSessionManager(
         return null
       }
 
-      return candidate
+      return candidate as TuiSession
     } catch {
       return null
     }
   }
 
   async function createNewSession(feishuKey: string): Promise<string> {
-    const resp = await fetch(`${serverUrl}/session`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title: `Feishu chat ${feishuKey}` }),
+    const session = await opencode.createSession({
+      title: `Feishu chat ${feishuKey}`,
+      directory: getWorkingDirectory(),
     })
-
-    if (!resp.ok) {
-      throw new Error(`Failed to create session: HTTP ${resp.status}`)
-    }
-
-    const data = (await resp.json()) as { id: string }
-    return data.id
+    return session.id
   }
 
   return {
@@ -227,5 +215,3 @@ export function createSessionManager(
     },
   }
 }
-
-

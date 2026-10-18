@@ -7,6 +7,8 @@
  */
 
 import type { SessionManager } from "../session/session-manager.js"
+import type { OpencodeGateway } from "../opencode/gateway.js"
+import { eventPayload } from "../opencode/events.js"
 import type { MessageDedup } from "../feishu/message-dedup.js"
 import type { EventProcessor } from "../streaming/event-processor.js"
 import { FileTooLargeError, type FeishuApiClient } from "../feishu/api-client.js"
@@ -30,7 +32,7 @@ import { randomBytes } from "node:crypto"
 // ── Dependency injection interface ──
 
 export interface HandlerDeps {
-  serverUrl: string
+  opencode: OpencodeGateway
   sessionManager: SessionManager
   dedup: MessageDedup
   eventProcessor: EventProcessor
@@ -392,7 +394,7 @@ export function createMessageHandler(
   deps: HandlerDeps,
 ): MessageHandlerResult {
   const {
-    serverUrl,
+    opencode,
     sessionManager,
     dedup,
     eventProcessor,
@@ -646,26 +648,26 @@ export function createMessageHandler(
 
     // ── 8. Build the POST-to-opencode function ──
     let currentSessionId = sessionId
-    const postBody = JSON.stringify({ parts })
+    // Build text + files for v2 prompt body
+    const textParts = parts
+      .filter((p: any) => p.type === "text")
+      .map((p: any) => p.text)
+      .join("\n")
+    const fileParts = parts
+      .filter((p: any) => p.type === "file")
+      .map((p: any) => ({ uri: p.url ?? p.uri }))
 
     async function postToOpencode(): Promise<string> {
-      const url = `${serverUrl}/session/${currentSessionId}/message`
-      const resp = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: postBody,
-      })
-      if (resp.status === 404) {
-        throw new SessionGoneError(currentSessionId, 404)
+      try {
+        await opencode.sendPrompt(currentSessionId, { text: textParts, files: fileParts.length ? fileParts : undefined })
+        return ""
+      } catch (err) {
+        if (err instanceof SessionGoneError) throw err
+        if (err instanceof Error && /404/.test(err.message)) {
+          throw new SessionGoneError(currentSessionId, 404)
+        }
+        throw err
       }
-      if (!resp.ok) {
-        throw new Error(`Prompt HTTP error: ${resp.status}`)
-      }
-      const rawText = await resp.text()
-      logger.info(
-        `Prompt response (${rawText.length} bytes): ${rawText.slice(0, 200)}`,
-      )
-      return rawText
     }
 
     /** Recover from 404: clear stale mapping, re-resolve session, retry POST once. */
@@ -695,7 +697,7 @@ export function createMessageHandler(
         let ownershipListener: ((event: unknown) => void) | null = null
         if (deps.observer) {
           ownershipListener = (rawEvent: unknown): void => {
-            const props = rawEvent && typeof rawEvent === "object" ? (rawEvent as Record<string, unknown>).properties : null
+            const props = eventPayload(rawEvent)
             if (!props || typeof props !== "object") return
             const p = props as Record<string, unknown>
             const part = p.part
@@ -810,7 +812,7 @@ export function createMessageHandler(
     let ownershipListenerEd: ((event: unknown) => void) | null = null
     if (deps.observer) {
       ownershipListenerEd = (rawEvent: unknown): void => {
-        const props = rawEvent && typeof rawEvent === "object" ? (rawEvent as Record<string, unknown>).properties : null
+        const props = eventPayload(rawEvent)
         if (!props || typeof props !== "object") return
         const p = props as Record<string, unknown>
         const part = p.part
@@ -917,26 +919,26 @@ export function createMessageHandler(
 
     // Build POST function
     let currentSessionId = sessionId
-    const postBody = JSON.stringify({ parts })
+    // Build text + files for v2 prompt body
+    const textParts = parts
+      .filter((p: any) => p.type === "text")
+      .map((p: any) => p.text)
+      .join("\n")
+    const fileParts = parts
+      .filter((p: any) => p.type === "file")
+      .map((p: any) => ({ uri: p.url ?? p.uri }))
 
     async function postToOpencode(): Promise<string> {
-      const url = `${serverUrl}/session/${currentSessionId}/message`
-      const resp = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: postBody,
-      })
-      if (resp.status === 404) {
-        throw new SessionGoneError(currentSessionId, 404)
+      try {
+        await opencode.sendPrompt(currentSessionId, { text: textParts, files: fileParts.length ? fileParts : undefined })
+        return ""
+      } catch (err) {
+        if (err instanceof SessionGoneError) throw err
+        if (err instanceof Error && /404/.test(err.message)) {
+          throw new SessionGoneError(currentSessionId, 404)
+        }
+        throw err
       }
-      if (!resp.ok) {
-        throw new Error(`Prompt HTTP error: ${resp.status}`)
-      }
-      const rawText = await resp.text()
-      logger.info(
-        `Prompt response (${rawText.length} bytes): ${rawText.slice(0, 200)}`,
-      )
-      return rawText
     }
 
     /** Recover from 404: clear stale mapping, re-resolve session, retry POST once. */
@@ -968,7 +970,7 @@ export function createMessageHandler(
         let ownershipListener: ((ev: unknown) => void) | null = null
         if (deps.observer) {
           ownershipListener = (rawEvent: unknown): void => {
-            const props = rawEvent && typeof rawEvent === "object" ? (rawEvent as Record<string, unknown>).properties : null
+            const props = eventPayload(rawEvent)
             if (!props || typeof props !== "object") return
             const p = props as Record<string, unknown>
             const part = p.part
@@ -1069,7 +1071,7 @@ export function createMessageHandler(
     let ownershipListenerEd: ((ev: unknown) => void) | null = null
     if (deps.observer) {
       ownershipListenerEd = (rawEvent: unknown): void => {
-        const props = rawEvent && typeof rawEvent === "object" ? (rawEvent as Record<string, unknown>).properties : null
+        const props = eventPayload(rawEvent)
         if (!props || typeof props !== "object") return
         const p = props as Record<string, unknown>
         const part = p.part

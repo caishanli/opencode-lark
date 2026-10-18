@@ -74,7 +74,7 @@ describe("SubAgentTracker", () => {
       { id: "ses-child-1", parentID: "ses-parent" },
     ])
 
-    const tracker = new SubAgentTracker({ serverUrl: SERVER_URL })
+    const tracker = new SubAgentTracker({ opencode: createMockGateway() })
     const agent = await tracker.onSubtaskDiscovered(makeAction())
 
     expect(agent.status).toBe("discovering")
@@ -94,7 +94,7 @@ describe("SubAgentTracker", () => {
       { body: [{ id: "ses-child-2", parentID: "ses-parent" }] },  // 2nd attempt: found
     ])
 
-    const tracker = new SubAgentTracker({ serverUrl: SERVER_URL })
+    const tracker = new SubAgentTracker({ opencode: createMockGateway() })
     const agent = await tracker.onSubtaskDiscovered(makeAction())
 
     // Let all timers and promises resolve (2 polls with backoff)
@@ -109,7 +109,7 @@ describe("SubAgentTracker", () => {
   it("status becomes failed after 5 retries with no child", async () => {
     globalThis.fetch = mockFetchResponse([]) // always empty
 
-    const tracker = new SubAgentTracker({ serverUrl: SERVER_URL })
+    const tracker = new SubAgentTracker({ opencode: createMockGateway() })
     const agent = await tracker.onSubtaskDiscovered(makeAction())
 
     // Advance through all 5 retries with backoff timers
@@ -131,7 +131,7 @@ describe("SubAgentTracker", () => {
       },
     ])
 
-    const tracker = new SubAgentTracker({ serverUrl: SERVER_URL })
+    const tracker = new SubAgentTracker({ opencode: createMockGateway() })
     const messages = await tracker.getChildMessages("ses-child-1")
 
     expect(messages).toEqual<MessageSummary[]>([
@@ -144,7 +144,7 @@ describe("SubAgentTracker", () => {
   it("getChildMessages returns empty array for empty response", async () => {
     globalThis.fetch = mockFetchResponse([])
 
-    const tracker = new SubAgentTracker({ serverUrl: SERVER_URL })
+    const tracker = new SubAgentTracker({ opencode: createMockGateway() })
     const messages = await tracker.getChildMessages("ses-child-1")
 
     expect(messages).toEqual([])
@@ -152,7 +152,7 @@ describe("SubAgentTracker", () => {
 
   // 6. Max depth enforcement: depth > 1 rejected
   it("rejects depth > 1 (no grandchild support)", async () => {
-    const tracker = new SubAgentTracker({ serverUrl: SERVER_URL })
+    const tracker = new SubAgentTracker({ opencode: createMockGateway() })
 
     await expect(
       tracker.onSubtaskDiscovered(makeAction(), 2),
@@ -172,7 +172,7 @@ describe("SubAgentTracker", () => {
       }
     })
 
-    const tracker = new SubAgentTracker({ serverUrl: SERVER_URL })
+    const tracker = new SubAgentTracker({ opencode: createMockGateway() })
 
     const agent1 = await tracker.onSubtaskDiscovered(
       makeAction({ prompt: "Task 1" }),
@@ -195,7 +195,7 @@ describe("SubAgentTracker", () => {
   it("getTrackedSubAgents returns all agents as a copy", async () => {
     globalThis.fetch = mockFetchResponse([])
 
-    const tracker = new SubAgentTracker({ serverUrl: SERVER_URL })
+    const tracker = new SubAgentTracker({ opencode: createMockGateway() })
     await tracker.onSubtaskDiscovered(makeAction({ prompt: "A" }))
     await tracker.onSubtaskDiscovered(makeAction({ prompt: "B" }))
 
@@ -215,7 +215,7 @@ describe("SubAgentTracker", () => {
       { id: "child-abc", parentID: "parent-xyz" },
     ])
 
-    const tracker = new SubAgentTracker({ serverUrl: SERVER_URL })
+    const tracker = new SubAgentTracker({ opencode: createMockGateway() })
     const result = await tracker.pollChildSession("parent-xyz")
 
     expect(result).toBe("child-abc")
@@ -228,7 +228,7 @@ describe("SubAgentTracker", () => {
   it("getChildMessages returns empty array on fetch failure", async () => {
     globalThis.fetch = vi.fn().mockRejectedValue(new Error("network error"))
 
-    const tracker = new SubAgentTracker({ serverUrl: SERVER_URL })
+    const tracker = new SubAgentTracker({ opencode: createMockGateway() })
     const messages = await tracker.getChildMessages("ses-child-1")
 
     expect(messages).toEqual([])
@@ -237,7 +237,7 @@ describe("SubAgentTracker", () => {
   // 11. maxDepth capped at 1 even if higher value provided
   it("maxDepth option capped at 1", async () => {
     const tracker = new SubAgentTracker({
-      serverUrl: SERVER_URL,
+      opencode: createMockGateway(),
       maxDepth: 5,
     })
 
@@ -256,7 +256,7 @@ describe("SubAgentTracker", () => {
   it("sets resolvedAt when status becomes failed", async () => {
     globalThis.fetch = mockFetchResponse([]) // always empty → will fail
 
-    const tracker = new SubAgentTracker({ serverUrl: SERVER_URL })
+    const tracker = new SubAgentTracker({ opencode: createMockGateway() })
     const agent = await tracker.onSubtaskDiscovered(makeAction())
 
     // Advance through all retries
@@ -273,7 +273,7 @@ describe("SubAgentTracker", () => {
   it("getTrackedSubAgents excludes expired completed sub-agents", async () => {
     globalThis.fetch = mockFetchResponse([]) // all will fail
 
-    const tracker = new SubAgentTracker({ serverUrl: SERVER_URL })
+    const tracker = new SubAgentTracker({ opencode: createMockGateway() })
     await tracker.onSubtaskDiscovered(makeAction({ prompt: "Old task" }))
 
     // Resolve all polls so agent becomes failed with resolvedAt
@@ -295,7 +295,7 @@ describe("SubAgentTracker", () => {
   it("periodic cleanup evicts expired completed sub-agents", async () => {
     globalThis.fetch = mockFetchResponse([]) // all will fail
 
-    const tracker = new SubAgentTracker({ serverUrl: SERVER_URL })
+    const tracker = new SubAgentTracker({ opencode: createMockGateway() })
     await tracker.onSubtaskDiscovered(makeAction({ prompt: "Expired" }))
 
     // Resolve polls
@@ -321,7 +321,7 @@ describe("SubAgentTracker", () => {
 
   // 15. close() stops the cleanup interval
   it("close() stops the cleanup interval timer", () => {
-    const tracker = new SubAgentTracker({ serverUrl: SERVER_URL })
+    const tracker = new SubAgentTracker({ opencode: createMockGateway() })
     // Should not throw
     tracker.close()
     // Calling close again should also not throw

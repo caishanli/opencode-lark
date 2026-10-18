@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
 import { HeartbeatService } from "../cron/heartbeat.js"
 import type { HeartbeatOptions } from "../cron/heartbeat.js"
 import { createMockLogger, createMockFeishuClient } from "../__tests__/setup.js"
+import { createMockGateway } from "../__tests__/setup.js"
 
 const advanceTimers = async (ms: number) => {
   if (typeof vi.advanceTimersByTimeAsync === "function") {
@@ -12,25 +13,25 @@ const advanceTimers = async (ms: number) => {
   }
 }
 
+function makeGateway(overrides: { ping?: () => Promise<void> } = {}) {
+  return { ping: vi.fn(overrides.ping ?? (async () => {})) } as any
+}
+
 function makeOptions(overrides: Partial<HeartbeatOptions> = {}): HeartbeatOptions {
   return {
     intervalMs: 1000,
-    serverUrl: "http://127.0.0.1:4096",
+    opencode: makeGateway(),
     logger: createMockLogger(),
     ...overrides,
   }
 }
 
 describe("HeartbeatService", () => {
-  let originalFetch: typeof globalThis.fetch
-
   beforeEach(() => {
-    originalFetch = globalThis.fetch
     vi.useFakeTimers()
   })
 
   afterEach(() => {
-    globalThis.fetch = originalFetch
     vi.useRealTimers()
   })
 
@@ -75,28 +76,24 @@ describe("HeartbeatService", () => {
     expect(stopCalls).toHaveLength(1)
   })
 
-  it("tick() logs success on healthy server response", async () => {
-    const mockFetch = vi.fn().mockResolvedValue({ ok: true })
-    globalThis.fetch = mockFetch
-
-    const options = makeOptions({ intervalMs: 100 })
+  it("tick() logs success on healthy server", async () => {
+    const opencode = makeGateway()
+    const options = makeOptions({ intervalMs: 100, opencode })
     const service = new HeartbeatService(options)
 
     service.start()
     vi.advanceTimersByTime(100)
     await advanceTimers(10)
 
-    expect(mockFetch).toHaveBeenCalledWith("http://127.0.0.1:4096/session/status")
+    expect(opencode.ping).toHaveBeenCalled()
     expect(options.logger.info).toHaveBeenCalledWith("Server healthy")
 
     service.stop()
   })
 
-  it("tick() logs error and does not alert when feishuClient is undefined", async () => {
-    const mockFetch = vi.fn().mockResolvedValue({ ok: false, status: 500 })
-    globalThis.fetch = mockFetch
-
-    const options = makeOptions({ intervalMs: 100, feishuClient: undefined })
+  it("tick() logs error when ping rejects", async () => {
+    const opencode = makeGateway({ ping: async () => { throw new Error("boom") } })
+    const options = makeOptions({ intervalMs: 100, opencode })
     const service = new HeartbeatService(options)
 
     service.start()
@@ -104,19 +101,18 @@ describe("HeartbeatService", () => {
     await advanceTimers(10)
 
     expect(options.logger.error).toHaveBeenCalledWith(
-      "Server health check failed with HTTP 500",
+      expect.stringContaining("Server health check failed: boom"),
     )
 
     service.stop()
   })
 
-  it("tick() logs error and sends alert on failed response with statusChatId", async () => {
-    const mockFetch = vi.fn().mockResolvedValue({ ok: false, status: 502 })
-    globalThis.fetch = mockFetch
-
+  it("tick() sends alert on failure with statusChatId", async () => {
+    const opencode = makeGateway({ ping: async () => { throw new Error("down") } })
     const feishuClient = createMockFeishuClient()
     const options = makeOptions({
       intervalMs: 100,
+      opencode,
       feishuClient,
       statusChatId: "chat-123",
     })
@@ -126,24 +122,17 @@ describe("HeartbeatService", () => {
     vi.advanceTimersByTime(100)
     await advanceTimers(10)
 
-    expect(options.logger.error).toHaveBeenCalledWith(
-      "Server health check failed with HTTP 502",
-    )
     expect(feishuClient.sendMessage).toHaveBeenCalledWith(
       "chat-123",
-      expect.objectContaining({
-        msg_type: "text",
-      }),
+      expect.objectContaining({ msg_type: "text" }),
     )
 
     service.stop()
   })
 
-  it("tick() handles fetch network error", async () => {
-    const mockFetch = vi.fn().mockRejectedValue(new Error("Network timeout"))
-    globalThis.fetch = mockFetch
-
-    const options = makeOptions({ intervalMs: 100 })
+  it("tick() handles network error", async () => {
+    const opencode = makeGateway({ ping: async () => { throw new Error("Network timeout") } })
+    const options = makeOptions({ intervalMs: 100, opencode })
     const service = new HeartbeatService(options)
 
     service.start()
@@ -157,39 +146,12 @@ describe("HeartbeatService", () => {
     service.stop()
   })
 
-  it("tick() sends alert on network error with statusChatId", async () => {
-    const mockFetch = vi.fn().mockRejectedValue(new Error("ECONNREFUSED"))
-    globalThis.fetch = mockFetch
-
-    const feishuClient = createMockFeishuClient()
-    const options = makeOptions({
-      intervalMs: 100,
-      feishuClient,
-      statusChatId: "chat-456",
-    })
-    const service = new HeartbeatService(options)
-
-    service.start()
-    vi.advanceTimersByTime(100)
-    await advanceTimers(10)
-
-    expect(feishuClient.sendMessage).toHaveBeenCalledWith(
-      "chat-456",
-      expect.objectContaining({
-        msg_type: "text",
-      }),
-    )
-
-    service.stop()
-  })
-
   it("getStats() returns successCount and failCount", async () => {
-    const mockFetch = vi.fn()
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: false, status: 500 })
-    globalThis.fetch = mockFetch
-
-    const options = makeOptions({ intervalMs: 100 })
+    const ping = vi.fn()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error("fail"))
+    const opencode = { ping } as any
+    const options = makeOptions({ intervalMs: 100, opencode })
     const service = new HeartbeatService(options)
 
     service.start()

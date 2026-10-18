@@ -154,7 +154,7 @@ describe("interactive-poller", () => {
     createdSeenInteractiveIds.push(seenInteractiveIds)
 
     return {
-      serverUrl: "http://test:4096",
+      opencode: createMockGateway(),
       feishuClient: {
         sendMessage: vi.fn().mockResolvedValue({
           code: 0,

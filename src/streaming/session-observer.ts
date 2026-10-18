@@ -8,6 +8,7 @@ import type { EventProcessor } from "./event-processor.js"
 import type { FeishuApiClient } from "../feishu/api-client.js"
 import type { Logger } from "../utils/logger.js"
 import { buildQuestionCard, buildPermissionCard, buildFinalResponseCard } from "../handler/streaming-integration.js"
+import { eventPayload } from "../opencode/events.js"
 import type { ExpiringSet } from "../utils/expiring-set.js"
 import type { InteractiveCardRegistry } from "../feishu/interactive-card-registry.js"
 import {
@@ -44,8 +45,8 @@ export interface SessionObserver {
 
 function extractMessageId(rawEvent: unknown): string | undefined {
   if (rawEvent === null || typeof rawEvent !== "object") return undefined
-  const props = (rawEvent as Record<string, unknown>).properties
-  if (!props || typeof props !== "object") return undefined
+  const props = eventPayload(rawEvent)
+  if (!props) return undefined
   const p = props as Record<string, unknown>
   // message.part.updated  → properties.part.messageID
   // message.part.delta    → properties.messageID
