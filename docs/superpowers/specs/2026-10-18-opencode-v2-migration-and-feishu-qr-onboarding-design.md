@@ -1,7 +1,7 @@
 # opencode-lark：接入 opencode v2 + 飞书扫码建应用
 
 - 日期：2026-10-18
-- 状态：待评审
+- 状态：已校准（已对照本机 openapi.json / stub-fetch 实测）
 - 目标版本：0.4.0
 
 ## 1. 背景与目标
@@ -33,12 +33,17 @@
 | v2 API 前缀 | `/api/*`；根路径一律返回 HTML（Web UI 兜底路由） |
 | 旧 SDK 行为 | `@opencode-ai/sdk@1.2.10` 走根路径，报 `Request is not supported by this version of OpenCode Server (Server responded with text/html)` |
 | 新 SDK | `@opencode-ai/sdk@1.19.3` 的客户端带 `client.v2.*` 命名空间，正是 `/api/*`。已实测 `v2.session.list()` / `v2.session.active()` / `v2.agent.list()` / `v2.command.list()` 在带 Basic 鉴权时全部成功 |
-| 事件名 | v2 的事件名与项目现有解析完全一致：`message.part.updated`、`message.part.delta`、`session.status`、`session.idle`、`question.asked`、`permission.asked` |
-| **事件字段** | **v2 的 `/api/event` 用 `data` 承载载荷，v1 用 `properties`** —— 这是必须适配的差异 |
-| `session.status` 取值 | `{type: "idle" \| "busy" \| "retry"}`，与项目现有 busy/idle 处理一致 |
-| 子会话 | v2 无 `/api/session/{id}/children`（404）。实测 `GET /api/session?parentID={id}` 可用（未知参数会返回全部会话，`parentID` 会正确过滤） |
-| 提问接口 | `/api/session/{id}/question` 与 `/api/question/request` 在本机返回 **404**（`permission` 同类接口返回 200） |
-| **载荷与 SDK 类型不一致** | SDK 1.19.3 声明的 `Session` 带 `slug`/`version`/`directory`/`parentID`；而 v2.0.29 实际返回 `location.directory`、`outcome`、`time.idle`/`time.viewed`，**没有 `slug`/`version`/`parentID`**，且列表响应外层是 `{ data, cursor }` 而非裸数组 |
+| 权威契约 | 本机 `GET /openapi.json`（200，OpenAPI 3.1.0，`opencode HttpApi 0.0.1`，118 条路径）就是服务端自述的契约，优先于 SDK 的 `.d.ts` |
+| 事件名 | **与 v1 不完全一致**：文本增量是 `session.next.text.delta`，权限是 `permission.v2.asked`，提问是 `question.v2.asked`；`message.part.updated` / `session.idle` / `session.status` 保持不变。完整映射见 §5.3 |
+| **事件字段** | **v2 的 `/api/event` 用 `data` 承载载荷（v1 用 `properties`）**。注意 SDK 自己的类型也不统一（`session.next.*` 用 `data`，`permission.v2.asked` 却写 `properties`），所以必须 **`data ?? properties` 两边都读** |
+| `session.status` 取值 | 事件载荷里是 `{type: "idle" \| "busy" \| "retry"}`，与现有 busy/idle 处理一致 |
+| 活跃状态接口 | `GET /api/session/active` 实测返回 `{"data":{"ses_xxx":{"type":"running"}}}` —— **值是 `running`，不是 `idle`/`busy`**（openapi 里的枚举已过时）。语义：**出现在 map 里 = 该会话正在跑，缺席 = 不活跃** |
+| 子会话 | v2 无 `/api/session/{id}/children`（404）。`GET /api/session?parentID={id}` 可用（实测带 `parentID` 会正确过滤，返回 `{data:[],cursor:{...}}`） |
+| 提问接口 | `/api/session/{id}/question`、`/api/question/request` 均 **404**；`/api/permission/request`、`/api/session/{id}/permission` 均 200。SDK 1.19.3 里有这些 question 路由，说明 **SDK 比服务端新** |
+| 发消息 body | `POST /api/session/{sessionID}/prompt` 要 **`{ text, files?, agents?, skills?, delivery?, resume? }`**，`text` 必填。**不是** `{ parts: [...] }`：实测发 `{}` / `{"parts":[…]}` 都返回 `400 Missing key at ["text"]` |
+| 附件 | 仍支持，形状是 `files: [{ uri, name?, description? }]`（`uri` 必填），**不是** v1 的 `FilePartInput{mime,url}` |
+| 列表信封 | 列表统一 `{ data, cursor }`；`/api/permission/request`、`/api/agent`、`/api/command` 是 `{ location, data }`；`cursor` 是对象 `{previous,next}` 而非字符串 |
+| **SDK 调用约定（实测）** | `client.v2.*` 的真实用法与它自己的 `.d.ts` **不符**，必须按实测写：<br>① 路径参数**平铺**传（`{ sessionID }`），不是 `{ path: { sessionID } }`；<br>② SDK 会**静默丢弃**它没声明的参数（`parentID`、`type`、`prompt` 的 `text`…），要用 `$query_xxx` / `$body_xxx` 前缀逃生口；<br>③ 返回是 `{ data, request, response }`，而服务端 body 又是 `{ data }`，所以取数要 **`res.data.data`**；<br>④ 4xx 不抛异常，而是返回 `{ error, response }`，判断 `res.error`；<br>⑤ `location` 查询参数序列化为 `location[directory]=…`；<br>⑥ `headers` 里的 Basic 鉴权由 `createOpencodeClient({ headers })` 注入 |
 | 飞书注册接口 | `POST https://accounts.feishu.cn/oauth/v1/app/registration` with `action=init` 返回 `supported_auth_methods: ["client_secret", ...]` |
 
 ## 4. 总体架构
@@ -73,19 +78,19 @@ export interface OpencodeGatewayOptions {
 
 export interface OpencodeGateway {
   /** 会话 */
-  listSessions(query?: { directory?: string; roots?: boolean; limit?: number; scope?: "project" }): Promise<Session[]>
+  listSessions(query?: { directory?: string; parentID?: string; limit?: number; search?: string }): Promise<Session[]>
   getSession(sessionID: string): Promise<Session | null>   // 404 → null
-  createSession(body: { title?: string; parentID?: string; agent?: string }): Promise<Session>
-  children(parentSessionID: string): Promise<Session[]>
-  messages(sessionID: string, query?: { limit?: number }): Promise<Message[]>
-  sendPrompt(sessionID: string, parts: PromptPart[], opts?: { agent?: string }): Promise<void>
+  createSession(body: { title?: string; parentID?: string; agent?: string; directory?: string }): Promise<Session>
+  children(parentSessionID: string): Promise<Session[]>     // 内部 listSessions({ parentID })
+  messages(sessionID: string, query?: { limit?: number; order?: "asc" | "desc"; type?: string }): Promise<Message[]>
+  sendPrompt(sessionID: string, input: PromptInput, opts?: { delivery?: "steer" | "queue" }): Promise<void>
   abort(sessionID: string): Promise<void>
   activeStatuses(): Promise<Record<string, { type: string }>>
 
   /** 交互 */
-  listPermissions(sessionID: string): Promise<PermissionRequest[]>
+  listPermissions(): Promise<PermissionRequest[]>        // 全局待处理：GET /api/permission/request
   replyPermission(sessionID: string, requestID: string, reply: "once" | "always" | "reject", message?: string): Promise<void>
-  listQuestions(sessionID: string): Promise<QuestionRequest[]>      // 404 视为「不支持/无待答」
+  listQuestions(): Promise<QuestionRequest[]>            // 全局待处理；本机 404 视为「不支持」，返回 []
   replyQuestion(sessionID: string, requestID: string, answers: string[][]): Promise<void>
 
   commands(): Promise<Command[]>
@@ -100,12 +105,17 @@ export interface OpencodeGateway {
 
 实现要点：
 
-- 内部持有 `createOpencodeClient({ baseUrl, directory, headers: { Authorization: "Basic " + base64(username + ":" + password) } })`（来自 `@opencode-ai/sdk/v2`）。
-- **优先使用生成的 `client.v2.*` 方法**，路径与参数名由 OpenAPI 生成，避免手工维护 URL。
-- 需要 `parts` 之类自定义 body 的调用，若 SDK 方法签名不便，则回退到「带 `/api` 前缀 + 鉴权头」的 `fetch` 封装，集中在本模块内。
-- **不要依赖 SDK 声明的响应类型**（见 §3「载荷与 SDK 类型不一致」一行）。在本模块内定义自己的最小类型，例如：
+- 内部持有 `createOpencodeClient({ baseUrl, headers: { Authorization: "Basic " + base64(username + ":" + password) } })`（来自 `@opencode-ai/sdk/v2`）。鉴权头通过 `headers` 注入，不要依赖 SDK 的 auth 配置。
+- **每个方法都用 `client.v2.*`**，但签名按§下表实测写法，不能照抄 `.d.ts`。SDK 未声明的参数会被**静默丢弃**，一律用 `$body_*` / `$query_*` 逃生口显式传递。
+- **不要依赖 SDK 的响应类型**。在本模块内定义自己的最小类型，读取一律走可选链，缺字段不抛错：
 
   ```ts
+  export interface PromptInput {
+    text: string
+    files?: Array<{ uri: string; name?: string }>
+    agents?: Array<{ name: string }>
+  }
+
   export interface SessionRef {
     id: string
     title?: string
@@ -117,18 +127,40 @@ export interface OpencodeGateway {
   }
   ```
 
-  读取一律走可选链，缺字段不抛错。响应外层 `{ data }` 由 gateway 负责拆包，调用方拿到的就是数组/对象。
-- 参数名以**真机实测**为准（v2 用 `sessionID`，不是旧版的 `id`）；SDK 的 `.d.ts` 可能滞后于本次服务端版本，实现时逐个端点用真机校验。
-- `ping()` 用 `v2.session.active()`（本项目里 `/api/session/status` 返回 400，`active` 才是可用的探活端点；返回 `{ [sessionID]: { type: "idle" | "busy" | "retry" } }`）。
+- 拆包：响应是 `{ data, request, response }`，服务端 body 又是 `{ data }`（或 `{ location, data }`），所以统一 **`res.data.data`** 才是业务数据；`res.error` 非空表示失败（SDK 4xx 不抛异常）。
+- `ping()` 用 `v2.session.active()`（v2 无 `/api/session/status`）；判活是「在不在 map 里」，不要判 `type` 的字面值。
 - `getSession` 把 404 转成 `null`，保留 `message-handler` 的「会话已消失 → 自愈重建」语义。
 - `listQuestions` 把 404 转成 `[]`，并只告警一次（见 §5.4）。
+
+#### 实测调用矩阵（照抄即可）
+
+以下签名全部用 stub `fetch` 抓取真实 URL/body 验证过，**零副作用**：
+
+| gateway 方法 | SDK 调用 | 线上实际请求 |
+| --- | --- | --- |
+| `listSessions({directory})` | `v2.session.list({ directory })` | `GET /api/session?directory=…` |
+| `children(id)` | `v2.session.list({ $query_parentID: id })` | `GET /api/session?parentID=…` |
+| `getSession(id)` | `v2.session.get({ sessionID: id })` | `GET /api/session/{id}` |
+| `createSession({title,directory})` | `v2.session.create({ location:{directory}, $body_title: title })` | `POST /api/session` body `{"location":{…},"title":…}` |
+| `activeStatuses()` | `v2.session.active()` | `GET /api/session/active` |
+| `sendPrompt(id,{text,files})` | `v2.session.prompt({ sessionID:id, $body_text:text, $body_files, $body_delivery })` | `POST …/prompt` body `{"text":…,"files":[…]}` |
+| `abort(id)` | `v2.session.interrupt({ sessionID:id })` | `POST …/interrupt` |
+| `messages(id,{limit,order,type})` | `v2.session.messages({ sessionID:id, limit, order, $query_type })` | `GET …/message?limit&order&type` |
+| `listPermissions()` | `v2.permission.request.list({ location:{directory} })` | `GET /api/permission/request?location[directory]=…` |
+| `replyPermission(sid,rid,decision)` | `v2.session.permission.reply({ sessionID:sid, requestID:rid, $body_decision:decision })` | `POST …/permission/{rid}/reply` body `{"decision":…}` |
+| `listQuestions()` | `v2.question.request.list({ location:{directory} })` | `GET /api/question/request`（本机 404） |
+| `replyQuestion(sid,rid,answers)` | `v2.session.question.reply({ sessionID:sid, requestID:rid, $body_answers:answers })` | `POST …/question/{rid}/reply`（本机 404） |
+| `commands()` | `v2.command.list({ location:{directory} })` | `GET /api/command?location[directory]=…` |
+| `subscribeEvents()` | `v2.event.subscribe({ signal })` | `GET /api/event`（SSE） |
+
+注意 `createSession` 的 `title` 与 `prompt` 的 `text`/`files` 都必须走 `$body_*`：SDK 为这两个方法声明的是 `title`→(未声明)、`prompt`→`body.prompt`，直接传会被丢弃或发成服务端不认的形状。
 
 ### 5.2 v1 → v2 接口映射
 
 | 用途 | 旧（v1） | 新（v2） |
 | --- | --- | --- |
 | 探活 | `GET /session/status` | `GET /api/session/active` |
-| 列会话 | `GET /session?roots=true&limit=1&directory=` | `GET /api/session?roots=true&limit=1&directory=` |
+| 列会话 | `GET /session?roots=true&limit=1&directory=` | `GET /api/session?limit=1&directory=`（v2 无 `roots` 参数，直接按 `directory` 过滤） |
 | 取会话 | `GET /session/{id}` | `GET /api/session/{sessionID}` |
 | 建会话 | `POST /session` | `POST /api/session` |
 | 发消息 | `POST /session/{id}/message` | `POST /api/session/{sessionID}/prompt` |
@@ -136,27 +168,49 @@ export interface OpencodeGateway {
 | 子会话 | `GET /session/{id}/children` | `GET /api/session?parentID={sessionID}` |
 | 消息列表 | `GET /session/{id}/message?limit=N` | `GET /api/session/{sessionID}/message?limit=N` |
 | 事件流 | `GET /event`（`properties`） | `GET /api/event`（`data`） |
-| 权限列表 | `GET /permission` | `GET /api/session/{sessionID}/permission`；全局用 `GET /api/permission/request` |
+| 权限列表 | `GET /permission` | `GET /api/permission/request`（全局待处理） |
 | 权限回复 | `POST /permission/{id}/reply` | `POST /api/session/{sessionID}/permission/{requestID}/reply` |
-| 问题列表 | `GET /question` | `GET /api/session/{sessionID}/question`（本机 404，降级） |
+| 问题列表 | `GET /question` | `GET /api/question/request`（本机 404，降级） |
 | 问题回复 | `POST /question/{id}/reply` | `POST /api/session/{sessionID}/question/{requestID}/reply` |
 | 命令 | `GET /command` | `GET /api/command` |
 
-发消息 body 对齐 v2：`{ parts: [...], agent?: string, system?: string, model?: {...} }`（当前代码发的是 `{ parts }`，兼容）。
+发消息 body **结构变了**：v1 是 `{ parts: [{type:"text",text},{type:"file",mime,url}] }`，v2 是 `{ text: string, files?: [{uri,name?}], agents?, skills?, delivery?, resume? }`。所以 `message-handler` 里拼 `parts` 的那段要改成「文本 + `files[{uri}]`」。
 
-### 5.3 事件流适配（`properties` → `data`）
+`files[].uri` 的取值形式（`file://` 绝对路径还是 data URI）**未实测**——真机验证一次；图片附件沿用现有「先落盘再传」的流程，只是最后一步换个字段名。
 
-事件名不变，仅承载字段名变化。共 12 处，全部收敛为「读 `data`，缺失时回退 `properties`」的单一辅助函数：
+**回复接口需要 sessionID。** v2 的权限/问题回复端点路径里带 `{sessionID}`，而现有卡片按钮的 action value 只带 `requestId`。因此：
+
+- `buildPermissionCard` / `buildQuestionCard` 的按钮 value 增加 `sessionId`（构建时 `action.sessionId` 已知）。
+- `interactive-handler` 读取 `value.sessionId` 调用 gateway；缺失时记一条 WARN 并放弃（不猜测归属，避免答错会话）。
+- 列表仍是全局查询（与现有轮询行为一致），不做按会话拆分。
+
+### 5.3 事件流适配（`properties` ↔ `data`）
+
+事件名**不是**完全不变，载荷位置也不是只有 `data`。SDK 自身的类型也相互矛盾（`session.next.*` / `session.idle` 用 `data`，`permission.v2.asked` / `question.v2.asked` 却写 `properties`），而本机 `/api/event` 用 `data`。因此 helper 必须 **`data ?? properties` 双读**，并把 v1/v2 事件名都识别。
 
 ```ts
 // src/opencode/events.ts
 export function eventPayload(event: unknown): Record<string, unknown> | null
 ```
 
+映射表（`event-processor.ts` 按此重写）：
+
+| 旧（v1） | 新（v2） | 载荷位置 | 处理 |
+| --- | --- | --- | --- |
+| `message.part.updated` | `message.part.updated` | `data.part`、`data.delta` | TextDelta（`part.type==="text"` + delta）、ToolStateChange、SubtaskDiscovered |
+| `message.part.delta` | `message.part.delta` | `data.sessionID/messageID/partID/field/delta` | TextDelta（`field==="text"`） |
+| — | `session.next.text.delta` | `data.sessionID`、`data.delta` | TextDelta（v2 主路径，不再需要 reasoning part-id 过滤） |
+| `session.status` | `session.status` | `data.sessionID`、`data.status` | busy/idle/running → SessionIdle |
+| `session.idle` | `session.idle` | `data.sessionID` | SessionIdle |
+| `question.asked` | `question.v2.asked` | `data.id`、`data.sessionID`、`data.questions` | QuestionAsked；选项字段不变（`question/header/options/multiple/custom`） |
+| `permission.asked` | `permission.v2.asked` | `data.id`、`data.sessionID`、`data.action`、`data.resources`、`data.metadata` | PermissionRequested；`permissionType=data.action`，`title=data.resources.join(", ")`，`patterns`→`resources`，`always`→`save` |
+
+`PermissionRequested` 仍带 `permissionType` 供卡片展示，从 `action` 取；`metadata` 缺失时用 `{}`。
+
 改动点：
 
-- `src/index.ts`（SSE 分发取 `sessionID`）——同时这里要改为通过 `gateway.subscribeEvents()` 订阅。
-- `src/streaming/event-processor.ts`：6 处 `event.properties`。
+- `src/index.ts`（SSE 分发取 `sessionID`）——同时改为通过 `gateway.subscribeEvents()` 订阅。
+- `src/streaming/event-processor.ts`：6 处 `event.properties` → `eventPayload()`；事件名 switch 更新；`reasoningPartIds` 跟踪仍保留（`message.part.delta` 对 reasoning 的过滤），但 `session.next.text.delta` 路径不触发它。
 - `src/streaming/session-observer.ts`：1 处。
 - `src/handler/message-handler.ts`：4 处（流式所有权监听）。
 
@@ -197,7 +251,8 @@ export function eventPayload(event: unknown): Record<string, unknown> | null
 | `src/streaming/subagent-tracker.ts` | 2 处 fetch（children / messages）→ gateway |
 | `src/handler/message-handler.ts` | 2 处发消息 fetch → `gateway.sendPrompt`；4 处事件字段 |
 | `src/handler/command-handler.ts` | 建会话 / 中止 / 校验 → gateway |
-| `src/handler/interactive-handler.ts` | 问题/权限回复 → gateway |
+| `src/handler/interactive-handler.ts` | 问题/权限回复 → gateway（需从 action value 取 `sessionId`） |
+| `src/handler/streaming-integration.ts` | `buildPermissionCard` / `buildQuestionCard` 的按钮 value 增加 `sessionId` |
 | `src/handler/interactive-poller.ts` | 轮询问题/权限 → gateway |
 | `src/cron/cron-service.ts` | 3 处 → gateway |
 | `src/cron/heartbeat.ts` | 1 处 → gateway.ping |
@@ -322,8 +377,9 @@ OPENCODE_SERVER_PASSWORD=<password>
 | 风险 | 影响 | 应对 |
 | --- | --- | --- |
 | 扫码创建的应用可能仍需在飞书后台确认「长连接」事件/回调订阅 | 机器人收不到消息 | 使用 `PersonalAgent` 预设（Hermes 已验证可用）；真机扫码后验证；README 给出排查步骤 |
-| `sendPrompt` 的 parts 结构在 v2 下可能对 `FilePartInput` / `AgentPartInput` 有额外必填字段 | 图片/文件消息失败 | 实现时用真机逐类型验证；图片走 `FilePartInput`，其余保持 text |
-| question 接口在本机不可用 | 提问卡片功能降级 | 已在 §5.4 明确降级策略并写入 README |
+| `sendPrompt` 的 `files[].uri` 形式（`file://` vs data URI）未在真机验证 | 图片/文件消息失败 | 实现时用真机逐类型验证；图片走 `files:[{uri}]`，其余保持 text；已有落盘逻辑复用 |
+| question 接口在本机不可用（`question.v2.asked` 事件仍会到达） | 提问卡片功能降级 | `listQuestions` 遇 404 返回 `[]`；卡片回复时 404 → 回「当前 opencode 版本不支持回答此提问」；写入 README「已知限制」 |
+| SDK `.d.ts` 与 v2.0.29 不一致（参数被静默丢弃、`data` 双层拆包、4xx 不抛异常） | 实现时踩坑 | gateway 按§5.1 实测矩阵写，每个方法配 stub-fetch 单元测试锁定 URL/body |
 | SDK 1.19.3 的类型定义与 v2.0.29 实际载荷不一致（`location.directory`、缺 `slug`/`version`/`parentID`） | 依赖类型的地方在运行时空值/报错 | gateway 内自定义宽松类型 + 可选链；**不 import SDK 的响应类型**；每个端点在真机校验一次 |
 | `children` 改用 `?parentID=`，返回项**不含** `parentID` 字段，无法二次校验归属 | 极端情况下取到意外会话 | 只取返回数组中最后一项（与旧逻辑一致）；真机对比子代理数据 |
 | 现有测试大量依赖 URL 匹配的 fetch mock | 改造噪音大 | 分模块小步替换，逐个跑测试，不一次性全改 |
