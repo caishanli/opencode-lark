@@ -177,6 +177,27 @@ export async function runSetupWizard(): Promise<void> {
     process.stdout.write(dim("Step 1/3: Feishu Credentials") + "\n")
 
     let appId = ""
+    let appSecret = ""
+
+    if (process.stdin.isTTY) {
+      const choice = (await rl.question(
+        "  1. 扫码自动创建应用（推荐）\n  2. 手动输入 App ID / App Secret\n  选择 [1/2]: ",
+      )).trim()
+      if (choice === "1") {
+        const { qrRegister } = await import("./feishu-onboard.js")
+        const result = await qrRegister({
+          onQrUrl: (url) => process.stdout.write(dim(`  打开链接: ${url}\n`)),
+        })
+        if (result) {
+          appId = result.appId
+          appSecret = result.appSecret
+          process.stdout.write(green(`  ✓ 应用创建成功: ${appId}`) + "\n\n")
+        } else {
+          process.stdout.write(red("  扫码未完成，回退到手动输入。") + "\n")
+        }
+      }
+    }
+
     while (!appId) {
       appId = (await rl.question("  Enter your Feishu App ID: ")).trim()
       if (!appId) {
@@ -187,7 +208,6 @@ export async function runSetupWizard(): Promise<void> {
     // Close rl temporarily so we can use raw mode for secret input
     rl.close()
 
-    let appSecret = ""
     while (!appSecret) {
       appSecret = (await readSecret("  Enter your Feishu App Secret: ")).trim()
       if (!appSecret) {
@@ -217,15 +237,24 @@ export async function runSetupWizard(): Promise<void> {
       let connected = false
       while (!connected) {
         try {
-          await fetch(serverUrl)
-          connected = true
-          process.stdout.write(green("  ✓ Connected to opencode server") + "\n\n")
+          const password = process.env.OPENCODE_SERVER_PASSWORD ?? ""
+          const headers: Record<string, string> = {}
+          if (password) {
+            headers["Authorization"] = "Basic " + Buffer.from(`opencode:${password}`).toString("base64")
+          }
+          const resp = await fetch(`${serverUrl.replace("localhost", "127.0.0.1")}/api/session/active`, { headers })
+          if (resp.status < 500) {
+            connected = true
+            process.stdout.write(green("  ✓ Connected to opencode server") + "\n\n")
+          } else {
+            throw new Error(`HTTP ${resp.status}`)
+          }
         } catch {
           process.stdout.write(
             red(`  ✗ Cannot reach opencode server at ${serverUrl}`) +
               "\n\n" +
               "  Please start it in another terminal:\n" +
-              dim("    OPENCODE_SERVER_PORT=4096 opencode serve") +
+              dim("    OPENCODE_SERVER_PASSWORD=... opencode serve --port 4096") +
               "\n\n",
           )
           await rl2.question("  Press Enter to retry...")
@@ -245,6 +274,11 @@ export async function runSetupWizard(): Promise<void> {
       ]
       if (serverUrl !== DEFAULT_URL) {
         lines.push(`OPENCODE_SERVER_URL=${serverUrl}`)
+      }
+      const pw = process.env.OPENCODE_SERVER_PASSWORD
+      if (pw) {
+        lines.push(`OPENCODE_SERVER_PASSWORD=${pw}`)
+        lines.push(`OPENCODE_SERVER_USERNAME=opencode`)
       }
 
       fs.writeFileSync(envPath, lines.join("\n") + "\n", "utf-8")
