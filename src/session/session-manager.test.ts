@@ -48,7 +48,7 @@ describe("session-manager", () => {
       expect(result).toBe(tuiSessionId)
 
       // Discovery must query the configured working directory
-      expect(listSessions).toHaveBeenCalledWith({ directory: CWD })
+      expect(listSessions).toHaveBeenCalledWith({ directory: CWD, parentID: "null" })
       // Validation must check the discovered session
       expect(getSession).toHaveBeenCalledWith(tuiSessionId)
       // Should not create a new session when one is discovered
@@ -71,7 +71,7 @@ describe("session-manager", () => {
       const result = await sm.getOrCreate("chat-2")
 
       expect(result).toBe(createdSessionId)
-      expect(listSessions).toHaveBeenCalledWith({ directory: CWD })
+      expect(listSessions).toHaveBeenCalledWith({ directory: CWD, parentID: "null" })
       expect(createSession).toHaveBeenCalledWith({
         title: "Feishu chat chat-2",
         directory: CWD,
@@ -410,5 +410,29 @@ describe("session-manager", () => {
       expect(cleaned).toBe(0)
       expect(sm.getSession("key-rl")).not.toBeNull()
     })
+  })
+})
+
+describe("session-manager — root-session filtering (v2 regression)", () => {
+  it("discovers only root sessions by passing parentID=null", async () => {
+    const db = createTestDb()
+    const saved = process.env.OPENCODE_CWD
+    process.env.OPENCODE_CWD = "/test/project"
+    try {
+      const listSessions = vi.fn().mockResolvedValue([{ id: "ses-root" }])
+      const getSession = vi.fn().mockResolvedValue({ id: "ses-root" })
+      const gateway = createMockGateway({ listSessions, getSession })
+      const sm = createSessionManager({ opencode: gateway, db, defaultAgent: DEFAULT_AGENT })
+
+      const id = await sm.getOrCreate("chat-roots")
+
+      expect(id).toBe("ses-root")
+      // v2 has no `roots` flag; parentID=null is what excludes child sessions
+      expect(listSessions).toHaveBeenCalledWith({ directory: "/test/project", parentID: "null" })
+    } finally {
+      db.close()
+      if (saved === undefined) delete process.env.OPENCODE_CWD
+      else process.env.OPENCODE_CWD = saved
+    }
   })
 })

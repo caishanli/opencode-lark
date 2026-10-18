@@ -232,17 +232,30 @@ export async function runSetupWizard(): Promise<void> {
         await rl2.question(`  opencode server URL [${DEFAULT_URL}]: `)
       ).trim()
       const serverUrl = urlInput || DEFAULT_URL
+      const baseUrl = serverUrl.replace("localhost", "127.0.0.1")
+
+      // opencode v2 requires Basic auth; capture the password so the saved .env is usable.
+      let serverPassword = process.env.OPENCODE_SERVER_PASSWORD ?? ""
+      if (!serverPassword) {
+        serverPassword = (await readSecret("  Enter opencode server password (OPENCODE_SERVER_PASSWORD): ")).trim()
+      }
 
       // Connectivity check with retry loop
       let connected = false
       while (!connected) {
         try {
-          const password = process.env.OPENCODE_SERVER_PASSWORD ?? ""
           const headers: Record<string, string> = {}
-          if (password) {
-            headers["Authorization"] = "Basic " + Buffer.from(`opencode:${password}`).toString("base64")
+          if (serverPassword) {
+            headers["Authorization"] = "Basic " + Buffer.from(`opencode:${serverPassword}`).toString("base64")
           }
-          const resp = await fetch(`${serverUrl.replace("localhost", "127.0.0.1")}/api/session/active`, { headers })
+          const resp = await fetch(`${baseUrl}/api/session/active`, { headers })
+          if (resp.status === 401) {
+            process.stdout.write(
+              red("  ✗ Authentication failed (HTTP 401) — wrong or missing OPENCODE_SERVER_PASSWORD") + "\n",
+            )
+            serverPassword = (await readSecret("  Re-enter opencode server password: ")).trim()
+            continue
+          }
           if (resp.status < 500) {
             connected = true
             process.stdout.write(green("  ✓ Connected to opencode server") + "\n\n")
@@ -275,7 +288,7 @@ export async function runSetupWizard(): Promise<void> {
       if (serverUrl !== DEFAULT_URL) {
         lines.push(`OPENCODE_SERVER_URL=${serverUrl}`)
       }
-      const pw = process.env.OPENCODE_SERVER_PASSWORD
+      const pw = serverPassword
       if (pw) {
         lines.push(`OPENCODE_SERVER_PASSWORD=${pw}`)
         lines.push(`OPENCODE_SERVER_USERNAME=opencode`)

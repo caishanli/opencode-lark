@@ -121,3 +121,26 @@ describe("gateway: events + ping", () => {
     await expect(gw.ping()).resolves.toBeUndefined()
   })
 })
+describe("gateway: liveness/auth semantics", () => {
+  it("ping() rejects when the server returns 401", async () => {
+    const fetchImpl = makeFetch({ _tag: "UnauthorizedError", message: "unauthorized" }, 401)
+    const gw = createOpencodeGateway({ baseUrl: "http://x", password: "wrong", fetch: fetchImpl as any })
+    await expect(gw.ping()).rejects.toThrow()
+  })
+
+  it("listPermissions() throws on a 401 instead of returning []", async () => {
+    const fetchImpl = makeFetch({ _tag: "UnauthorizedError", message: "unauthorized" }, 401)
+    const gw = createOpencodeGateway({ baseUrl: "http://x", password: "wrong", fetch: fetchImpl as any })
+    await expect(gw.listPermissions()).rejects.toThrow()
+  })
+
+  it("listQuestions() still degrades to [] on 404 but throws on 401", async () => {
+    const notFound = makeFetch({ _tag: "NotFoundError", message: "nope" }, 404)
+    const gw404 = createOpencodeGateway({ baseUrl: "http://x", password: "pw", fetch: notFound as any, logger: { warn: vi.fn() } })
+    expect(await gw404.listQuestions()).toEqual([])
+
+    const unauthorized = makeFetch({ _tag: "UnauthorizedError", message: "no" }, 401)
+    const gw401 = createOpencodeGateway({ baseUrl: "http://x", password: "bad", fetch: unauthorized as any, logger: { warn: vi.fn() } })
+    await expect(gw401.listQuestions()).rejects.toThrow()
+  })
+})

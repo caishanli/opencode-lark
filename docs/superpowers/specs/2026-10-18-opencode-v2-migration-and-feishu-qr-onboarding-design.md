@@ -129,6 +129,8 @@ export interface OpencodeGateway {
 
 - 拆包：响应是 `{ data, request, response }`，服务端 body 又是 `{ data }`（或 `{ location, data }`），所以统一 **`res.data.data`** 才是业务数据；`res.error` 非空表示失败（SDK 4xx 不抛异常）。
 - `ping()` 用 `v2.session.active()`（v2 无 `/api/session/status`）；判活是「在不在 map 里」，不要判 `type` 的字面值。
+- **SDK 对 4xx 不抛异常**（返回 `{ error, response }`）。因此 `ping()` 必须显式检查 `res.error` 并抛出（401 提示检查 `OPENCODE_SERVER_PASSWORD`），否则密码错误时 `waitForServer` 会误报「已就绪」。同理 `listPermissions` / `commands` / `listQuestions`（404 除外）遇错要抛，避免轮询把「请求失败」误当成「无待处理项」而错误地把卡片标记为已解决。
+- `listSessions` 用于会话发现时要传 `parentID: "null"`：v2 没有 v1 的 `roots=true`，不传会把子/子代理会话当成根会话绑定。
 - `getSession` 把 404 转成 `null`，保留 `message-handler` 的「会话已消失 → 自愈重建」语义。
 - `listQuestions` 把 404 转成 `[]`，并只告警一次（见 §5.4）。
 
@@ -193,19 +195,22 @@ export interface OpencodeGateway {
 export function eventPayload(event: unknown): Record<string, unknown> | null
 ```
 
-映射表（`event-processor.ts` 按此重写）：
+映射表（`event-processor.ts` 按此重写）。**实测（本机 v2.0.29 二进制 + 实时抓帧）确认：事件名前缀是 `session.text.*` / `session.tool.*`，不是 SDK `.d.ts` 里的 `session.next.*`（后者在本机二进制里出现 0 次）。**
 
-| 旧（v1） | 新（v2） | 载荷位置 | 处理 |
+| 旧（v1） | 新（v2.0.29 实测） | 载荷位置 | 处理 |
 | --- | --- | --- | --- |
-| `message.part.updated` | `message.part.updated` | `data.part`、`data.delta` | TextDelta（`part.type==="text"` + delta）、ToolStateChange、SubtaskDiscovered |
+| `message.part.updated` | `message.part.updated` | `data.part`、`data.delta` | TextDelta（`part.type==="text"` + delta）、ToolStateChange、SubtaskDiscovered（保留，向前兼容） |
 | `message.part.delta` | `message.part.delta` | `data.sessionID/messageID/partID/field/delta` | TextDelta（`field==="text"`） |
-| — | `session.next.text.delta` | `data.sessionID`、`data.delta` | TextDelta（v2 主路径，不再需要 reasoning part-id 过滤） |
+| — | **`session.text.delta`** | `data.sessionID`、`data.delta` | TextDelta（v2 主路径） |
+| — | `session.text.started` / `session.text.ended` | `data.text` | 忽略（`ended` 带全文，非增量） |
+| — | `session.tool.called` | `data.sessionID`、`data.callID`、`data.tool`、`data.input` | ToolStateChange（running）；记录 callID→tool |
+| — | `session.tool.success` / `session.tool.failed` | `data.sessionID`、`data.callID`、`data.error?` | ToolStateChange（completed / error），tool 名从 map 取 |
 | `session.status` | `session.status` | `data.sessionID`、`data.status` | busy/idle/running → SessionIdle |
 | `session.idle` | `session.idle` | `data.sessionID` | SessionIdle |
-| `question.asked` | `question.v2.asked` | `data.id`、`data.sessionID`、`data.questions` | QuestionAsked；选项字段不变（`question/header/options/multiple/custom`） |
-| `permission.asked` | `permission.v2.asked` | `data.id`、`data.sessionID`、`data.action`、`data.resources`、`data.metadata` | PermissionRequested；`permissionType=data.action`，`title=data.resources.join(", ")`，`patterns`→`resources`，`always`→`save` |
+| `question.asked` | **无 `question.*` 事件**（本机只有 `form.*`） | — | 提问卡片在本机不可用（见 §5.4） |
+| `permission.asked` | `permission.asked`（**不是** `permission.v2.asked`） | `data.id`、`data.sessionID`、`data.action`、`data.resources`、`data.metadata` | PermissionRequested；`permissionType=data.action`，`title=data.resources.join(", ")` |
 
-`PermissionRequested` 仍带 `permissionType` 供卡片展示，从 `action` 取；`metadata` 缺失时用 `{}`。
+`PermissionRequested` 仍带 `permissionType` 供卡片展示，从 `action` 取（兼容旧 `permission` 字段）；`metadata` 缺失时用 `{}`。
 
 改动点：
 

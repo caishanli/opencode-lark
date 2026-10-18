@@ -181,6 +181,14 @@ function hasType(v: unknown): v is { type: string } {
 const KNOWN_TYPES = new Set([
   "message.part.updated",
   "message.part.delta",
+  // v2.0.29 real names (verified against the live server binary + live stream)
+  "session.text.delta",
+  "session.text.ended",
+  "session.tool.called",
+  "session.tool.success",
+  "session.tool.failed",
+  "session.tool.progress",
+  // SDK-declared names kept for forward/backward compatibility
   "session.next.text.delta",
   "session.status",
   "session.idle",
@@ -207,6 +215,7 @@ export interface EventProcessorOptions {
 export class EventProcessor {
   private readonly ownedSessions: Set<string>
   private readonly reasoningPartIds = new Set<string>()
+  private readonly toolNamesByCallId = new Map<string, string>()
   private readonly logger?: { warn(msg: string, ...args: unknown[]): void }
 
   constructor(options: EventProcessorOptions) {
@@ -223,8 +232,18 @@ export class EventProcessor {
           return this.processMessagePartUpdated(raw)
         case "message.part.delta":
           return this.processMessagePartDelta(raw)
+        case "session.text.delta":
         case "session.next.text.delta":
-          return this.processSessionNextTextDelta(raw)
+          return this.processSessionTextDelta(raw)
+        case "session.text.ended":
+          return null
+        case "session.tool.called":
+          return this.processSessionToolCalled(raw)
+        case "session.tool.success":
+        case "session.tool.failed":
+          return this.processSessionToolFinished(raw)
+        case "session.tool.progress":
+          return null
         case "session.status":
           return this.processSessionStatus(raw)
         case "session.idle":
@@ -309,7 +328,7 @@ export class EventProcessor {
     return { type: "TextDelta", sessionId, text: delta }
   }
 
-  private processSessionNextTextDelta(event: any): TextDelta | null {
+  private processSessionTextDelta(event: any): TextDelta | null {
     const props = eventPayload(event)
     if (!props) return null
     const sessionId = props.sessionID
@@ -318,6 +337,46 @@ export class EventProcessor {
     const delta = props.delta
     if (typeof delta !== "string" || delta.length === 0) return null
     return { type: "TextDelta", sessionId, text: delta }
+  }
+
+  private processSessionToolCalled(event: any): ToolStateChange | null {
+    const props = eventPayload(event)
+    if (!props) return null
+    const sessionId = props.sessionID
+    if (typeof sessionId !== "string") return null
+    if (!this.ownedSessions.has(sessionId)) return null
+    const callID = props.callID
+    const toolName = props.tool
+    if (typeof toolName !== "string") return null
+    if (typeof callID === "string") this.toolNamesByCallId.set(callID, toolName)
+    const input = props.input
+    return {
+      type: "ToolStateChange",
+      sessionId,
+      toolName,
+      state: "running",
+      ...(isObject(input) ? { input: input as Record<string, unknown> } : {}),
+    }
+  }
+
+  private processSessionToolFinished(event: any): ToolStateChange | null {
+    const props = eventPayload(event)
+    if (!props) return null
+    const sessionId = props.sessionID
+    if (typeof sessionId !== "string") return null
+    if (!this.ownedSessions.has(sessionId)) return null
+    const callID = props.callID
+    const toolName =
+      (typeof callID === "string" ? this.toolNamesByCallId.get(callID) : undefined) ?? "tool"
+    const failed = (event as { type?: string })?.type === "session.tool.failed"
+    const error = props.error
+    return {
+      type: "ToolStateChange",
+      sessionId,
+      toolName,
+      state: failed ? "error" : "completed",
+      ...(failed && typeof error === "string" ? { error } : {}),
+    }
   }
 
   private processTextPart(

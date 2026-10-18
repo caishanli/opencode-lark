@@ -93,7 +93,9 @@ export function createSessionManager(
     const cwd = getWorkingDirectory()
 
     try {
-      const sessions = await opencode.listSessions({ directory: cwd })
+      // v2 dropped the v1 `roots=true` flag; `parentID=null` returns only root sessions
+      // (without it, child/sub-agent sessions can be returned and bound by mistake).
+      const sessions = await opencode.listSessions({ directory: cwd, parentID: "null" })
       const candidate = sessions[0] ?? null
       if (!candidate) return null
 

@@ -292,10 +292,11 @@ async function main(): Promise<void> {
   // ═══════════════════════════════════════════
   logger.info("Phase 5: Subscribing to opencode events...")
 
+  const sseAbort = new AbortController()
   ;(async () => {
     try {
       logger.info("SSE event stream connected")
-      for await (const event of gateway.subscribeEvents()) {
+      for await (const event of gateway.subscribeEvents(sseAbort.signal)) {
         const eventType = event?.type
         const payload = eventPayload(event)
         const sessionID =
@@ -412,6 +413,7 @@ async function main(): Promise<void> {
     return async () => {
       logger.info(`${signal} received, shutting down...`)
       abortController.abort()
+      sseAbort.abort()
       await channelManager.stopAll()
       await webhookServer.close()
       cronService?.stop()

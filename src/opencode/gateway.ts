@@ -102,6 +102,16 @@ export function createOpencodeGateway(options: OpencodeGatewayOptions): Opencode
   const dir = () => options.directory ?? process.cwd()
   let warnedQuestion = false
 
+  const httpStatus = (res: any): number | undefined => res?.response?.status
+
+  const errorText = (res: any, label: string): string => {
+    const tag = res?.error?._tag ?? res?.error?.name
+    const msg = res?.error?.message ?? (typeof res?.error === "string" ? res.error : undefined)
+    const status = httpStatus(res)
+    const parts = [label, status ? `HTTP ${status}` : undefined, tag, msg].filter(Boolean)
+    return parts.join(": ")
+  }
+
   const unwrap = (res: any): any => {
     if (!res) return null
     if (res.error) return null
@@ -174,6 +184,7 @@ export function createOpencodeGateway(options: OpencodeGatewayOptions): Opencode
 
     async listPermissions() {
       const res = await client.v2.permission.request.list({ location: { directory: dir() } })
+      if (res?.error) throw new Error(errorText(res, "listPermissions failed"))
       const body = res?.data ?? {}
       return Array.isArray(body.data) ? (body.data as PermissionRequest[]) : []
     },
@@ -189,6 +200,9 @@ export function createOpencodeGateway(options: OpencodeGatewayOptions): Opencode
     async listQuestions() {
       const res = await client.v2.question.request.list({ location: { directory: dir() } })
       if (res?.error) {
+        // 404 => this server has no question endpoint; degrade silently.
+        // Anything else (401/500/...) is a real failure callers must see.
+        if (httpStatus(res) !== 404) throw new Error(errorText(res, "listQuestions failed"))
         if (!warnedQuestion) {
           warnedQuestion = true
           options.logger?.warn?.("question endpoint unavailable (404); question cards disabled")
@@ -221,7 +235,14 @@ export function createOpencodeGateway(options: OpencodeGatewayOptions): Opencode
     },
 
     async ping() {
-      await client.v2.session.active()
+      const res = await client.v2.session.active()
+      if (res?.error) {
+        // The SDK does not throw on 4xx, so surface auth/health failures explicitly.
+        // 401 => wrong or missing OPENCODE_SERVER_PASSWORD (callers must not retry).
+        const status = httpStatus(res)
+        const hint = status === 401 ? " (check OPENCODE_SERVER_PASSWORD)" : ""
+        throw new Error(`${errorText(res, "opencode health check failed")}${hint}`)
+      }
     },
   }
 
