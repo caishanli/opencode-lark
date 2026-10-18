@@ -5,7 +5,7 @@
 
 import * as fs from "node:fs"
 import * as path from "node:path"
-import { z } from "zod"
+import * as z from "zod"
 
 const FeishuConfigSchema = z.object({
   appId: z.string().min(1),
@@ -37,6 +37,13 @@ const HeartbeatConfigSchema = z.object({
   statusChatId: z.string().optional(),
 })
 
+const OpencodeConfigSchema = z.object({
+  url: z.string().default("http://127.0.0.1:4096"),
+  username: z.string().default("opencode"),
+  password: z.string().default(""),
+  cwd: z.string().default(""),
+})
+
 const AppConfigSchema = z.object({
   feishu: FeishuConfigSchema,
   defaultAgent: z.string().default("build"),
@@ -45,6 +52,7 @@ const AppConfigSchema = z.object({
   cron: CronConfigSchema.optional(),
   heartbeat: HeartbeatConfigSchema.optional(),
   messageDebounceMs: z.number().int().min(0).optional().default(10000),
+  opencode: OpencodeConfigSchema.optional(),
 })
 
 export type AppConfig = z.infer<typeof AppConfigSchema>
@@ -59,11 +67,38 @@ function interpolateEnvVars(text: string): string {
   })
 }
 
-/** Strip JSONC comments (// and /* *​/) for JSON.parse */
+/** Strip JSONC comments for JSON.parse; string-aware so URLs in strings survive */
 function stripJsoncComments(text: string): string {
-  return text
-    .replace(/\/\/.*$/gm, "")
-    .replace(/\/\*[\s\S]*?\*\//g, "")
+  let result = ""
+  let i = 0
+  const n = text.length
+  let inString = false
+  let escape = false
+  while (i < n) {
+    const c = text[i]!
+    if (inString) {
+      result += c
+      if (escape) escape = false
+      else if (c === "\\") escape = true
+      else if (c === '"') inString = false
+      i++
+      continue
+    }
+    if (c === '"') { inString = true; result += c; i++; continue }
+    if (c === "/" && text[i + 1] === "/") {
+      while (i < n && text[i] !== "\n") i++
+      continue
+    }
+    if (c === "/" && text[i + 1] === "*") {
+      i += 2
+      while (i < n && !(text[i] === "*" && text[i + 1] === "/")) i++
+      i += 2
+      continue
+    }
+    result += c
+    i++
+  }
+  return result
 }
 
 export async function loadConfig(configPath?: string): Promise<AppConfig> {
@@ -96,6 +131,12 @@ export async function loadConfig(configPath?: string): Promise<AppConfig> {
       },
       defaultAgent: "build",
       dataDir: "./data",
+      opencode: {
+        url: process.env["OPENCODE_SERVER_URL"] ?? "http://127.0.0.1:4096",
+        username: process.env["OPENCODE_SERVER_USERNAME"] ?? "opencode",
+        password: process.env["OPENCODE_SERVER_PASSWORD"] ?? "",
+        cwd: process.env["OPENCODE_CWD"] ?? "",
+      },
     })
   }
 
