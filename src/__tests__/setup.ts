@@ -62,6 +62,13 @@ export function createMockGateway(overrides: Record<string, unknown> = {}): any 
 }
 
 /**
+ * Creates a mock fetch function that can be configured per test.
+ */
+export function createMockFetch() {
+  return vi.fn()
+}
+
+/**
  * Creates a mock FeishuApiClient with all methods stubbed as vi.fn()
  */
 export function createMockFeishuClient(): FeishuApiClient {
