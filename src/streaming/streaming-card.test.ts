@@ -291,3 +291,41 @@ describe("StreamingCardSession", () => {
     })
   })
 })
+
+describe("StreamingCardSession — agent text in the card (regression)", () => {
+  it("setText() pushes the streamed text into the card content", async () => {
+    const { session, cardkitClient } = createStartedSession()
+    await session.start()
+    await session.setText("Hello")
+    const last = cardkitClient.updateElement.mock.calls.at(-1)!
+    expect(last[2]).toContain("Hello")
+  })
+
+  it("setText() accumulates with the latest full text", async () => {
+    const { session, cardkitClient } = createStartedSession()
+    await session.start()
+    await session.setText("Hello")
+    await session.setText("Hello world")
+    const last = cardkitClient.updateElement.mock.calls.at(-1)!
+    expect(last[2]).toContain("Hello world")
+  })
+
+  it("keeps tool statuses visible alongside the text", async () => {
+    const { session, cardkitClient } = createStartedSession()
+    await session.start()
+    await session.setText("the answer")
+    await session.setToolStatus("bash", "completed")
+    const last = cardkitClient.updateElement.mock.calls.at(-1)!
+    expect(last[2]).toContain("the answer")
+    expect(last[2]).toContain("bash")
+  })
+
+  it("close() with no argument still shows the accumulated streamed text", async () => {
+    const { session, cardkitClient } = createStartedSession()
+    await session.start()
+    await session.setText("streamed answer")
+    await session.close()
+    const last = cardkitClient.updateElement.mock.calls.at(-1)!
+    expect(last[2]).toContain("streamed answer")
+  })
+})

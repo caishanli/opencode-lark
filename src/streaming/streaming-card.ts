@@ -43,6 +43,7 @@ export class StreamingCardSession {
 
   private toolStatuses: ToolStatus[] = []
   private subtaskButtons: SubtaskButton[] = []
+  private text = ""
 
   constructor(options: StreamingCardOptions) {
     this.cardkitClient = options.cardkitClient
@@ -92,6 +93,18 @@ export class StreamingCardSession {
   }
 
 
+  /**
+   * Replace the streamed agent text shown on the card.
+   * The caller is responsible for throttling; the card serializes updates.
+   */
+  async setText(text: string): Promise<void> {
+    if (!this.state || this.closed) {
+      return
+    }
+    this.text = text
+    await this.enqueueUpdate(this.buildFullContent())
+  }
+
   async setToolStatus(name: string, state: "running" | "completed" | "error", title?: string): Promise<void> {
     if (!this.state || this.closed) {
       return
@@ -128,8 +141,10 @@ export class StreamingCardSession {
     }
     this.closed = true
     await this.queue
-    // Final content: use finalText override, tool status content, or "Done" fallback
-    const text = finalText ?? (this.toolStatuses.length > 0 ? this.buildFullContent() : "✅ Done")
+    if (finalText !== undefined) this.text = finalText
+    // Final content: streamed/final text first, then tool statuses and buttons.
+    let text = this.buildFullContent()
+    if (text === "🛠️ Processing...") text = "✅ Done"
     // Only send final update if content differs from what was last sent
     if (text && text !== this.lastSentContent) {
       this.state.sequence += 1
@@ -197,6 +212,10 @@ export class StreamingCardSession {
   private buildFullContent(): string {
     const toolText = this.buildToolStatusText()
     const buttonText = this.buildButtonsText()
-    return toolText + buttonText || "🛠️ Processing..."
+    const suffix = toolText + buttonText
+    if (this.text) {
+      return suffix ? this.text + suffix : this.text
+    }
+    return suffix || "🛠️ Processing..."
   }
 }

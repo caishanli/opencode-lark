@@ -204,18 +204,10 @@ describe("E2E Smoke Tests", () => {
 
     await handlerPromise
 
-    // With lazy card creation, card is only created when a ToolStateChange event arrives.
-    // Since this test only sends text deltas, no card is created.
-    expect(feishuClient.replyMessage).toHaveBeenCalledWith(
-      "msg-e2e-1",
-      expect.objectContaining({ msg_type: "interactive" }),
-    )
-
-    const replyArgs = (feishuClient.replyMessage as any).mock.calls[0]
-    const card = JSON.parse(replyArgs?.[1]?.content as string)
-    expect(card.elements?.[0]?.content).toBe("Hello World!")
-
-    // With lazy card creation, card was never created (no tool events), so no close needed
+    // The reply is streamed into the card as it arrives; no separate final card is posted.
+    const lastUpdate = cardkitClient.updateElement.mock.calls.at(-1)
+    expect(String(lastUpdate?.[2])).toContain("Hello World!")
+    expect(feishuClient.replyMessage).not.toHaveBeenCalled()
 
     // Verify listener was cleaned up
     expect(eventListeners.size).toBe(0)

@@ -86,18 +86,42 @@ export function createStreamingBridge(
         let gotFirstEvent = false
         let settled = false
         let syncResponseBody = ""
+        const clearReaction = async (): Promise<void> => {
+          if (!reactionId) return
+          try {
+            await feishuClient.deleteReaction(messageId, reactionId)
+          } catch (err) {
+            logger.warn(`deleteReaction failed: ${err}`)
+          }
+        }
         const sendFinalResponse = async (text: string): Promise<void> => {
           const card = buildFinalResponseCard(text)
           await feishuClient.replyMessage(messageId, {
             msg_type: "interactive",
             content: JSON.stringify(card),
           })
-          if (reactionId) {
-            try {
-              await feishuClient.deleteReaction(messageId, reactionId)
-            } catch (err) {
-              logger.warn(`deleteReaction failed: ${err}`)
-            }
+          await clearReaction()
+        }
+
+        const TEXT_PUSH_INTERVAL_MS = 350
+        let lastTextPush = 0
+        let textPushTimer: ReturnType<typeof setTimeout> | null = null
+
+        /** Push the accumulated agent text onto the card, throttled to avoid rate limits. */
+        const pushText = (force = false): void => {
+          if (!card || !cardStartPromise) return
+          const flush = () => {
+            textPushTimer = null
+            lastTextPush = Date.now()
+            cardStartPromise!
+              .then(() => card!.setText(textBuffer))
+              .catch((err) => logger.warn(`card.setText failed: ${err}`))
+          }
+          const elapsed = Date.now() - lastTextPush
+          if (force || elapsed >= TEXT_PUSH_INTERVAL_MS) {
+            flush()
+          } else if (!textPushTimer) {
+            textPushTimer = setTimeout(flush, TEXT_PUSH_INTERVAL_MS - elapsed)
           }
         }
 
@@ -115,6 +139,9 @@ export function createStreamingBridge(
               if (textBuffer.length > 102_400) {
                 textBuffer = textBuffer.slice(0, 102_400) + "\n\n…(内容过长，已截断)"
               }
+              // Show the reply as it is generated (throttled).
+              ensureCard()
+              pushText()
               break
             }
 
@@ -229,15 +256,22 @@ export function createStreamingBridge(
               clearTimeout(firstEventTimer)
               removeListener(eventListeners, sessionId, myListener)
               const responseText = textBuffer.trim() || "（无回复）"
+              const hadCard = card !== null
               const closeCard = card
-                ? (cardStartPromise ?? Promise.resolve()).then(() => card!.close())
+                ? (cardStartPromise ?? Promise.resolve()).then(() => card!.close(responseText))
                 : Promise.resolve()
               closeCard
                 .then(async () => {
-                  try {
-                    await sendFinalResponse(responseText)
-                  } catch (err) {
-                    logger.warn(`sendFinalResponse failed: ${err}`)
+                  // The answer is already on the streaming card; only post a separate
+                  // reply card when there was no streaming card at all.
+                  if (hadCard) {
+                    await clearReaction()
+                  } else {
+                    try {
+                      await sendFinalResponse(responseText)
+                    } catch (err) {
+                      logger.warn(`sendFinalResponse failed: ${err}`)
+                    }
                   }
                   if (deps.outboundMedia) {
                     try {
@@ -282,16 +316,21 @@ export function createStreamingBridge(
             `No SSE events received within ${FIRST_EVENT_TIMEOUT_MS}ms for ${sessionId}, falling back to sync response`,
           )
           const fallbackText = parseSyncResponse(syncResponseBody, logger)
+          const hadCard = card !== null
           try {
             if (card) await card.close(fallbackText)
           } catch (err) {
             logger.warn(`card.close() in timeout fallback failed: ${err}`)
           }
-          // Send fallback text as reply
-          try {
-            await sendFinalResponse(fallbackText)
-          } catch (err) {
-            logger.warn(`sendFinalResponse in timeout fallback failed: ${err}`)
+          // Send fallback text as a reply only when there was no streaming card.
+          if (!hadCard) {
+            try {
+              await sendFinalResponse(fallbackText)
+            } catch (err) {
+              logger.warn(`sendFinalResponse in timeout fallback failed: ${err}`)
+            }
+          } else {
+            await clearReaction()
           }
           if (deps.outboundMedia) {
             try {
