@@ -6,6 +6,7 @@
 
 import type { CardKitClient, CardKitSchema } from "../feishu/cardkit-client.js"
 import type { FeishuApiClient } from "../feishu/api-client.js"
+import { toFeishuMarkdown } from "../feishu/markdown.js"
 
 export interface StreamingCardOptions {
   cardkitClient: CardKitClient
@@ -233,7 +234,9 @@ export class StreamingCardSession {
     const buttonText = this.buildButtonsText()
     const suffix = toolText + buttonText
     if (this.text) {
-      return suffix ? this.text + suffix : this.text
+      // Agent output is Markdown; Feishu cards cannot render tables/headings.
+      const body = toFeishuMarkdown(this.text)
+      return suffix ? body + suffix : body
     }
     return suffix || "🛠️ Processing..."
   }

@@ -8,6 +8,7 @@ import type { QuestionAsked, PermissionRequested } from "../streaming/event-proc
 import type { EventListenerMap } from "../utils/event-listeners.js"
 import { addListener, removeListener } from "../utils/event-listeners.js"
 import { StreamingCardSession } from "../streaming/streaming-card.js"
+import { toFeishuMarkdown } from "../feishu/markdown.js"
 import type { OutboundMediaHandler } from "./outbound-media.js"
 import type { ExpiringSet } from "../utils/expiring-set.js"
 import type { InteractiveCardRegistry } from "../feishu/interactive-card-registry.js"
@@ -403,7 +404,7 @@ export function buildFinalResponseCard(text: string): Record<string, unknown> {
     elements: [
       {
         tag: "markdown",
-        content: text,
+        content: toFeishuMarkdown(text),
       },
     ],
   }
