@@ -77,6 +77,17 @@ export interface TokenUsage {
   }
 }
 
+/**
+ * A model call (one "step") starting or ending. The span between the two is
+ * the time actually spent talking to the LLM — tool time between steps is
+ * not part of it.
+ */
+export interface ModelCall {
+  readonly type: "ModelCall"
+  readonly sessionId: string
+  readonly phase: "started" | "ended"
+}
+
 export type ProcessedAction =
   | TextDelta
   | ToolStateChange
@@ -85,6 +96,7 @@ export type ProcessedAction =
   | QuestionAsked
   | PermissionRequested
   | TokenUsage
+  | ModelCall
 
 // ---------------------------------------------------------------------------
 // Input event shapes (from actual opencode SSE stream)
@@ -235,6 +247,8 @@ const KNOWN_TYPES = new Set([
   "session.status",
   "session.idle",
   "session.usage.updated",
+  "session.step.started",
+  "session.step.ended",
   "question.asked",
   "question.v2.asked",
   "permission.asked",
@@ -299,6 +313,10 @@ export class EventProcessor {
           return this.processSessionIdle(raw)
         case "session.usage.updated":
           return this.processSessionUsage(raw)
+        case "session.step.started":
+          return this.processModelCall(raw, "started")
+        case "session.step.ended":
+          return this.processModelCall(raw, "ended")
         case "session.execution.succeeded":
         case "session.execution.failed":
         case "session.execution.interrupted":
@@ -537,6 +555,15 @@ export class EventProcessor {
       default:
         return null
     }
+  }
+
+  private processModelCall(event: any, phase: "started" | "ended"): ModelCall | null {
+    const props = eventPayload(event)
+    if (!props) return null
+    const sessionId = props.sessionID
+    if (typeof sessionId !== "string") return null
+    if (!this.ownedSessions.has(sessionId)) return null
+    return { type: "ModelCall", sessionId, phase }
   }
 
   private processSessionUsage(event: any): TokenUsage | null {

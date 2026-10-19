@@ -77,6 +77,10 @@ export function createStreamingBridge(
      *  cumulatively for the whole session, so the turn's own usage is the
      *  difference between the end-of-turn total and this baseline. */
     let usageBaseline = { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
+    /** Time actually spent in model calls (step.started -> step.ended). Tool
+     *  time between steps is NOT part of it. */
+    let llmMs = 0
+    let stepStartedAt = 0
 
     const ensureCard = (): void => {
       if (card || cardStartPromise) return
@@ -173,6 +177,16 @@ export function createStreamingBridge(
             break
           }
 
+          case "ModelCall": {
+            if (action.phase === "started") {
+              stepStartedAt = Date.now()
+            } else if (stepStartedAt) {
+              llmMs += Date.now() - stepStartedAt
+              stepStartedAt = 0
+            }
+            break
+          }
+
           case "TokenUsage": {
             // opencode reports the session's CUMULATIVE usage, so take the delta
             // against the baseline captured before this turn.
@@ -194,15 +208,23 @@ export function createStreamingBridge(
             // generation speed.
             const generated = (delta.output ?? 0) + (delta.reasoning ?? 0)
             const context = (delta.input ?? 0) + (delta.cache.read ?? 0)
-            const elapsed = (Date.now() - turnStartedAt) / 1000
-            const rate = elapsed > 0 ? generated / elapsed : 0
+            const turnMs = Date.now() - turnStartedAt
+            // The rate is per second of MODEL time. If no step events were seen
+            // (older server), fall back to the whole turn.
+            const modelMs = llmMs > 0 ? llmMs : turnMs
+            const rate = modelMs > 0 ? generated / (modelMs / 1000) : 0
             const hit = Math.round(cacheHitRate(delta) * 100)
             const cost = action.cost !== undefined && action.cost > 0 ? ` · $${action.cost.toFixed(4)}` : ""
             const contextPart = context > 0 ? ` · 上下文 ${formatTokens(context)}` : ""
             const cachePart = delta.cache.read > 0 ? ` · 缓存 ${hit}%` : ""
+            const timePart = llmMs > 0 ? ` · LLM ${(llmMs / 1000).toFixed(1)}s` : ""
+            logger.info(
+              `Turn usage: generated=${generated} context=${context} cacheHit=${hit}% ` +
+              `model=${(modelMs / 1000).toFixed(1)}s totalTurn=${(turnMs / 1000).toFixed(1)}s`,
+            )
             writeToCard((c) =>
               void c.setUsage(
-                `${formatTokens(generated)} tokens · ${formatRate(rate)} tok/s${contextPart}${cachePart}${cost}`,
+                `${formatTokens(generated)} tokens · ${formatRate(rate)} tok/s${timePart}${contextPart}${cachePart}${cost}`,
               ),
             )
             break

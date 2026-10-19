@@ -744,6 +744,48 @@ describe("createStreamingBridge", () => {
     expect(content).not.toContain("4.0k")
   })
 
+  it("times the rate against model time (step span), not the whole turn", async () => {
+    const mockFeishu = {
+      ...createMockFeishuClient(),
+      sendMessage: vi.fn().mockResolvedValue({ code: 0, data: { message_id: "msg_456" } }),
+      replyMessage: vi.fn().mockResolvedValue({ code: 0 }),
+    }
+    const deps = makeDeps({ feishuClient: mockFeishu })
+    const bridge = createStreamingBridge(deps)
+
+    const handlePromise = bridge.handleMessage(
+      "chat-1", "ses-1", eventListeners, eventProcessor, mockSendMessage, vi.fn(), "msg_original", null,
+    )
+    await waitFor(() => {
+      expect(eventListeners.size).toBe(1)
+    })
+
+    const emit = (ev: unknown) => {
+      ;[...eventListeners.get("ses-1")!].forEach((fn) => fn(ev))
+    }
+
+    emit({ type: "session.text.delta", data: { sessionID: "ses-1", assistantMessageID: "m-1", delta: "hello" } })
+    // one model call
+    emit({ type: "session.step.started", data: { sessionID: "ses-1", assistantMessageID: "m-1" } })
+    await new Promise((r) => setTimeout(r, 25))
+    emit({ type: "session.step.ended", data: { sessionID: "ses-1", assistantMessageID: "m-1" } })
+    // ...and time spent outside the model call (tool time) must not count
+    await new Promise((r) => setTimeout(r, 60))
+    emit({
+      type: "session.usage.updated",
+      data: { sessionID: "ses-1", tokens: { input: 10, output: 100, reasoning: 0, cache: { read: 0, write: 0 } } },
+    })
+    emit({ type: "session.execution.succeeded", data: { sessionID: "ses-1" } })
+
+    await handlePromise
+
+    const content = cardContent(mockFeishu)
+    // the LLM-time part is present because step events were seen
+    expect(content).toMatch(/LLM [\d.]+s/)
+    expect(content).toContain("100 tokens")
+    expect(content).toContain("tok/s")
+  })
+
   it("serialises turns per chat: a second message waits for the first to finish", async () => {
     const deps = makeDeps()
     const bridge = createStreamingBridge(deps)
