@@ -194,6 +194,7 @@ async function main(): Promise<void> {
   })
 
   const streamingBridge = createStreamingBridge({
+    opencode: gateway,
     feishuClient,
     subAgentTracker,
     logger,

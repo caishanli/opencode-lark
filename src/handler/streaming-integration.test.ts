@@ -693,6 +693,52 @@ describe("createStreamingBridge", () => {
     expect(content).toContain("缓存 3.0k (75%)")
   })
 
+  it("reports the turn's usage delta, not the session's cumulative total", async () => {
+    const mockFeishu = {
+      ...createMockFeishuClient(),
+      sendMessage: vi.fn().mockResolvedValue({ code: 0, data: { message_id: "msg_456" } }),
+      replyMessage: vi.fn().mockResolvedValue({ code: 0 }),
+    }
+    // The session already used a lot before this turn started.
+    const opencode = {
+      getSession: vi.fn().mockResolvedValue({
+        tokens: { input: 900, output: 90, reasoning: 0, cache: { read: 2900, write: 0 } },
+      }),
+    }
+    const deps = makeDeps({ feishuClient: mockFeishu, opencode } as any)
+    const bridge = createStreamingBridge(deps)
+
+    const handlePromise = bridge.handleMessage(
+      "chat-1", "ses-1", eventListeners, eventProcessor, mockSendMessage, vi.fn(), "msg_original", null,
+    )
+    await waitFor(() => {
+      expect(eventListeners.size).toBe(1)
+    })
+
+    const emit = (ev: unknown) => {
+      ;[...eventListeners.get("ses-1")!].forEach((fn) => fn(ev))
+    }
+
+    emit({ type: "session.text.delta", data: { sessionID: "ses-1", assistantMessageID: "m-1", delta: "hello" } })
+    // Cumulative usage at the END of the turn (baseline was 900/90/2900).
+    emit({
+      type: "session.usage.updated",
+      data: {
+        sessionID: "ses-1",
+        tokens: { input: 1000, output: 100, reasoning: 0, cache: { read: 3000, write: 0 } },
+      },
+    })
+    emit({ type: "session.execution.succeeded", data: { sessionID: "ses-1" } })
+
+    await handlePromise
+
+    const content = cardContent(mockFeishu)
+    // delta = 100 input + 10 output + 100 cache = 210, not the cumulative 4.1k
+    expect(content).toContain("210 tokens")
+    expect(content).not.toContain("4.1k tokens")
+    expect(content).toContain("缓存 100 (50%)")
+  })
+
   it("serialises turns per chat: a second message waits for the first to finish", async () => {
     const deps = makeDeps()
     const bridge = createStreamingBridge(deps)

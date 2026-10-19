@@ -9,6 +9,7 @@ import { addListener, removeListener } from "../utils/event-listeners.js"
 import { StreamingCardSession } from "../streaming/streaming-card.js"
 import { toFeishuMarkdown } from "../feishu/markdown.js"
 import { cacheHitRate, formatRate, formatTokens, totalTokens } from "../streaming/usage.js"
+import type { OpencodeGateway } from "../opencode/gateway.js"
 import type { OutboundMediaHandler } from "./outbound-media.js"
 import type { ExpiringSet } from "../utils/expiring-set.js"
 import type { InteractiveCardRegistry } from "../feishu/interactive-card-registry.js"
@@ -20,6 +21,9 @@ import {
 // ── Types ──
 
 export interface StreamingBridgeDeps {
+  /** Used to read the session's cumulative usage before the turn, so the turn's
+   *  own usage delta can be computed. */
+  opencode?: OpencodeGateway
   feishuClient: FeishuApiClient
   subAgentTracker: SubAgentTracker
   logger: Logger
@@ -69,6 +73,10 @@ export function createStreamingBridge(
     let cardStartPromise: Promise<void> | null = null
     /** When this turn started, for the token rate. */
     let turnStartedAt = 0
+    /** The session's cumulative usage before this turn. opencode reports usage
+     *  cumulatively for the whole session, so the turn's own usage is the
+     *  difference between the end-of-turn total and this baseline. */
+    let usageBaseline = { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
 
     const ensureCard = (): void => {
       if (card || cardStartPromise) return
@@ -166,12 +174,24 @@ export function createStreamingBridge(
           }
 
           case "TokenUsage": {
-            // The server reports the exact usage once, at the end of the turn.
-            const total = totalTokens(action.tokens)
+            // opencode reports the session's CUMULATIVE usage, so take the delta
+            // against the baseline captured before this turn.
+            const now = action.tokens
+            const base = usageBaseline
+            const delta = {
+              input: Math.max(0, (now.input ?? 0) - (base.input ?? 0)),
+              output: Math.max(0, (now.output ?? 0) - (base.output ?? 0)),
+              reasoning: Math.max(0, (now.reasoning ?? 0) - (base.reasoning ?? 0)),
+              cache: {
+                read: Math.max(0, (now.cache?.read ?? 0) - (base.cache?.read ?? 0)),
+                write: Math.max(0, (now.cache?.write ?? 0) - (base.cache?.write ?? 0)),
+              },
+            }
+            const total = totalTokens(delta)
             const elapsed = (Date.now() - turnStartedAt) / 1000
             const rate = elapsed > 0 ? total / elapsed : 0
-            const cached = action.tokens.cache?.read ?? 0
-            const hit = cacheHitRate(action.tokens)
+            const cached = delta.cache.read
+            const hit = cacheHitRate(delta)
             const cost = action.cost !== undefined && action.cost > 0 ? ` · $${action.cost.toFixed(4)}` : ""
             const cachePart = cached > 0 ? ` · 缓存 ${formatTokens(cached)} (${Math.round(hit * 100)}%)` : ""
             writeToCard((c) =>
@@ -395,7 +415,17 @@ export function createStreamingBridge(
       addListener(eventListeners, sessionId, myListener)
 
 
-      sendMessage()
+      // Capture the session's cumulative usage BEFORE the turn starts, so the
+      // turn's own usage can be derived from the end-of-turn report.
+      void (async () => {
+        try {
+          const snapshot = await deps.opencode?.getSession(sessionId)
+          const t = (snapshot as unknown as { tokens?: typeof usageBaseline })?.tokens
+          if (t) usageBaseline = { ...t, cache: { ...t.cache } }
+        } catch {
+          // No baseline -> the usage line falls back to the raw totals.
+        }
+        sendMessage()
         .then((responseBody) => {
           syncResponseBody = responseBody
           logger.info(
@@ -416,6 +446,7 @@ export function createStreamingBridge(
           if (card) card.close().catch(() => {})
           reject(err)
         })
+        })()
     })
   }
 
