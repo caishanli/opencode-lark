@@ -558,54 +558,63 @@ describe("EventProcessor — real v2.0.29 event names", () => {
     expect(proc.processEvent({ type: "session.text.delta", data: { sessionID: "ses-1", delta: "x" } })).toBeNull()
   })
 
-  it("maps session.tool.called to a running ToolStateChange", () => {
+  // Payload shapes below are copied verbatim from a live capture on v2.0.29.
+  const liveInputStarted = (id: string, name: string) => ({
+    type: "session.tool.input.started",
+    data: { sessionID: "ses-1", assistantMessageID: "msg-1", id, name },
+  })
+  const liveCalled = (id: string, input: Record<string, unknown> = {}) => ({
+    type: "session.tool.called",
+    data: { sessionID: "ses-1", assistantMessageID: "msg-1", id, input, executed: false },
+  })
+
+  it("maps session.tool.called to a running ToolStateChange using the name from input.started", () => {
     const proc = makeProcessor()
-    const result = proc.processEvent({
-      type: "session.tool.called",
-      data: { sessionID: "ses-1", assistantMessageID: "msg-1", callID: "call-1", tool: "bash", input: { command: "ls" } },
-    })
+    proc.processEvent(liveInputStarted("call_1", "shell"))
+    const result = proc.processEvent(liveCalled("call_1", { command: "uname -a" }))
     expect(result).toMatchObject<ToolStateChange>({
       type: "ToolStateChange",
       sessionId: "ses-1",
-      toolName: "bash",
+      toolName: "shell",
       state: "running",
+      input: { command: "uname -a" },
     })
   })
 
-  it("maps session.tool.success to completed, remembering the tool name from called", () => {
+  it("maps session.tool.success to completed, remembering the tool name", () => {
     const proc = makeProcessor()
-    proc.processEvent({
-      type: "session.tool.called",
-      data: { sessionID: "ses-1", callID: "call-1", tool: "bash", input: {} },
-    })
-    const result = proc.processEvent({
-      type: "session.tool.success",
-      data: { sessionID: "ses-1", callID: "call-1" },
-    })
+    proc.processEvent(liveInputStarted("call_1", "shell"))
+    proc.processEvent(liveCalled("call_1"))
+    const result = proc.processEvent({ type: "session.tool.success", data: { sessionID: "ses-1", id: "call_1" } })
     expect(result).toMatchObject<ToolStateChange>({
       type: "ToolStateChange",
       sessionId: "ses-1",
-      toolName: "bash",
+      toolName: "shell",
       state: "completed",
     })
   })
 
   it("maps session.tool.failed to error", () => {
     const proc = makeProcessor()
-    proc.processEvent({
-      type: "session.tool.called",
-      data: { sessionID: "ses-1", callID: "call-9", tool: "read", input: {} },
-    })
-    const result = proc.processEvent({
-      type: "session.tool.failed",
-      data: { sessionID: "ses-1", callID: "call-9", error: "boom" },
-    })
+    proc.processEvent(liveInputStarted("call_9", "read"))
+    proc.processEvent(liveCalled("call_9"))
+    const result = proc.processEvent({ type: "session.tool.failed", data: { sessionID: "ses-1", id: "call_9", error: "boom" } })
     expect(result).toMatchObject<ToolStateChange>({
       type: "ToolStateChange",
       sessionId: "ses-1",
       toolName: "read",
       state: "error",
     })
+  })
+
+  it("distinguishes two different tools by their call id", () => {
+    const proc = makeProcessor()
+    proc.processEvent(liveInputStarted("call_a", "shell"))
+    proc.processEvent(liveInputStarted("call_b", "read"))
+    const a = proc.processEvent(liveCalled("call_a"))
+    const b = proc.processEvent(liveCalled("call_b"))
+    expect((a as ToolStateChange).toolName).toBe("shell")
+    expect((b as ToolStateChange).toolName).toBe("read")
   })
 })
 

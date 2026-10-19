@@ -188,6 +188,9 @@ const KNOWN_TYPES = new Set([
   "session.tool.success",
   "session.tool.failed",
   "session.tool.progress",
+  "session.tool.input.started",
+  "session.tool.input.delta",
+  "session.tool.input.ended",
   // v2 turn boundary — the server does NOT emit session.idle for a normal turn,
   // it ends with session.execution.{succeeded,failed,interrupted}
   "session.execution.started",
@@ -245,6 +248,12 @@ export class EventProcessor {
           return null
         case "session.tool.called":
           return this.processSessionToolCalled(raw)
+        case "session.tool.input.started":
+          this.rememberToolName(raw)
+          return null
+        case "session.tool.input.delta":
+        case "session.tool.input.ended":
+          return null
         case "session.tool.success":
         case "session.tool.failed":
           return this.processSessionToolFinished(raw)
@@ -351,16 +360,32 @@ export class EventProcessor {
     return { type: "TextDelta", sessionId, text: delta }
   }
 
+  /**
+   * `session.tool.input.started` carries the human-readable tool name
+   * (`data.name`); `session.tool.called` does NOT — it only has the call `id`.
+   */
+  private rememberToolName(event: any): void {
+    const props = eventPayload(event)
+    if (!props) return
+    const id = props.id ?? props.callID
+    const name = props.name ?? props.tool
+    if (typeof id === "string" && typeof name === "string") {
+      this.toolNamesByCallId.set(id, name)
+    }
+  }
+
   private processSessionToolCalled(event: any): ToolStateChange | null {
     const props = eventPayload(event)
     if (!props) return null
     const sessionId = props.sessionID
     if (typeof sessionId !== "string") return null
     if (!this.ownedSessions.has(sessionId)) return null
-    const callID = props.callID
-    const toolName = props.tool
-    if (typeof toolName !== "string") return null
-    if (typeof callID === "string") this.toolNamesByCallId.set(callID, toolName)
+    const id = props.id ?? props.callID
+    this.rememberToolName(event)
+    const toolName =
+      (typeof id === "string" ? this.toolNamesByCallId.get(id) : undefined) ??
+      (typeof props.name === "string" ? props.name : undefined) ??
+      "tool"
     const input = props.input
     return {
       type: "ToolStateChange",
@@ -377,9 +402,9 @@ export class EventProcessor {
     const sessionId = props.sessionID
     if (typeof sessionId !== "string") return null
     if (!this.ownedSessions.has(sessionId)) return null
-    const callID = props.callID
+    const id = props.id ?? props.callID
     const toolName =
-      (typeof callID === "string" ? this.toolNamesByCallId.get(callID) : undefined) ?? "tool"
+      (typeof id === "string" ? this.toolNamesByCallId.get(id) : undefined) ?? "tool"
     const failed = (event as { type?: string })?.type === "session.tool.failed"
     const error = props.error
     return {
