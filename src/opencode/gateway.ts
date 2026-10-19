@@ -73,7 +73,7 @@ export type OpencodeEvent = {
 export interface OpencodeGateway {
   listSessions(query?: { directory?: string; parentID?: string; limit?: number; search?: string }): Promise<SessionRef[]>
   getSession(sessionID: string): Promise<SessionRef | null>
-  createSession(body?: { title?: string; parentID?: string; agent?: string; directory?: string }): Promise<SessionRef>
+  createSession(body?: { title?: string; parentID?: string; agent?: string; directory?: string; model?: { providerID: string; id: string; variant?: string } }): Promise<SessionRef>
   children(parentSessionID: string): Promise<SessionRef[]>
   messages(sessionID: string, query?: { limit?: number; order?: "asc" | "desc"; type?: string }): Promise<any[]>
   sendPrompt(sessionID: string, input: PromptInput, opts?: { delivery?: "steer" | "queue" }): Promise<void>
@@ -146,6 +146,7 @@ export function createOpencodeGateway(options: OpencodeGatewayOptions): Opencode
     async createSession(body = {}) {
       const res = await client.v2.session.create({
         location: { directory: body.directory ?? options.directory ?? process.cwd() },
+        model: body.model,
         $body_title: body.title,
         $body_agent: body.agent,
         $body_parentID: body.parentID,

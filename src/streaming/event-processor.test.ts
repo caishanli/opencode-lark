@@ -608,3 +608,32 @@ describe("EventProcessor — real v2.0.29 event names", () => {
     })
   })
 })
+
+describe("EventProcessor — v2 turn-end signals (captured from live server)", () => {
+  it("treats session.execution.succeeded as SessionIdle (no session.idle is emitted)", () => {
+    const proc = makeProcessor()
+    const result = proc.processEvent({
+      type: "session.execution.succeeded",
+      data: { sessionID: "ses-1" },
+    })
+    expect(result).toEqual<SessionIdle>({ type: "SessionIdle", sessionId: "ses-1" })
+  })
+
+  it("treats session.execution.failed and .interrupted as SessionIdle", () => {
+    const proc = makeProcessor()
+    expect(proc.processEvent({ type: "session.execution.failed", data: { sessionID: "ses-1" } }))
+      .toEqual<SessionIdle>({ type: "SessionIdle", sessionId: "ses-1" })
+    expect(proc.processEvent({ type: "session.execution.interrupted", data: { sessionID: "ses-1" } }))
+      .toEqual<SessionIdle>({ type: "SessionIdle", sessionId: "ses-1" })
+  })
+
+  it("does not treat session.execution.started as idle", () => {
+    const proc = makeProcessor()
+    expect(proc.processEvent({ type: "session.execution.started", data: { sessionID: "ses-1" } })).toBeNull()
+  })
+
+  it("ignores turn-end events for unowned sessions", () => {
+    const proc = makeProcessor(["ses-other"])
+    expect(proc.processEvent({ type: "session.execution.succeeded", data: { sessionID: "ses-1" } })).toBeNull()
+  })
+})

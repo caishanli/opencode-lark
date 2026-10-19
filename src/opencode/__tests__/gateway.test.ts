@@ -144,3 +144,26 @@ describe("gateway: liveness/auth semantics", () => {
     await expect(gw401.listQuestions()).rejects.toThrow()
   })
 })
+
+describe("gateway: createSession model selection", () => {
+  it("sends the requested model in the create body", async () => {
+    const fetchImpl = makeFetch({ data: { id: "ses-1" } })
+    const gw = createOpencodeGateway({ baseUrl: "http://x", password: "pw", fetch: fetchImpl as any })
+    await gw.createSession({
+      title: "t",
+      directory: "/tmp",
+      model: { providerID: "command-code", id: "deepseek/deepseek-v4.1-flash" },
+    })
+    const body = JSON.parse(await (fetchImpl.mock.calls[0][0] as Request).text())
+    expect(body.model).toEqual({ providerID: "command-code", id: "deepseek/deepseek-v4.1-flash" })
+    expect(body.title).toBe("t")
+  })
+
+  it("omits model when not requested", async () => {
+    const fetchImpl = makeFetch({ data: { id: "ses-1" } })
+    const gw = createOpencodeGateway({ baseUrl: "http://x", password: "pw", fetch: fetchImpl as any })
+    await gw.createSession({ title: "t", directory: "/tmp" })
+    const body = JSON.parse(await (fetchImpl.mock.calls[0][0] as Request).text())
+    expect(body.model).toBeUndefined()
+  })
+})

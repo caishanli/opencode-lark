@@ -188,6 +188,12 @@ const KNOWN_TYPES = new Set([
   "session.tool.success",
   "session.tool.failed",
   "session.tool.progress",
+  // v2 turn boundary — the server does NOT emit session.idle for a normal turn,
+  // it ends with session.execution.{succeeded,failed,interrupted}
+  "session.execution.started",
+  "session.execution.succeeded",
+  "session.execution.failed",
+  "session.execution.interrupted",
   // SDK-declared names kept for forward/backward compatibility
   "session.next.text.delta",
   "session.status",
@@ -248,6 +254,12 @@ export class EventProcessor {
           return this.processSessionStatus(raw)
         case "session.idle":
           return this.processSessionIdle(raw)
+        case "session.execution.succeeded":
+        case "session.execution.failed":
+        case "session.execution.interrupted":
+          return this.processSessionIdle(raw)
+        case "session.execution.started":
+          return null
         case "question.asked":
         case "question.v2.asked":
           return this.processQuestionAsked(raw)
