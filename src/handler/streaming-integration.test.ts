@@ -654,6 +654,45 @@ describe("createStreamingBridge", () => {
     )
   })
 
+  it("puts the token usage, rate and cache hit rate on the card", async () => {
+    const mockFeishu = {
+      ...createMockFeishuClient(),
+      sendMessage: vi.fn().mockResolvedValue({ code: 0, data: { message_id: "msg_456" } }),
+      replyMessage: vi.fn().mockResolvedValue({ code: 0 }),
+    }
+    const deps = makeDeps({ feishuClient: mockFeishu })
+    const bridge = createStreamingBridge(deps)
+
+    const handlePromise = bridge.handleMessage(
+      "chat-1", "ses-1", eventListeners, eventProcessor, mockSendMessage, vi.fn(), "msg_original", null,
+    )
+    await waitFor(() => {
+      expect(eventListeners.size).toBe(1)
+    })
+
+    const emit = (ev: unknown) => {
+      ;[...eventListeners.get("ses-1")!].forEach((fn) => fn(ev))
+    }
+
+    emit({ type: "session.text.delta", data: { sessionID: "ses-1", assistantMessageID: "m-1", delta: "hello" } })
+    emit({
+      type: "session.usage.updated",
+      data: {
+        sessionID: "ses-1",
+        cost: 0.25,
+        tokens: { input: 1000, output: 100, reasoning: 0, cache: { read: 3000, write: 0 } },
+      },
+    })
+    emit({ type: "session.execution.succeeded", data: { sessionID: "ses-1" } })
+
+    await handlePromise
+
+    const content = cardContent(mockFeishu)
+    expect(content).toContain("4.1k tokens")
+    expect(content).toContain("tok/s")
+    expect(content).toContain("缓存 3.0k (75%)")
+  })
+
   it("serialises turns per chat: a second message waits for the first to finish", async () => {
     const deps = makeDeps()
     const bridge = createStreamingBridge(deps)

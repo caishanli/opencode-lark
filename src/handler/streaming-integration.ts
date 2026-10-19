@@ -67,6 +67,8 @@ export function createStreamingBridge(
   ): Promise<void> {
     let card: StreamingCardSession | null = null
     let cardStartPromise: Promise<void> | null = null
+    /** When this turn started, for the token rate. */
+    let turnStartedAt = 0
 
     const ensureCard = (): void => {
       if (card || cardStartPromise) return
@@ -103,6 +105,16 @@ export function createStreamingBridge(
         await clearReaction()
       }
 
+      /**
+       * The card only has a message id once start() resolved, so any card
+       * write has to wait for it — otherwise it is silently dropped.
+       */
+      const writeToCard = (fn: (c: StreamingCardSession) => void): void => {
+        if (!card) return
+        const started = cardStartPromise ?? Promise.resolve()
+        void started.then(() => fn(card!)).catch(() => {})
+      }
+
       const TEXT_PUSH_INTERVAL_MS = 350
       let lastTextPush = 0
       let textPushTimer: ReturnType<typeof setTimeout> | null = null
@@ -136,6 +148,7 @@ export function createStreamingBridge(
 
         switch (action.type) {
           case "TextDelta": {
+            if (!turnStartedAt) turnStartedAt = Date.now()
             textBuffer += action.text
             if (textBuffer.length > 102_400) {
               textBuffer = textBuffer.slice(0, 102_400) + "\n\n…(内容过长，已截断)"
@@ -143,6 +156,29 @@ export function createStreamingBridge(
             // Show the reply as it is generated (throttled).
             ensureCard()
             pushText()
+            // Live rate estimate from the generated text (~4 chars per token).
+            const elapsed = (Date.now() - turnStartedAt) / 1000
+            if (elapsed >= 1) {
+              const approx = Math.ceil(textBuffer.length / 4)
+              writeToCard((c) => void c.setUsage(`≈ ${formatRate(approx / elapsed)} tok/s`))
+            }
+            break
+          }
+
+          case "TokenUsage": {
+            // The server reports the exact usage once, at the end of the turn.
+            const total = totalTokens(action.tokens)
+            const elapsed = (Date.now() - turnStartedAt) / 1000
+            const rate = elapsed > 0 ? total / elapsed : 0
+            const cached = action.tokens.cache?.read ?? 0
+            const hit = cacheHitRate(action.tokens)
+            const cost = action.cost !== undefined && action.cost > 0 ? ` · $${action.cost.toFixed(4)}` : ""
+            const cachePart = cached > 0 ? ` · 缓存 ${formatTokens(cached)} (${Math.round(hit * 100)}%)` : ""
+            writeToCard((c) =>
+              void c.setUsage(
+                `${formatTokens(total)} tokens · ${formatRate(rate)} tok/s${cachePart}${cost}`,
+              ),
+            )
             break
           }
 
