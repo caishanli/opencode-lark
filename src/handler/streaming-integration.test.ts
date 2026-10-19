@@ -72,9 +72,21 @@ function createMockCardKitClient() {
   return {
     createCard: vi.fn().mockResolvedValue("card_123"),
     updateElement: vi.fn().mockResolvedValue(undefined),
+    appendElements: vi.fn().mockResolvedValue(undefined),
     closeStreaming: vi.fn().mockResolvedValue(undefined),
   } as unknown as CardKitClient
 }
+
+/** Everything the bridge wrote to the card: appended elements + element updates. */
+function cardContent(cardkitClient: any): string {
+  const parts: string[] = []
+  for (const c of cardkitClient.appendElements?.mock.calls ?? []) {
+    for (const el of c[1] ?? []) parts.push(String(el.content))
+  }
+  for (const c of cardkitClient.updateElement?.mock.calls ?? []) parts.push(String(c[2]))
+  return parts.join("\n")
+}
+
 
 function createMockSubAgentTracker() {
   return {
@@ -768,8 +780,7 @@ describe("createStreamingBridge", () => {
 
     // The reply now streams into the card instead of being posted as a separate card.
     expect(mockFeishu.replyMessage).not.toHaveBeenCalled()
-    const lastUpdate = cardkitClient.updateElement.mock.calls.at(-1)
-    expect(String(lastUpdate?.[2])).toContain("Hello World")
+    expect(cardContent(cardkitClient)).toContain("Hello World")
     expect(onComplete).toHaveBeenCalledWith("Hello World")
   })
 
@@ -893,8 +904,7 @@ describe("createStreamingBridge", () => {
 
     // The reply streams into the card, so no separate reply card is posted.
     expect(mockFeishu.replyMessage).not.toHaveBeenCalled()
-    const lastUpdate = cardkitClient.updateElement.mock.calls.at(-1)
-    const content = String(lastUpdate?.[2])
+    const content = cardContent(cardkitClient)
     expect(content).toContain("…(内容过长，已截断)")
     expect(content.length).toBeLessThan(110_000)
   })
@@ -956,8 +966,7 @@ describe("createStreamingBridge", () => {
 
     // Text now streams into the card rather than being posted as a separate reply.
     expect(mockFeishu.replyMessage).not.toHaveBeenCalled()
-    const lastUpdate = cardkitClient.updateElement.mock.calls.at(-1)
-    expect(String(lastUpdate?.[2])).toContain("Hello World")
+    expect(cardContent(cardkitClient)).toContain("Hello World")
     // deleteReaction called with correct args
     expect(mockFeishu.deleteReaction).toHaveBeenCalledWith("msg_original", "reaction_123")
   })
@@ -1010,8 +1019,7 @@ describe("createStreamingBridge", () => {
 
     // Text now streams into the card rather than being posted as a separate reply.
     expect(mockFeishu.replyMessage).not.toHaveBeenCalled()
-    const lastUpdate2 = cardkitClient.updateElement.mock.calls.at(-1)
-    expect(String(lastUpdate2?.[2])).toContain("Hello World")
+    expect(cardContent(cardkitClient)).toContain("Hello World")
     // deleteReaction called
     expect(mockFeishu.deleteReaction).toHaveBeenCalledWith("msg_original", "reaction_123")
   })

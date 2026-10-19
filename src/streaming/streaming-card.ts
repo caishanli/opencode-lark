@@ -1,7 +1,18 @@
 /**
  * High-level streaming card session manager.
- * Wraps CardKitClient with throttling, tool status, sub-agent buttons,
- * and full lifecycle management.
+ *
+ * The card is built out of independent elements:
+ *   - "head"     — a status line (what is running / the tool counts)
+ *   - one element per entry (a finished tool call, or a run of assistant text)
+ *
+ * Elements are only ever APPENDED, so the visual order is the chronological
+ * order of the events (like the opencode web UI) and updating one entry never
+ * forces the client to re-render the others.
+ *
+ * The entry format follows Hermes' reference implementation: a tool line is
+ * "<icon> <tool> · <preview>", where the preview is the tool's primary
+ * argument, single-lined and tail-truncated; consecutive identical lines are
+ * collapsed into "<line> (×N)".
  */
 
 import type { CardKitClient, CardKitSchema } from "../feishu/cardkit-client.js"
@@ -18,8 +29,27 @@ interface CardState {
   cardId: string
   messageId: string
   sequence: number
-  currentText: string
 }
+
+/** A finished tool call rendered as its own card element. */
+interface ToolEntry {
+  kind: "tool"
+  elementId: string
+  line: string
+  /** How many identical consecutive calls this line stands for. */
+  count: number
+}
+
+/** A run of assistant text rendered as its own card element. */
+interface TextEntry {
+  kind: "text"
+  elementId: string
+  /** Offset of this run inside the full assistant text. */
+  start: number
+  text: string
+}
+
+type Entry = ToolEntry | TextEntry
 
 interface ToolStatus {
   /** Unique per tool CALL, so two calls to the same tool get separate lines. */
@@ -27,13 +57,15 @@ interface ToolStatus {
   name: string
   state: "running" | "completed" | "error"
   title?: string
-  /** A line is only written to the card once the call is over. */
-  done: boolean
 }
 
-interface SubtaskButton {
-  label: string
-  actionValue: string
+/** Cards are limited to 200 elements; leave room for the head and the tail. */
+const MAX_ELEMENTS = 180
+
+const ICONS: Record<ToolStatus["state"], string> = {
+  running: "🔄",
+  completed: "✅",
+  error: "❌",
 }
 
 export class StreamingCardSession {
@@ -47,12 +79,13 @@ export class StreamingCardSession {
   private lastSentContent = ""
 
   private toolStatuses: ToolStatus[] = []
-  /** Completed calls, in completion order — the order they are rendered in. */
-  private finishedTools: ToolStatus[] = []
-  private subtaskButtons: SubtaskButton[] = []
-  private text = ""
-  /** True once the card is closed: the final content may include the count summary. */
-  private finished = false
+  private entries: Entry[] = []
+  private nextElementId = 1
+  private headContent = "🛠️ Processing…"
+  /** Length of the full assistant text seen so far. */
+  private fullTextLength = 0
+  /** Offset in the full text where the next run of text starts. */
+  private textStart = 0
 
   constructor(options: StreamingCardOptions) {
     this.cardkitClient = options.cardkitClient
@@ -71,7 +104,11 @@ export class StreamingCardSession {
 
   /** The content most recently written to the card. */
   get content(): string {
-    return this.lastSentContent
+    const body = this.entries
+      .map((e) => (e.kind === "tool" ? e.line : e.text))
+      .filter((s) => s.length > 0)
+      .join("\n")
+    return this.headContent ? (body ? this.headContent + "\n" + body : this.headContent) : body
   }
 
   async start(): Promise<void> {
@@ -90,9 +127,7 @@ export class StreamingCardSession {
         },
       },
       body: {
-        elements: [
-          { tag: "markdown", content: "🛠️ Processing...", element_id: "content" },
-        ],
+        elements: [{ tag: "markdown", content: this.headContent, element_id: "head" }],
       },
     }
 
@@ -108,20 +143,39 @@ export class StreamingCardSession {
       throw new Error("sendMessage returned no message_id")
     }
 
-    this.state = { cardId, messageId, sequence: 1, currentText: "" }
+    this.state = { cardId, messageId, sequence: 1 }
   }
 
-
   /**
-   * Replace the streamed agent text shown on the card.
-   * The caller is responsible for throttling; the card serializes updates.
+   * Replace the streamed agent text.
+   *
+   * `fullText` is the complete assistant text so far. The card keeps it in
+   * one element per run of text: while the assistant keeps talking the same
+   * element is updated in place, and a tool call in between starts a new one.
    */
-  async setText(text: string): Promise<void> {
+  async setText(fullText: string): Promise<void> {
     if (!this.state || this.closed) {
       return
     }
-    this.text = text
-    await this.enqueueUpdate(this.buildFullContent())
+    this.fullTextLength = fullText.length
+
+    const last = this.entries[this.entries.length - 1]
+    if (last && last.kind === "text") {
+      const text = fullText.slice(last.start)
+      if (text === last.text) return
+      last.text = text
+      await this.updateElement(last.elementId, toFeishuMarkdown(text))
+      return
+    }
+
+    // A new run of text: append an element for it. It starts where the text
+    // left off before the tool call that interrupted the previous run.
+    if (this.entries.length >= MAX_ELEMENTS) return
+    const elementId = `seg${this.nextElementId++}`
+    const text = fullText.slice(this.textStart)
+    const entry: TextEntry = { kind: "text", elementId, start: this.textStart, text }
+    this.entries.push(entry)
+    await this.appendElement(entry)
   }
 
   async setToolStatus(
@@ -142,34 +196,49 @@ export class StreamingCardSession {
       existing.state = state
       if (title !== undefined) existing.title = title
     } else {
-      this.toolStatuses.push({ key, name, state, title, done: false })
-    }
-    // A line is written only when the call is over, and it is appended in
-    // completion order. That keeps the card content strictly append-only, so
-    // the client never has to re-render what it already printed.
-    if (state !== "running") {
-      const entry = this.toolStatuses.find((t) => t.key === key)!
-      entry.done = true
-      if (!this.finishedTools.some((t) => t.key === key)) {
-        this.finishedTools.push(entry)
-      }
+      this.toolStatuses.push({ key, name, state, title })
     }
 
-    // Build tool status text and update the content element
-    const fullContent = this.buildFullContent()
-    await this.enqueueUpdate(fullContent)
+    if (state === "running") {
+      // Still in flight: only the head line changes.
+      await this.updateHead(this.buildHead())
+      return
+    }
+
+    // Finished: append a line for this call, collapsing consecutive identical
+    // ones into "<line> (×N)" the way Hermes does.
+    const line = this.formatToolLine(name, state, title)
+    const last = this.entries[this.entries.length - 1]
+    if (last && last.kind === "tool" && last.line.split(" (×")[0] === line) {
+      last.count += 1
+      const merged = last.count > 1 ? `${line} (×${last.count})` : line
+      last.line = merged
+      await this.updateElement(last.elementId, merged)
+    } else {
+      if (this.entries.length >= MAX_ELEMENTS) return
+      const elementId = `seg${this.nextElementId++}`
+      const entry: ToolEntry = { kind: "tool", elementId, line, count: 1 }
+      this.entries.push(entry)
+      await this.appendElement(entry)
+    }
+
+    // The current run of text ends here: the next run starts after it.
+    this.textStart = this.fullTextLength
+
+    await this.updateHead(this.buildHead())
   }
 
   async addSubtaskButton(label: string, actionValue: string): Promise<void> {
     if (!this.state || this.closed) {
       return
     }
+    if (this.entries.length >= MAX_ELEMENTS) return
 
-    this.subtaskButtons.push({ label, actionValue })
-
-    // Rebuild full content with buttons section
-    const fullContent = this.buildFullContent()
-    await this.enqueueUpdate(fullContent)
+    const elementId = `seg${this.nextElementId++}`
+    const line = `🔗 [${label}](${actionValue})`
+    const entry: ToolEntry = { kind: "tool", elementId, line, count: 1 }
+    this.entries.push(entry)
+    await this.appendElement(entry)
   }
 
   async close(finalText?: string): Promise<void> {
@@ -178,24 +247,21 @@ export class StreamingCardSession {
     }
     this.closed = true
     await this.queue
-    if (finalText !== undefined) this.text = finalText
-    this.finished = true
-    // Final content: tool calls first, then the reply text.
-    let text = this.buildFullContent()
-    if (text === "🛠️ Processing..." || text.startsWith("🛠️ Running")) text = "✅ Done"
-    // Only send final update if content differs from what was last sent
-    if (text && text !== this.lastSentContent) {
-      this.state.sequence += 1
-      await this.cardkitClient.updateElement(
-        this.state.cardId,
-        "content",
-        text,
-        this.state.sequence,
-      )
+
+    if (finalText !== undefined) {
+      const last = this.entries[this.entries.length - 1]
+      if (last && last.kind === "text") {
+        const text = finalText.slice(last.start)
+        if (text !== last.text) {
+          last.text = text
+          await this.updateElement(last.elementId, toFeishuMarkdown(text))
+        }
+      }
     }
 
-    // Close streaming mode with tool-focused summary
-    const completed = this.toolStatuses.filter(t => t.state === "completed").length
+    await this.updateHead(this.buildHead(true))
+
+    const completed = this.toolStatuses.filter((t) => t.state === "completed").length
     const summary = completed > 0 ? `✅ ${completed} tool(s) used` : "Done"
     this.state.sequence += 1
     await this.cardkitClient.closeStreaming(
@@ -205,84 +271,76 @@ export class StreamingCardSession {
     )
   }
 
-  private async enqueueUpdate(content: string): Promise<void> {
-    this.queue = this.queue.then(async () => {
-      if (!this.state || this.closed) {
-        return
-      }
+  // ── internals ──
+
+  private formatToolLine(
+    name: string,
+    state: "running" | "completed" | "error",
+    title?: string,
+  ): string {
+    const icon = ICONS[state]
+    return title ? `${icon} ${name} · ${title}` : `${icon} ${name}`
+  }
+
+  /** The head line: what is running, and how many tool calls have finished. */
+  private buildHead(final = false): string {
+    const parts: string[] = []
+    const counts = new Map<string, number>()
+    for (const t of this.toolStatuses) {
+      if (t.state === "running") continue
+      counts.set(t.name, (counts.get(t.name) ?? 0) + 1)
+    }
+    if (counts.size > 0) {
+      parts.push(
+        "🔧 " + [...counts.entries()].map(([name, n]) => `${name} ×${n}`).join(" · "),
+      )
+    }
+    const running = this.toolStatuses.find((t) => t.state === "running")
+    if (running) {
+      parts.push(`🔄 ${running.name}${running.title ? " · " + running.title : ""}`)
+    }
+    if (parts.length === 0) {
+      return final ? "✅ Done" : "🛠️ Processing…"
+    }
+    return parts.join(" · ")
+  }
+
+  private async appendElement(entry: Entry): Promise<void> {
+    const content = entry.kind === "tool" ? entry.line : toFeishuMarkdown(entry.text)
+    await this.enqueue(async () => {
+      if (!this.state) return
+      this.state.sequence += 1
+      await this.cardkitClient.appendElements(
+        this.state.cardId,
+        [{ tag: "markdown", content, element_id: entry.elementId }],
+        this.state.sequence,
+      )
+      this.lastSentContent = this.content
+    })
+  }
+
+  private async updateElement(elementId: string, content: string): Promise<void> {
+    await this.enqueue(async () => {
+      if (!this.state) return
       this.state.sequence += 1
       await this.cardkitClient.updateElement(
         this.state.cardId,
-        "content",
+        elementId,
         content,
         this.state.sequence,
       )
-      this.lastSentContent = content
+      this.lastSentContent = this.content
     })
+  }
+
+  private async updateHead(content: string): Promise<void> {
+    if (content === this.headContent) return
+    this.headContent = content
+    await this.updateElement("head", content)
+  }
+
+  private async enqueue(fn: () => Promise<void>): Promise<void> {
+    this.queue = this.queue.then(fn)
     await this.queue
-  }
-  private buildToolStatusText(): string {
-    // Only finished calls get a line. Writing a line while the call is still
-    // running and later flipping 🔄→✅ would edit the middle of the element
-    // and make the client re-render the whole card.
-    const done = this.finishedTools
-    if (done.length === 0) {
-      return ""
-    }
-    const icons: Record<string, string> = {
-      running: "🔄",
-      completed: "✅",
-      error: "❌",
-    }
-    const lines = done.map(
-      (t) => t.title ? `${icons[t.state]} ${t.name} · ${t.title}` : `${icons[t.state]} ${t.name}`,
-    )
-    // The count summary is rendered on the FINAL card only. While streaming it
-    // would change on every call, and rewriting the top of the element makes
-    // the client re-render the whole card.
-    let summary = ""
-    if (this.finished && done.length > 1) {
-      const counts = new Map<string, number>()
-      for (const t of done) {
-        counts.set(t.name, (counts.get(t.name) ?? 0) + 1)
-      }
-      summary = "🔧 " + [...counts.entries()].map(([name, n]) => `${name} ×${n}`).join(" · ") + "\n"
-    }
-    return "---\n" + summary + lines.join("\n")
-  }
-
-  private buildButtonsText(): string {
-    if (this.subtaskButtons.length === 0) {
-      return ""
-    }
-    const lines = this.subtaskButtons.map(
-      (b) => `🔗 [${b.label}](${b.actionValue})`,
-    )
-    return "\n\n---\n" + lines.join("\n")
-  }
-
-  private buildFullContent(): string {
-    const toolText = this.buildToolStatusText()
-    const buttonText = this.buildButtonsText()
-    const head = toolText + buttonText
-    if (this.text) {
-      // Same order as the opencode web UI: the tool calls that happened during
-      // the turn first, the reply text last. Keeping the text at the end also
-      // means the content only ever grows, so the client can stream it
-      // incrementally instead of re-rendering the whole card.
-      const body = toFeishuMarkdown(this.text)
-      return head ? head + "\n\n" + body : body
-    }
-    return head || this.buildProgressPlaceholder()
-  }
-
-  /** Shown while nothing has been written yet, including which tool is running. */
-  private buildProgressPlaceholder(): string {
-    const running = this.toolStatuses.find((t) => !t.done)
-    if (running) {
-      const what = running.title ? `${running.name} · ${running.title}` : running.name
-      return `🛠️ Running ${what}…`
-    }
-    return "🛠️ Processing..."
   }
 }

@@ -81,6 +81,26 @@ export class CardKitClient {
     )
   }
 
+  /**
+   * Append new components to the end of the card.
+   *
+   * Each component is an independent element, so updating one of them later
+   * never forces the client to re-render the others — and because we always
+   * append, the visual order is the chronological order of the events.
+   */
+  async appendElements(
+    cardId: string,
+    elements: CardElement[],
+    sequence: number,
+  ): Promise<void> {
+    await this.apiRequest("POST", `/cardkit/v1/cards/${cardId}/elements`, {
+      type: "append",
+      uuid: `a_${cardId}_${sequence}`,
+      sequence,
+      elements: JSON.stringify(elements),
+    })
+  }
+
   async closeStreaming(
     cardId: string,
     summary: string,

@@ -56,9 +56,21 @@ function createMockCardKitClient(): CardKitClient {
   return {
     createCard: vi.fn().mockResolvedValue("card_e2e_1"),
     updateElement: vi.fn().mockResolvedValue(undefined),
+    appendElements: vi.fn().mockResolvedValue(undefined),
     closeStreaming: vi.fn().mockResolvedValue(undefined),
   } as unknown as CardKitClient
 }
+
+/** Everything the bridge wrote to the card: appended elements + element updates. */
+function cardContent(cardkitClient: any): string {
+  const parts: string[] = []
+  for (const c of cardkitClient.appendElements?.mock.calls ?? []) {
+    for (const el of c[1] ?? []) parts.push(String(el.content))
+  }
+  for (const c of cardkitClient.updateElement?.mock.calls ?? []) parts.push(String(c[2]))
+  return parts.join("\n")
+}
+
 
 function createMockSessionManager(sessionId = "ses-e2e-1"): SessionManager {
   return {
@@ -205,8 +217,7 @@ describe("E2E Smoke Tests", () => {
     await handlerPromise
 
     // The reply is streamed into the card as it arrives; no separate final card is posted.
-    const lastUpdate = cardkitClient.updateElement.mock.calls.at(-1)
-    expect(String(lastUpdate?.[2])).toContain("Hello World!")
+    expect(cardContent(cardkitClient)).toContain("Hello World!")
     expect(feishuClient.replyMessage).not.toHaveBeenCalled()
 
     // Verify listener was cleaned up

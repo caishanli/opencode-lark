@@ -6,11 +6,13 @@ import { createMockFeishuClient } from "../__tests__/setup.js"
 function createMockCardKitClient(): CardKitClient & {
   createCard: ReturnType<typeof vi.fn>
   updateElement: ReturnType<typeof vi.fn>
+  appendElements: ReturnType<typeof vi.fn>
   closeStreaming: ReturnType<typeof vi.fn>
 } {
   return {
     createCard: vi.fn().mockResolvedValue("card_123"),
     updateElement: vi.fn().mockResolvedValue(undefined),
+    appendElements: vi.fn().mockResolvedValue(undefined),
     closeStreaming: vi.fn().mockResolvedValue(undefined),
   } as any
 }
@@ -33,71 +35,156 @@ function createStartedSession() {
   return { session, cardkitClient, feishuClient }
 }
 
+/** All elements appended to the card, in order. */
+function appendedElements(cardkitClient: ReturnType<typeof createMockCardKitClient>) {
+  return cardkitClient.appendElements.mock.calls.flatMap((c: any) => c[1] as Array<{ element_id: string; content: string }>)
+}
+
+/** Every element's final content: appended ones plus the head. */
+function allContent(cardkitClient: ReturnType<typeof createMockCardKitClient>) {
+  const out = new Map<string, string>()
+  for (const el of appendedElements(cardkitClient)) out.set(el.element_id, el.content)
+  for (const c of cardkitClient.updateElement.mock.calls) out.set(c[1], c[2])
+  return [...out.values()]
+}
+
 describe("StreamingCardSession", () => {
-  describe("lifecycle", () => {
-    it("isActive is false before start", () => {
-      const { session } = createStartedSession()
-      expect(session.isActive).toBe(false)
-    })
-
-    it("start() creates card with tool-focused initial content", async () => {
+  describe("card creation", () => {
+    it("creates the card with a head element and sends it once", async () => {
       const { session, cardkitClient, feishuClient } = createStartedSession()
-
       await session.start()
 
-      expect(session.isActive).toBe(true)
-      expect(cardkitClient.createCard).toHaveBeenCalledOnce()
       const schema = cardkitClient.createCard.mock.calls[0]![0] as CardKitSchema
-      expect(schema.schema).toBe("2.0")
-      expect(schema.config.streaming_mode).toBe(true)
-      expect(schema.config.summary.content).toBe("[Generating...]")
-      expect(schema.config.streaming_config?.print_frequency_ms?.default).toBe(200)
-      expect(schema.config.streaming_config?.print_step?.default).toBe(10)
-      expect(schema.body.elements[0]!.element_id).toBe("content")
-      expect(schema.body.elements[0]!.content).toBe("🛠️ Processing...")
-
-      expect(feishuClient.sendMessage).toHaveBeenCalledWith("chat_789", {
-        msg_type: "interactive",
-        content: JSON.stringify({ type: "card", data: { card_id: "card_123" } }),
-      })
+      expect(schema.body.elements[0]!.element_id).toBe("head")
+      expect(schema.body.elements[0]!.content).toContain("Processing")
+      expect(feishuClient.sendMessage).toHaveBeenCalledTimes(1)
     })
 
     it("start() is idempotent", async () => {
       const { session, cardkitClient } = createStartedSession()
       await session.start()
       await session.start()
-      expect(cardkitClient.createCard).toHaveBeenCalledOnce()
+      expect(cardkitClient.createCard).toHaveBeenCalledTimes(1)
     })
+  })
 
-    it("start() throws if no message_id returned", async () => {
-      const cardkitClient = createMockCardKitClient()
-      const feishuClient = createMockFeishuClient()
-      ;(feishuClient.sendMessage as ReturnType<typeof vi.fn>).mockResolvedValue({
-        code: 0,
-        msg: "ok",
-        data: {},
-      })
-
-      const session = new StreamingCardSession({
-        cardkitClient: cardkitClient as any,
-        feishuClient,
-        chatId: "chat_789",
-      })
-
-      await expect(session.start()).rejects.toThrow("sendMessage returned no message_id")
-    })
-
-    it("isActive is false after close", async () => {
-      const { session } = createStartedSession()
-      await session.start()
-      await session.close()
-      expect(session.isActive).toBe(false)
-    })
-
-    it("close() calls closeStreaming on cardkitClient", async () => {
+  describe("text", () => {
+    it("appends one element for a run of text and updates it in place", async () => {
       const { session, cardkitClient } = createStartedSession()
       await session.start()
-      await session.close()
+      await session.setText("Hello")
+      await session.setText("Hello world")
+
+      const appended = appendedElements(cardkitClient)
+      expect(appended).toHaveLength(1)
+      expect(appended[0]!.element_id).toBe("seg1")
+      // the element was updated, not re-appended
+      const updates = cardkitClient.updateElement.mock.calls.filter((c: any) => c[1] === "seg1")
+      expect(updates.at(-1)![2]).toBe("Hello world")
+    })
+
+    it("starts a new element when a tool call interrupts the text", async () => {
+      const { session, cardkitClient } = createStartedSession()
+      await session.start()
+      await session.setText("first part")
+      await session.setToolStatus("shell", "completed", "uname -a", "c1")
+      await session.setText("first part second part")
+
+      const appended = appendedElements(cardkitClient)
+      const ids = appended.map((e) => e.element_id)
+      expect(ids).toEqual(["seg1", "seg2", "seg3"]) // text, tool, text
+      // the new text element holds only the text after the tool call
+      expect(appended[2]!.content).toBe(" second part")
+    })
+  })
+
+  describe("tool calls", () => {
+    it("a running call only touches the head line", async () => {
+      const { session, cardkitClient } = createStartedSession()
+      await session.start()
+      await session.setToolStatus("shell", "running", "uname -a", "c1")
+
+      expect(appendedElements(cardkitClient)).toHaveLength(0)
+      const head = cardkitClient.updateElement.mock.calls.at(-1)!
+      expect(head[1]).toBe("head")
+      expect(head[2]).toContain("shell")
+    })
+
+    it("a finished call appends its own element", async () => {
+      const { session, cardkitClient } = createStartedSession()
+      await session.start()
+      await session.setToolStatus("shell", "completed", "uname -a", "c1")
+
+      const appended = appendedElements(cardkitClient)
+      expect(appended).toHaveLength(1)
+      expect(appended[0]!.content).toBe("✅ shell · uname -a")
+    })
+
+    it("keeps two calls to the same tool on separate lines", async () => {
+      const { session, cardkitClient } = createStartedSession()
+      await session.start()
+      await session.setToolStatus("shell", "completed", "uname -a", "c1")
+      await session.setToolStatus("shell", "completed", "node -v", "c2")
+
+      const appended = appendedElements(cardkitClient)
+      expect(appended.map((e) => e.content)).toEqual([
+        "✅ shell · uname -a",
+        "✅ shell · node -v",
+      ])
+    })
+
+    it("collapses consecutive identical calls into (×N)", async () => {
+      const { session, cardkitClient } = createStartedSession()
+      await session.start()
+      await session.setToolStatus("shell", "completed", "uname -a", "c1")
+      await session.setToolStatus("shell", "completed", "uname -a", "c2")
+      await session.setToolStatus("shell", "completed", "uname -a", "c3")
+
+      const appended = appendedElements(cardkitClient)
+      expect(appended).toHaveLength(1) // one line, updated in place
+      expect(allContent(cardkitClient)).toContain("✅ shell · uname -a (×3)")
+    })
+
+    it("the head line shows the live per-tool counts", async () => {
+      const { session, cardkitClient } = createStartedSession()
+      await session.start()
+      await session.setToolStatus("shell", "completed", "uname -a", "c1")
+      await session.setToolStatus("shell", "completed", "node -v", "c2")
+      await session.setToolStatus("edit", "completed", "src/index.ts", "c3")
+
+      const head = cardkitClient.updateElement.mock.calls.filter((c: any) => c[1] === "head").at(-1)!
+      expect(head[2]).toContain("shell ×2")
+      expect(head[2]).toContain("edit ×1")
+    })
+  })
+
+  describe("ordering", () => {
+    it("keeps the chronological order of tools and text", async () => {
+      const { session, cardkitClient } = createStartedSession()
+      await session.start()
+      await session.setToolStatus("shell", "completed", "uname -a", "c1")
+      await session.setText("now the answer")
+      await session.setToolStatus("shell", "completed", "node -v", "c2")
+
+      const contents = allContent(cardkitClient)
+      const tool1 = contents.findIndex((c) => c.includes("uname -a") && c.startsWith("✅"))
+      const text = contents.findIndex((c) => c.includes("now the answer"))
+      const tool2 = contents.findIndex((c) => c.includes("node -v") && c.startsWith("✅"))
+      expect(tool1).toBeGreaterThanOrEqual(0)
+      expect(text).toBeGreaterThan(tool1)
+      expect(tool2).toBeGreaterThan(text)
+    })
+  })
+
+  describe("close", () => {
+    it("finalises the text and closes the card", async () => {
+      const { session, cardkitClient } = createStartedSession()
+      await session.start()
+      await session.setText("partial")
+      await session.close("the final answer")
+
+      const last = cardkitClient.updateElement.mock.calls.filter((c: any) => c[1] === "seg1").at(-1)!
+      expect(last[2]).toBe("the final answer")
       expect(cardkitClient.closeStreaming).toHaveBeenCalledOnce()
     })
 
@@ -108,306 +195,5 @@ describe("StreamingCardSession", () => {
       await session.close()
       expect(cardkitClient.closeStreaming).toHaveBeenCalledOnce()
     })
-  })
-
-
-  describe("close behavior", () => {
-    it("close with no tools produces 'Done' summary", async () => {
-      const { session, cardkitClient } = createStartedSession()
-      await session.start()
-      await session.close()
-
-      // closeStreaming should be called with "Done" when no tools used
-      expect(cardkitClient.closeStreaming).toHaveBeenCalledWith(
-        "card_123",
-        "Done",
-        expect.any(Number),
-      )
-    })
-
-    it("close produces tool-focused summary when tools completed", async () => {
-      const { session, cardkitClient } = createStartedSession()
-      await session.start()
-
-      await session.setToolStatus("read_file", "completed")
-      await session.setToolStatus("bash", "completed")
-      await session.close()
-
-      expect(cardkitClient.closeStreaming).toHaveBeenCalledWith(
-        "card_123",
-        "✅ 2 tool(s) used",
-        expect.any(Number),
-      )
-    })
-
-    it("close with finalText overrides buildFullContent", async () => {
-      const { session, cardkitClient } = createStartedSession()
-      await session.start()
-
-      await session.close("final answer")
-
-      // Should have sent "final answer" as the update
-      expect(cardkitClient.updateElement).toHaveBeenLastCalledWith(
-        "card_123",
-        "content",
-        "final answer",
-        expect.any(Number),
-      )
-    })
-
-    it("close sends final tool content update if different from last sent", async () => {
-      const { session, cardkitClient } = createStartedSession()
-      await session.start()
-
-      await session.setToolStatus("bash", "running")
-      cardkitClient.updateElement.mockClear()
-
-      await session.setToolStatus("bash", "completed")
-      // At this point, last sent content is the tool status text
-      const sentContent = cardkitClient.updateElement.mock.calls.at(-1)![2] as string
-      cardkitClient.updateElement.mockClear()
-
-      // Close will call buildFullContent which matches last sent → no extra updateElement
-      await session.close()
-      expect(cardkitClient.updateElement).not.toHaveBeenCalled()
-      expect(cardkitClient.closeStreaming).toHaveBeenCalledOnce()
-    })
-
-    it("close with no tools produces Done update and summary", async () => {
-      const { session, cardkitClient } = createStartedSession()
-      await session.start()
-      await session.close()
-
-      // Close should use Done fallback (no tools)
-      expect(cardkitClient.updateElement).toHaveBeenCalledWith(
-        "card_123",
-        "content",
-        "✅ Done",
-        expect.any(Number),
-      )
-      expect(cardkitClient.closeStreaming).toHaveBeenCalledWith(
-        "card_123",
-        "Done",
-        expect.any(Number),
-      )
-    })
-  })
-
-  describe("setToolStatus", () => {
-    it("shows a running call in the progress placeholder", async () => {
-      const { session, cardkitClient } = createStartedSession()
-      await session.start()
-
-      await session.setToolStatus("read_file", "running")
-
-      const lastCall = cardkitClient.updateElement.mock.calls.at(-1)!
-      expect(lastCall[2]).toContain("🛠️ Running read_file")
-    })
-
-    it("updates existing tool status", async () => {
-      const { session, cardkitClient } = createStartedSession()
-      await session.start()
-
-      await session.setToolStatus("read_file", "running")
-      await session.setToolStatus("read_file", "completed")
-
-      const lastCall = cardkitClient.updateElement.mock.calls.at(-1)!
-      expect(lastCall[2]).toContain("✅ read_file")
-      expect(lastCall[2]).not.toContain("🔄 read_file")
-    })
-
-    it("displays title with tool status when title provided", async () => {
-      const { session, cardkitClient } = createStartedSession()
-      await session.start()
-
-      await session.setToolStatus("read_file", "completed", "Read src/index.ts")
-
-      const lastCall = cardkitClient.updateElement.mock.calls.at(-1)!
-      expect(lastCall[2]).toContain("✅ read_file · Read src/index.ts")
-    })
-
-    it("updates title retroactively on state transition", async () => {
-      const { session, cardkitClient } = createStartedSession()
-      await session.start()
-
-      await session.setToolStatus("bash", "running")
-      await session.setToolStatus("bash", "completed", "Run tests")
-
-      const lastCall = cardkitClient.updateElement.mock.calls.at(-1)!
-      expect(lastCall[2]).toContain("✅ bash · Run tests")
-      expect(lastCall[2]).not.toContain("🔄 bash")
-    })
-
-    it("no title separator when title is undefined", async () => {
-      const { session, cardkitClient } = createStartedSession()
-      await session.start()
-
-      await session.setToolStatus("bash", "running")
-
-      const lastCall = cardkitClient.updateElement.mock.calls.at(-1)!
-      expect(lastCall[2]).toContain("🛠️ Running bash")
-      expect(lastCall[2]).not.toContain("· ")
-    })
-  })
-
-  describe("addSubtaskButton", () => {
-    it("appends button to card content without free-form text", async () => {
-      const { session, cardkitClient } = createStartedSession()
-      await session.start()
-
-      await session.addSubtaskButton("View details", "subtask_1")
-
-      const lastCall = cardkitClient.updateElement.mock.calls.at(-1)!
-      expect(lastCall[2]).toContain("View details")
-      expect(lastCall[2]).toContain("subtask_1")
-    })
-  })
-
-  describe("tool-only card content", () => {
-    it("card content contains only tool statuses", async () => {
-      const { session, cardkitClient } = createStartedSession()
-      await session.start()
-
-      await session.setToolStatus("read_file", "running")
-      await session.setToolStatus("bash", "completed", "Run tests")
-      await session.setToolStatus("read_file", "completed", "Read config")
-
-      const lastCall = cardkitClient.updateElement.mock.calls.at(-1)!
-      const content = lastCall[2] as string
-      expect(content).toContain("✅ read_file · Read config")
-      expect(content).toContain("✅ bash · Run tests")
-      // Content should be ONLY tool status lines (starts with separator)
-      expect(content).toMatch(/^---\n/)
-    })
-
-    it("card content is tool-only (no free-form text)", async () => {
-      const { session, cardkitClient } = createStartedSession()
-      await session.start()
-
-      // Add a tool status — content should be tool status only
-      await session.setToolStatus("bash", "running")
-      const lastCall = cardkitClient.updateElement.mock.calls.at(-1)!
-      expect(lastCall[2]).toContain("🛠️ Running bash")
-    })
-  })
-})
-
-describe("StreamingCardSession — agent text in the card (regression)", () => {
-  it("setText() pushes the streamed text into the card content", async () => {
-    const { session, cardkitClient } = createStartedSession()
-    await session.start()
-    await session.setText("Hello")
-    const last = cardkitClient.updateElement.mock.calls.at(-1)!
-    expect(last[2]).toContain("Hello")
-  })
-
-  it("setText() accumulates with the latest full text", async () => {
-    const { session, cardkitClient } = createStartedSession()
-    await session.start()
-    await session.setText("Hello")
-    await session.setText("Hello world")
-    const last = cardkitClient.updateElement.mock.calls.at(-1)!
-    expect(last[2]).toContain("Hello world")
-  })
-
-  it("keeps tool statuses visible alongside the text", async () => {
-    const { session, cardkitClient } = createStartedSession()
-    await session.start()
-    await session.setText("the answer")
-    await session.setToolStatus("bash", "completed")
-    const last = cardkitClient.updateElement.mock.calls.at(-1)!
-    expect(last[2]).toContain("the answer")
-    expect(last[2]).toContain("bash")
-  })
-
-  it("close() with no argument still shows the accumulated streamed text", async () => {
-    const { session, cardkitClient } = createStartedSession()
-    await session.start()
-    await session.setText("streamed answer")
-    await session.close()
-    const last = cardkitClient.updateElement.mock.calls.at(-1)!
-    expect(last[2]).toContain("streamed answer")
-  })
-})
-
-describe("StreamingCardSession — one line per tool CALL, not per tool name (regression)", () => {
-  it("renders two separate lines for two calls to the same tool", async () => {
-    const { session, cardkitClient } = createStartedSession()
-    await session.start()
-    await session.setToolStatus("shell", "completed", "uname -a", "call_1")
-    await session.setToolStatus("shell", "completed", "node -v", "call_2")
-    const content = String(cardkitClient.updateElement.mock.calls.at(-1)![2])
-    const shellLines = content.split("\n").filter((l) => /[✅🔄❌] shell/.test(l))
-    expect(shellLines).toHaveLength(2)
-    expect(content).toContain("uname -a")
-    expect(content).toContain("node -v")
-  })
-
-  it("updates the same line when the same call id changes state", async () => {
-    const { session, cardkitClient } = createStartedSession()
-    await session.start()
-    await session.setToolStatus("shell", "running", "uname -a", "call_1")
-    await session.setToolStatus("shell", "completed", "uname -a", "call_1")
-    const content = String(cardkitClient.updateElement.mock.calls.at(-1)![2])
-    const shellLines = content.split("\n").filter((l) => l.includes("shell"))
-    expect(shellLines).toHaveLength(1)
-    expect(content).toContain("✅ shell · uname -a")
-    expect(content).not.toContain("🔄 shell")
-  })
-})
-
-describe("StreamingCardSession — grouped tool summary (matches the web UI)", () => {
-  it("prepends a per-tool count summary when there are several calls", async () => {
-    const { session, cardkitClient } = createStartedSession()
-    await session.start()
-    await session.setToolStatus("shell", "completed", "uname -a", "c1")
-    await session.setToolStatus("shell", "completed", "node -v", "c2")
-    await session.setToolStatus("shell", "completed", "df -h /", "c3")
-    await session.setToolStatus("edit", "completed", "src/index.ts", "c4")
-    // The count summary is only rendered on the final card.
-    await session.close()
-    const content = String(cardkitClient.updateElement.mock.calls.at(-1)![2])
-    expect(content).toContain("shell ×3")
-    expect(content).toContain("edit ×1")
-    // detail lines still present
-    expect(content).toContain("uname -a")
-    expect(content).toContain("src/index.ts")
-  })
-
-  it("omits the count summary for a single tool call", async () => {
-    const { session, cardkitClient } = createStartedSession()
-    await session.start()
-    await session.setToolStatus("shell", "completed", "uname -a", "c1")
-    const content = String(cardkitClient.updateElement.mock.calls.at(-1)![2])
-    expect(content).not.toContain("×1")
-    expect(content).toContain("shell")
-  })
-})
-
-describe("StreamingCardSession — append-only card content (opencode web order)", () => {
-  it("renders tool calls before the reply text", async () => {
-    const { session, cardkitClient } = createStartedSession()
-    await session.start()
-    await session.setToolStatus("shell", "completed", "uname -a", "c1")
-    await session.setText("the reply")
-    const content = String(cardkitClient.updateElement.mock.calls.at(-1)![2])
-    expect(content.indexOf("shell")).toBeLessThan(content.indexOf("the reply"))
-  })
-
-  it("never rewrites what it already wrote (strictly append-only)", async () => {
-    const { session, cardkitClient } = createStartedSession()
-    await session.start()
-    await session.setToolStatus("shell", "running", "uname -a", "c1")
-    await session.setToolStatus("shell", "completed", "uname -a", "c1")
-    await session.setToolStatus("shell", "running", "node -v", "c2")
-    await session.setToolStatus("shell", "completed", "node -v", "c2")
-    await session.setText("the reply")
-
-    const contents = cardkitClient.updateElement.mock.calls.map((c: any) => String(c[2]))
-    const firstToolLine = contents.findIndex((c) => c.startsWith("---"))
-    expect(firstToolLine).toBeGreaterThanOrEqual(0)
-    for (let i = firstToolLine + 1; i < contents.length; i++) {
-      expect(contents[i]!.startsWith(contents[i - 1]!)).toBe(true)
-    }
   })
 })

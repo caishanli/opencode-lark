@@ -176,7 +176,10 @@ function isObject(v: unknown): v is Record<string, unknown> {
   return v !== null && typeof v === "object"
 }
 
-/** Best-effort one-line summary of a tool call, for the Feishu status card. */
+/** Best-effort one-line summary of a tool call, for the Feishu status card.
+ *  Mirrors Hermes' reference implementation: the tool's primary argument,
+ *  single-lined and TAIL-truncated (the end of a long command says more than
+ *  its start). */
 function deriveToolTitle(input: unknown): string | undefined {
   if (!isObject(input)) return undefined
   const i = input as Record<string, unknown>
@@ -184,7 +187,8 @@ function deriveToolTitle(input: unknown): string | undefined {
     const v = i[key]
     if (typeof v === "string" && v.trim()) {
       const oneLine = v.replace(/\s+/g, " ").trim()
-      return oneLine.length > 80 ? oneLine.slice(0, 79) + "…" : oneLine
+      if (oneLine.length <= 80) return oneLine
+      return "…" + oneLine.slice(oneLine.length - 79)
     }
   }
   return undefined
