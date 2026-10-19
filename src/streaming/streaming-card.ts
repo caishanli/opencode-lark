@@ -21,6 +21,8 @@ interface CardState {
 }
 
 interface ToolStatus {
+  /** Unique per tool CALL, so two calls to the same tool get separate lines. */
+  key: string
   name: string
   state: "running" | "completed" | "error"
   title?: string
@@ -105,17 +107,25 @@ export class StreamingCardSession {
     await this.enqueueUpdate(this.buildFullContent())
   }
 
-  async setToolStatus(name: string, state: "running" | "completed" | "error", title?: string): Promise<void> {
+  async setToolStatus(
+    name: string,
+    state: "running" | "completed" | "error",
+    title?: string,
+    callId?: string,
+  ): Promise<void> {
     if (!this.state || this.closed) {
       return
     }
 
-    const existing = this.toolStatuses.find((t) => t.name === name)
+    // Key by the tool CALL id when available so repeated calls to the same
+    // tool (e.g. three `shell` invocations) render as three separate lines.
+    const key = callId ?? name
+    const existing = this.toolStatuses.find((t) => t.key === key)
     if (existing) {
       existing.state = state
       if (title !== undefined) existing.title = title
     } else {
-      this.toolStatuses.push({ name, state, title })
+      this.toolStatuses.push({ key, name, state, title })
     }
 
     // Build tool status text and update the content element
@@ -183,7 +193,6 @@ export class StreamingCardSession {
     })
     await this.queue
   }
-
   private buildToolStatusText(): string {
     if (this.toolStatuses.length === 0) {
       return ""

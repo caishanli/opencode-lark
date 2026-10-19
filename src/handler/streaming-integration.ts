@@ -115,6 +115,7 @@ export function createStreamingBridge(
             lastTextPush = Date.now()
             cardStartPromise!
               .then(() => card!.setText(textBuffer))
+              .then(() => logger.info(`Card text push: ${textBuffer.length} chars`))
               .catch((err) => logger.warn(`card.setText failed: ${err}`))
           }
           const elapsed = Date.now() - lastTextPush
@@ -149,6 +150,7 @@ export function createStreamingBridge(
 
             case "ToolStateChange":
               ensureCard()
+              logger.info(`Tool status: ${action.toolName} -> ${action.state}`)
               if (cardStartPromise) {
                 cardStartPromise.then(() => {
                   card!
@@ -156,6 +158,7 @@ export function createStreamingBridge(
                       action.toolName,
                       action.state as "running" | "completed" | "error",
                       action.title,
+                      action.callId,
                     )
                     .catch((err) => {
                       logger.warn(`setToolStatus failed: ${err}`)

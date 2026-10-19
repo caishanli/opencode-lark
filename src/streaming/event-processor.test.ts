@@ -646,3 +646,25 @@ describe("EventProcessor — v2 turn-end signals (captured from live server)", (
     expect(proc.processEvent({ type: "session.execution.succeeded", data: { sessionID: "ses-1" } })).toBeNull()
   })
 })
+
+describe("EventProcessor — tool identity for per-call rendering", () => {
+  it("carries the call id and derives a readable title from input.command", () => {
+    const proc = makeProcessor()
+    proc.processEvent({ type: "session.tool.input.started", data: { sessionID: "ses-1", id: "call_1", name: "shell" } })
+    const result = proc.processEvent({
+      type: "session.tool.called",
+      data: { sessionID: "ses-1", id: "call_1", input: { command: "uname -a" }, executed: false },
+    }) as ToolStateChange
+    expect(result.callId).toBe("call_1")
+    expect(result.title).toBe("uname -a")
+  })
+
+  it("keeps the call id on success/failure so the right line is updated", () => {
+    const proc = makeProcessor()
+    proc.processEvent({ type: "session.tool.input.started", data: { sessionID: "ses-1", id: "call_7", name: "read" } })
+    proc.processEvent({ type: "session.tool.called", data: { sessionID: "ses-1", id: "call_7", input: {} } })
+    const done = proc.processEvent({ type: "session.tool.success", data: { sessionID: "ses-1", id: "call_7" } }) as ToolStateChange
+    expect(done.callId).toBe("call_7")
+    expect(done.toolName).toBe("read")
+  })
+})

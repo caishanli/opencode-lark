@@ -329,3 +329,29 @@ describe("StreamingCardSession — agent text in the card (regression)", () => {
     expect(last[2]).toContain("streamed answer")
   })
 })
+
+describe("StreamingCardSession — one line per tool CALL, not per tool name (regression)", () => {
+  it("renders two separate lines for two calls to the same tool", async () => {
+    const { session, cardkitClient } = createStartedSession()
+    await session.start()
+    await session.setToolStatus("shell", "completed", "uname -a", "call_1")
+    await session.setToolStatus("shell", "completed", "node -v", "call_2")
+    const content = String(cardkitClient.updateElement.mock.calls.at(-1)![2])
+    const shellLines = content.split("\n").filter((l) => l.includes("shell"))
+    expect(shellLines).toHaveLength(2)
+    expect(content).toContain("uname -a")
+    expect(content).toContain("node -v")
+  })
+
+  it("updates the same line when the same call id changes state", async () => {
+    const { session, cardkitClient } = createStartedSession()
+    await session.start()
+    await session.setToolStatus("shell", "running", "uname -a", "call_1")
+    await session.setToolStatus("shell", "completed", "uname -a", "call_1")
+    const content = String(cardkitClient.updateElement.mock.calls.at(-1)![2])
+    const shellLines = content.split("\n").filter((l) => l.includes("shell"))
+    expect(shellLines).toHaveLength(1)
+    expect(content).toContain("✅ shell · uname -a")
+    expect(content).not.toContain("🔄 shell")
+  })
+})

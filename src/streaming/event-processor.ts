@@ -21,6 +21,8 @@ export interface ToolStateChange {
   readonly sessionId: string
   readonly toolName: string
   readonly state: string
+  /** Unique id for this tool CALL (distinct calls to the same tool have distinct ids). */
+  readonly callId?: string
   readonly input?: Record<string, unknown>
   readonly output?: string
   readonly error?: string
@@ -172,6 +174,20 @@ type KnownEvent =
 
 function isObject(v: unknown): v is Record<string, unknown> {
   return v !== null && typeof v === "object"
+}
+
+/** Best-effort one-line summary of a tool call, for the Feishu status card. */
+function deriveToolTitle(input: unknown): string | undefined {
+  if (!isObject(input)) return undefined
+  const i = input as Record<string, unknown>
+  for (const key of ["command", "filePath", "file_path", "path", "pattern", "query", "url", "description", "prompt"]) {
+    const v = i[key]
+    if (typeof v === "string" && v.trim()) {
+      const oneLine = v.replace(/\s+/g, " ").trim()
+      return oneLine.length > 80 ? oneLine.slice(0, 79) + "…" : oneLine
+    }
+  }
+  return undefined
 }
 
 function hasType(v: unknown): v is { type: string } {
@@ -387,12 +403,15 @@ export class EventProcessor {
       (typeof props.name === "string" ? props.name : undefined) ??
       "tool"
     const input = props.input
+    const title = deriveToolTitle(input)
     return {
       type: "ToolStateChange",
       sessionId,
       toolName,
       state: "running",
+      ...(typeof id === "string" ? { callId: id } : {}),
       ...(isObject(input) ? { input: input as Record<string, unknown> } : {}),
+      ...(title ? { title } : {}),
     }
   }
 
@@ -412,6 +431,7 @@ export class EventProcessor {
       sessionId,
       toolName,
       state: failed ? "error" : "completed",
+      ...(typeof id === "string" ? { callId: id } : {}),
       ...(failed && typeof error === "string" ? { error } : {}),
     }
   }
