@@ -77,7 +77,7 @@ export function createStreamingBridge(
         })
         cardStartPromise = card.start().then(() => {
           logger.info(
-            `Streaming card started for session ${sessionId} in chat ${chatId}`,
+            `Streaming card started for session ${sessionId} in chat ${chatId} (cardId=${card!.id})`,
           )
         })
       }
@@ -151,7 +151,11 @@ export function createStreamingBridge(
 
             case "ToolStateChange":
               ensureCard()
-              logger.info(`Tool status: ${action.toolName} -> ${action.state}`)
+              logger.info(
+                `Tool status: ${action.toolName} -> ${action.state}` +
+                (action.title ? ` · ${action.title}` : "") +
+                (action.callId ? ` [${action.callId}]` : ""),
+              )
               if (cardStartPromise) {
                 cardStartPromise.then(() => {
                   card!

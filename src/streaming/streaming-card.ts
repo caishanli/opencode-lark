@@ -58,6 +58,11 @@ export class StreamingCardSession {
     return this.state !== null && !this.closed
   }
 
+  /** The CardKit card id, once the card exists (useful for inspecting the card). */
+  get id(): string | null {
+    return this.state?.cardId ?? null
+  }
+
   async start(): Promise<void> {
     if (this.state) {
       return
