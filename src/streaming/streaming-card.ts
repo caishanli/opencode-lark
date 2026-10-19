@@ -32,6 +32,9 @@ export interface StreamingCardOptions {
 /** A run of assistant text. */
 interface MessageBlock {
   kind: "message"
+  /** Offset of this run inside the full assistant text of the turn. */
+  start: number
+  /** Only the text of this run (not the whole turn). */
   text: string
 }
 
@@ -81,6 +84,8 @@ export class StreamingCardSession {
   private lastSentContent = ""
 
   private blocks: Block[] = []
+  /** How many characters of the turn's text have been assigned to a block. */
+  private assignedLength = 0
   /** Number of blocks already delivered in a sealed card. */
   private sealedBlockCount = 0
   private status: "running" | "completed" | "error" | "interrupted" = "running"
@@ -141,9 +146,19 @@ export class StreamingCardSession {
     }
     const last = this.blocks[this.blocks.length - 1]
     if (last && last.kind === "message") {
-      last.text = fullText
+      // Same run of text: grow this block, but keep only its own slice.
+      const text = fullText.slice(last.start)
+      if (text === last.text) return
+      last.text = text
+      this.assignedLength = fullText.length
     } else {
-      this.blocks.push({ kind: "message", text: fullText })
+      // A tool call interrupted the previous run: start a new text block that
+      // holds ONLY the text since then — not the whole turn again.
+      const start = this.assignedLength
+      const text = fullText.slice(start)
+      if (!text) return
+      this.assignedLength = fullText.length
+      this.blocks.push({ kind: "message", start, text })
     }
     await this.sync()
   }
@@ -183,7 +198,7 @@ export class StreamingCardSession {
     if (last && last.kind === "message") {
       last.text = last.text ? `${last.text}\n${line}` : line
     } else {
-      this.blocks.push({ kind: "message", text: line })
+      this.blocks.push({ kind: "message", start: this.assignedLength, text: line })
     }
     await this.sync()
   }
@@ -199,10 +214,11 @@ export class StreamingCardSession {
     if (finalText !== undefined) {
       const last = this.blocks[this.blocks.length - 1]
       if (last && last.kind === "message") {
-        last.text = finalText
+        last.text = finalText.slice(last.start)
       } else {
         // No text block yet (e.g. the reply only arrived at the end).
-        this.blocks.push({ kind: "message", text: finalText })
+        const start = this.assignedLength
+        this.blocks.push({ kind: "message", start, text: finalText.slice(start) })
       }
     }
     this.status = status ?? "completed"

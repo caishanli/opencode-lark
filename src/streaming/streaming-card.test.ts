@@ -116,6 +116,24 @@ describe("StreamingCardSession", () => {
     expect(texts.length).toBeGreaterThan(0)
   })
 
+  it("a text run after a tool call holds only its own text (no repeated prefix)", async () => {
+    // Regression: each text block used to hold the WHOLE turn text, so the
+    // reply appeared once per tool call, as a growing prefix.
+    const { session, feishuClient: fc } = createStartedSession()
+    await session.start()
+    await session.setText("first part")
+    await session.setToolStatus("shell", "completed", "uname -a", "c1")
+    await session.setText("first partsecond part")
+    await session.setToolStatus("shell", "completed", "node -v", "c2")
+    await session.setText("first partsecond partthird part")
+
+    const texts = elements(fc)
+      .filter((e) => e.tag === "markdown")
+      .map((e) => e.content)
+      .filter((c) => !c.startsWith("⏳") && !c.startsWith("✅"))
+    expect(texts).toEqual(["first part", "second part", "third part"])
+  })
+
   it("adds a status line that completes when the turn ends", async () => {
     const { session, feishuClient: fc } = createStartedSession()
     await session.start()
