@@ -187,16 +187,22 @@ export function createStreamingBridge(
                 write: Math.max(0, (now.cache?.write ?? 0) - (base.cache?.write ?? 0)),
               },
             }
-            const total = totalTokens(delta)
+            // "tokens" and the rate describe what the model GENERATED this
+            // turn. The context tokens (input + cache read) are reported
+            // separately: re-reading a cached context is nearly free, so
+            // counting it towards tok/s would report cache throughput, not
+            // generation speed.
+            const generated = (delta.output ?? 0) + (delta.reasoning ?? 0)
+            const context = (delta.input ?? 0) + (delta.cache.read ?? 0)
             const elapsed = (Date.now() - turnStartedAt) / 1000
-            const rate = elapsed > 0 ? total / elapsed : 0
-            const cached = delta.cache.read
-            const hit = cacheHitRate(delta)
+            const rate = elapsed > 0 ? generated / elapsed : 0
+            const hit = Math.round(cacheHitRate(delta) * 100)
             const cost = action.cost !== undefined && action.cost > 0 ? ` · $${action.cost.toFixed(4)}` : ""
-            const cachePart = cached > 0 ? ` · 缓存 ${formatTokens(cached)} (${Math.round(hit * 100)}%)` : ""
+            const contextPart = context > 0 ? ` · 上下文 ${formatTokens(context)}` : ""
+            const cachePart = delta.cache.read > 0 ? ` · 缓存 ${hit}%` : ""
             writeToCard((c) =>
               void c.setUsage(
-                `${formatTokens(total)} tokens · ${formatRate(rate)} tok/s${cachePart}${cost}`,
+                `${formatTokens(generated)} tokens · ${formatRate(rate)} tok/s${contextPart}${cachePart}${cost}`,
               ),
             )
             break

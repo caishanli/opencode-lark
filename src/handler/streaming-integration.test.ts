@@ -688,9 +688,11 @@ describe("createStreamingBridge", () => {
     await handlePromise
 
     const content = cardContent(mockFeishu)
-    expect(content).toContain("4.1k tokens")
+    // "tokens" = what the model generated (output + reasoning), not the context
+    expect(content).toContain("100 tokens")
     expect(content).toContain("tok/s")
-    expect(content).toContain("缓存 3.0k (75%)")
+    expect(content).toContain("上下文 4.0k")
+    expect(content).toContain("缓存 75%")
   })
 
   it("reports the turn's usage delta, not the session's cumulative total", async () => {
@@ -733,10 +735,13 @@ describe("createStreamingBridge", () => {
     await handlePromise
 
     const content = cardContent(mockFeishu)
-    // delta = 100 input + 10 output + 100 cache = 210, not the cumulative 4.1k
-    expect(content).toContain("210 tokens")
-    expect(content).not.toContain("4.1k tokens")
-    expect(content).toContain("缓存 100 (50%)")
+    // delta = input 100 + output 10 + cache.read 100
+    expect(content).toContain("10 tokens")      // generated only
+    expect(content).toContain("上下文 200")      // input + cache read
+    expect(content).toContain("缓存 50%")
+    // the cumulative numbers must not show up
+    expect(content).not.toContain("4.1k")
+    expect(content).not.toContain("4.0k")
   })
 
   it("serialises turns per chat: a second message waits for the first to finish", async () => {
