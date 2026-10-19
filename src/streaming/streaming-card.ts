@@ -205,7 +205,17 @@ export class StreamingCardSession {
     const lines = this.toolStatuses.map(
       (t) => t.title ? `${icons[t.state]} ${t.name} · ${t.title}` : `${icons[t.state]} ${t.name}`,
     )
-    return "\n\n---\n" + lines.join("\n")
+    // Mirror the opencode web UI's "used N × <tool>" summary when more than one
+    // call happened; the per-call lines below still show each command.
+    let summary = ""
+    if (this.toolStatuses.length > 1) {
+      const counts = new Map<string, number>()
+      for (const t of this.toolStatuses) {
+        counts.set(t.name, (counts.get(t.name) ?? 0) + 1)
+      }
+      summary = "🔧 " + [...counts.entries()].map(([name, n]) => `${name} ×${n}`).join(" · ") + "\n"
+    }
+    return "\n\n---\n" + summary + lines.join("\n")
   }
 
   private buildButtonsText(): string {

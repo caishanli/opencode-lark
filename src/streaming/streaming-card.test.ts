@@ -337,7 +337,7 @@ describe("StreamingCardSession — one line per tool CALL, not per tool name (re
     await session.setToolStatus("shell", "completed", "uname -a", "call_1")
     await session.setToolStatus("shell", "completed", "node -v", "call_2")
     const content = String(cardkitClient.updateElement.mock.calls.at(-1)![2])
-    const shellLines = content.split("\n").filter((l) => l.includes("shell"))
+    const shellLines = content.split("\n").filter((l) => /[✅🔄❌] shell/.test(l))
     expect(shellLines).toHaveLength(2)
     expect(content).toContain("uname -a")
     expect(content).toContain("node -v")
@@ -353,5 +353,31 @@ describe("StreamingCardSession — one line per tool CALL, not per tool name (re
     expect(shellLines).toHaveLength(1)
     expect(content).toContain("✅ shell · uname -a")
     expect(content).not.toContain("🔄 shell")
+  })
+})
+
+describe("StreamingCardSession — grouped tool summary (matches the web UI)", () => {
+  it("prepends a per-tool count summary when there are several calls", async () => {
+    const { session, cardkitClient } = createStartedSession()
+    await session.start()
+    await session.setToolStatus("shell", "completed", "uname -a", "c1")
+    await session.setToolStatus("shell", "completed", "node -v", "c2")
+    await session.setToolStatus("shell", "completed", "df -h /", "c3")
+    await session.setToolStatus("edit", "completed", "src/index.ts", "c4")
+    const content = String(cardkitClient.updateElement.mock.calls.at(-1)![2])
+    expect(content).toContain("shell ×3")
+    expect(content).toContain("edit ×1")
+    // detail lines still present
+    expect(content).toContain("uname -a")
+    expect(content).toContain("src/index.ts")
+  })
+
+  it("omits the count summary for a single tool call", async () => {
+    const { session, cardkitClient } = createStartedSession()
+    await session.start()
+    await session.setToolStatus("shell", "completed", "uname -a", "c1")
+    const content = String(cardkitClient.updateElement.mock.calls.at(-1)![2])
+    expect(content).not.toContain("×1")
+    expect(content).toContain("shell")
   })
 })
