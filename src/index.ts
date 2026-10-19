@@ -248,6 +248,7 @@ async function main(): Promise<void> {
     opencode: gateway,
     logger,
     interactiveCardRegistry,
+    feishuClient,
   })
 
   const interactivePoller = createInteractivePoller({

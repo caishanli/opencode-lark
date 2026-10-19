@@ -141,6 +141,30 @@ describe("createInteractiveHandler", () => {
     })
   })
 
+  it("tells the user when the server cannot answer a question (404)", async () => {
+    const replyMessage = vi.fn().mockResolvedValue({ code: 0, msg: "ok" })
+    const opencode = makeGateway({
+      replyQuestion: vi.fn().mockRejectedValue(new Error("replyQuestion failed: HTTP 404: NotFoundError")),
+    })
+    const handler = createInteractiveHandler({
+      opencode,
+      logger: mockLogger,
+      interactiveCardRegistry: mockInteractiveCardRegistry,
+      feishuClient: { replyMessage } as any,
+    })
+    const action: FeishuCardAction = {
+      action: { tag: "button", value: { action: "question_answer", requestId: "r1", sessionId: "s1", answers: "[]" } },
+      open_message_id: "msg-1", open_chat_id: "chat-1", operator: { open_id: "ou-1" },
+    }
+    await handler(action)
+    expect(replyMessage).toHaveBeenCalledWith(
+      "msg-1",
+      expect.objectContaining({ msg_type: "text" }),
+    )
+    const body = JSON.parse((replyMessage as any).mock.calls[0][1].content)
+    expect(body.text).toContain("不支持")
+  })
+
   it("ignores unknown actions", async () => {
     const opencode = makeGateway()
     const handler = createInteractiveHandler({ opencode, logger: mockLogger, interactiveCardRegistry: mockInteractiveCardRegistry })
