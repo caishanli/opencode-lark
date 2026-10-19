@@ -91,6 +91,22 @@ export class StreamingCardSession {
     return this.lastSentContent
   }
 
+  /** A readable, line-per-element summary of the card (for logs). */
+  describe(): string {
+    const parts: string[] = []
+    for (const block of this.blocks) {
+      if (block.kind === "message") {
+        const text = block.text.trim()
+        if (text) parts.push(`[text] ${text.slice(0, 120).replace(/\n/g, " ")}`)
+        continue
+      }
+      const lines = block.calls.map((c) => this.formatSummary(c))
+      parts.push(`[tools x${lines.length}] ${lines.join(" ; ")}`)
+    }
+    parts.push(`[status] ${this.statusLine()}`)
+    return parts.join("\n")
+  }
+
   async start(): Promise<void> {
     if (this.messageId) {
       return

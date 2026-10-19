@@ -268,9 +268,8 @@ export function createStreamingBridge(
               closeCard
                 .then(async () => {
                   if (card) {
-                    const written = card.content
                     logger.info(
-                      `Card content (${written.length} chars, cardId=${card.id}):\n${written.slice(0, 2000)}`,
+                      `Card layout (messageId=${card.id}):\n${card.describe()}`,
                     )
                   }
                   // The answer is already on the streaming card; only post a separate
