@@ -206,8 +206,11 @@ export class StreamingCardSession {
     }
 
     // Finished: append a line for this call, collapsing consecutive identical
-    // ones into "<line> (×N)" the way Hermes does.
-    const line = this.formatToolLine(name, state, title)
+    // ones into "<line> (×N)" the way Hermes does. The title comes from the
+    // stored entry — the completion event carries no input, so the preview we
+    // learned while it was running has to be reused.
+    const stored = this.toolStatuses.find((t) => t.key === key)!
+    const line = this.formatToolLine(name, state, stored.title)
     const last = this.entries[this.entries.length - 1]
     if (last && last.kind === "tool" && last.line.split(" (×")[0] === line) {
       last.count += 1

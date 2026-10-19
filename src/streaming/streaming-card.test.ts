@@ -120,6 +120,18 @@ describe("StreamingCardSession", () => {
       expect(appended[0]!.content).toBe("✅ shell · uname -a")
     })
 
+    it("keeps the preview learned while the call was running", async () => {
+      // The completion event carries no input, so the title learned from the
+      // running event has to survive into the finished line.
+      const { session, cardkitClient } = createStartedSession()
+      await session.start()
+      await session.setToolStatus("shell", "running", "uname -a", "c1")
+      await session.setToolStatus("shell", "completed", undefined, "c1")
+
+      const appended = appendedElements(cardkitClient)
+      expect(appended[0]!.content).toBe("✅ shell · uname -a")
+    })
+
     it("keeps two calls to the same tool on separate lines", async () => {
       const { session, cardkitClient } = createStartedSession()
       await session.start()
