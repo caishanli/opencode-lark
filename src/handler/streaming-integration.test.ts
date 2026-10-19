@@ -654,6 +654,41 @@ describe("createStreamingBridge", () => {
     )
   })
 
+  it("serialises turns per chat: a second message waits for the first to finish", async () => {
+    const deps = makeDeps()
+    const bridge = createStreamingBridge(deps)
+    const post = vi.fn().mockResolvedValue("{}")
+
+    const first = bridge.handleMessage(
+      "chat-1", "ses-1", eventListeners, eventProcessor, post, vi.fn(), "msg-1", null,
+    )
+    await waitFor(() => {
+      expect(eventListeners.size).toBe(1)
+    })
+    expect(post).toHaveBeenCalledTimes(1)
+
+    // A second message for the same chat must not start a parallel turn.
+    const second = bridge.handleMessage(
+      "chat-1", "ses-1", eventListeners, eventProcessor, post, vi.fn(), "msg-2", null,
+    )
+    await new Promise((r) => setTimeout(r, 30))
+    expect(post).toHaveBeenCalledTimes(1)
+
+    // Finishing the first turn lets the second one start.
+    ;[...eventListeners.get("ses-1")!].forEach((fn) => {
+      fn({ type: "session.execution.succeeded", data: { sessionID: "ses-1" } })
+    })
+    await first
+    await waitFor(() => {
+      expect(post).toHaveBeenCalledTimes(2)
+    })
+
+    ;[...eventListeners.get("ses-1")!].forEach((fn) => {
+      fn({ type: "session.execution.succeeded", data: { sessionID: "ses-1" } })
+    })
+    await second
+  })
+
   it("still completes even if the card update throws", async () => {
     const deps = makeDeps({
       feishuClient: {
