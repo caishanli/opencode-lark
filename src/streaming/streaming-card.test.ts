@@ -194,14 +194,14 @@ describe("StreamingCardSession", () => {
   })
 
   describe("setToolStatus", () => {
-    it("updates card with tool status only (no free-form text)", async () => {
+    it("shows a running call in the progress placeholder", async () => {
       const { session, cardkitClient } = createStartedSession()
       await session.start()
 
       await session.setToolStatus("read_file", "running")
 
       const lastCall = cardkitClient.updateElement.mock.calls.at(-1)!
-      expect(lastCall[2]).toContain("🔄 read_file")
+      expect(lastCall[2]).toContain("🛠️ Running read_file")
     })
 
     it("updates existing tool status", async () => {
@@ -245,7 +245,7 @@ describe("StreamingCardSession", () => {
       await session.setToolStatus("bash", "running")
 
       const lastCall = cardkitClient.updateElement.mock.calls.at(-1)!
-      expect(lastCall[2]).toContain("🔄 bash")
+      expect(lastCall[2]).toContain("🛠️ Running bash")
       expect(lastCall[2]).not.toContain("· ")
     })
   })
@@ -277,7 +277,7 @@ describe("StreamingCardSession", () => {
       expect(content).toContain("✅ read_file · Read config")
       expect(content).toContain("✅ bash · Run tests")
       // Content should be ONLY tool status lines (starts with separator)
-      expect(content).toMatch(/^\n\n---\n/)
+      expect(content).toMatch(/^---\n/)
     })
 
     it("card content is tool-only (no free-form text)", async () => {
@@ -287,7 +287,7 @@ describe("StreamingCardSession", () => {
       // Add a tool status — content should be tool status only
       await session.setToolStatus("bash", "running")
       const lastCall = cardkitClient.updateElement.mock.calls.at(-1)!
-      expect(lastCall[2]).toContain("🔄 bash")
+      expect(lastCall[2]).toContain("🛠️ Running bash")
     })
   })
 })
@@ -364,6 +364,8 @@ describe("StreamingCardSession — grouped tool summary (matches the web UI)", (
     await session.setToolStatus("shell", "completed", "node -v", "c2")
     await session.setToolStatus("shell", "completed", "df -h /", "c3")
     await session.setToolStatus("edit", "completed", "src/index.ts", "c4")
+    // The count summary is only rendered on the final card.
+    await session.close()
     const content = String(cardkitClient.updateElement.mock.calls.at(-1)![2])
     expect(content).toContain("shell ×3")
     expect(content).toContain("edit ×1")
@@ -379,5 +381,33 @@ describe("StreamingCardSession — grouped tool summary (matches the web UI)", (
     const content = String(cardkitClient.updateElement.mock.calls.at(-1)![2])
     expect(content).not.toContain("×1")
     expect(content).toContain("shell")
+  })
+})
+
+describe("StreamingCardSession — append-only card content (opencode web order)", () => {
+  it("renders tool calls before the reply text", async () => {
+    const { session, cardkitClient } = createStartedSession()
+    await session.start()
+    await session.setToolStatus("shell", "completed", "uname -a", "c1")
+    await session.setText("the reply")
+    const content = String(cardkitClient.updateElement.mock.calls.at(-1)![2])
+    expect(content.indexOf("shell")).toBeLessThan(content.indexOf("the reply"))
+  })
+
+  it("never rewrites what it already wrote (strictly append-only)", async () => {
+    const { session, cardkitClient } = createStartedSession()
+    await session.start()
+    await session.setToolStatus("shell", "running", "uname -a", "c1")
+    await session.setToolStatus("shell", "completed", "uname -a", "c1")
+    await session.setToolStatus("shell", "running", "node -v", "c2")
+    await session.setToolStatus("shell", "completed", "node -v", "c2")
+    await session.setText("the reply")
+
+    const contents = cardkitClient.updateElement.mock.calls.map((c: any) => String(c[2]))
+    const firstToolLine = contents.findIndex((c) => c.startsWith("---"))
+    expect(firstToolLine).toBeGreaterThanOrEqual(0)
+    for (let i = firstToolLine + 1; i < contents.length; i++) {
+      expect(contents[i]!.startsWith(contents[i - 1]!)).toBe(true)
+    }
   })
 })

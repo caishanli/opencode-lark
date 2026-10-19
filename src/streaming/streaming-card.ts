@@ -27,6 +27,8 @@ interface ToolStatus {
   name: string
   state: "running" | "completed" | "error"
   title?: string
+  /** A line is only written to the card once the call is over. */
+  done: boolean
 }
 
 interface SubtaskButton {
@@ -45,8 +47,12 @@ export class StreamingCardSession {
   private lastSentContent = ""
 
   private toolStatuses: ToolStatus[] = []
+  /** Completed calls, in completion order — the order they are rendered in. */
+  private finishedTools: ToolStatus[] = []
   private subtaskButtons: SubtaskButton[] = []
   private text = ""
+  /** True once the card is closed: the final content may include the count summary. */
+  private finished = false
 
   constructor(options: StreamingCardOptions) {
     this.cardkitClient = options.cardkitClient
@@ -136,7 +142,17 @@ export class StreamingCardSession {
       existing.state = state
       if (title !== undefined) existing.title = title
     } else {
-      this.toolStatuses.push({ key, name, state, title })
+      this.toolStatuses.push({ key, name, state, title, done: false })
+    }
+    // A line is written only when the call is over, and it is appended in
+    // completion order. That keeps the card content strictly append-only, so
+    // the client never has to re-render what it already printed.
+    if (state !== "running") {
+      const entry = this.toolStatuses.find((t) => t.key === key)!
+      entry.done = true
+      if (!this.finishedTools.some((t) => t.key === key)) {
+        this.finishedTools.push(entry)
+      }
     }
 
     // Build tool status text and update the content element
@@ -163,9 +179,10 @@ export class StreamingCardSession {
     this.closed = true
     await this.queue
     if (finalText !== undefined) this.text = finalText
-    // Final content: streamed/final text first, then tool statuses and buttons.
+    this.finished = true
+    // Final content: tool calls first, then the reply text.
     let text = this.buildFullContent()
-    if (text === "🛠️ Processing...") text = "✅ Done"
+    if (text === "🛠️ Processing..." || text.startsWith("🛠️ Running")) text = "✅ Done"
     // Only send final update if content differs from what was last sent
     if (text && text !== this.lastSentContent) {
       this.state.sequence += 1
@@ -205,7 +222,11 @@ export class StreamingCardSession {
     await this.queue
   }
   private buildToolStatusText(): string {
-    if (this.toolStatuses.length === 0) {
+    // Only finished calls get a line. Writing a line while the call is still
+    // running and later flipping 🔄→✅ would edit the middle of the element
+    // and make the client re-render the whole card.
+    const done = this.finishedTools
+    if (done.length === 0) {
       return ""
     }
     const icons: Record<string, string> = {
@@ -213,20 +234,21 @@ export class StreamingCardSession {
       completed: "✅",
       error: "❌",
     }
-    const lines = this.toolStatuses.map(
+    const lines = done.map(
       (t) => t.title ? `${icons[t.state]} ${t.name} · ${t.title}` : `${icons[t.state]} ${t.name}`,
     )
-    // Mirror the opencode web UI's "used N × <tool>" summary when more than one
-    // call happened; the per-call lines below still show each command.
+    // The count summary is rendered on the FINAL card only. While streaming it
+    // would change on every call, and rewriting the top of the element makes
+    // the client re-render the whole card.
     let summary = ""
-    if (this.toolStatuses.length > 1) {
+    if (this.finished && done.length > 1) {
       const counts = new Map<string, number>()
-      for (const t of this.toolStatuses) {
+      for (const t of done) {
         counts.set(t.name, (counts.get(t.name) ?? 0) + 1)
       }
       summary = "🔧 " + [...counts.entries()].map(([name, n]) => `${name} ×${n}`).join(" · ") + "\n"
     }
-    return "\n\n---\n" + summary + lines.join("\n")
+    return "---\n" + summary + lines.join("\n")
   }
 
   private buildButtonsText(): string {
@@ -242,12 +264,25 @@ export class StreamingCardSession {
   private buildFullContent(): string {
     const toolText = this.buildToolStatusText()
     const buttonText = this.buildButtonsText()
-    const suffix = toolText + buttonText
+    const head = toolText + buttonText
     if (this.text) {
-      // Agent output is Markdown; Feishu cards cannot render tables/headings.
+      // Same order as the opencode web UI: the tool calls that happened during
+      // the turn first, the reply text last. Keeping the text at the end also
+      // means the content only ever grows, so the client can stream it
+      // incrementally instead of re-rendering the whole card.
       const body = toFeishuMarkdown(this.text)
-      return suffix ? body + suffix : body
+      return head ? head + "\n\n" + body : body
     }
-    return suffix || "🛠️ Processing..."
+    return head || this.buildProgressPlaceholder()
+  }
+
+  /** Shown while nothing has been written yet, including which tool is running. */
+  private buildProgressPlaceholder(): string {
+    const running = this.toolStatuses.find((t) => !t.done)
+    if (running) {
+      const what = running.title ? `${running.name} · ${running.title}` : running.name
+      return `🛠️ Running ${what}…`
+    }
+    return "🛠️ Processing..."
   }
 }
