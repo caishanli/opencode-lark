@@ -35,3 +35,22 @@ export function totalTokens(tokens: {
     (tokens.cache?.write ?? 0)
   )
 }
+
+/**
+ * Cache hit rate: how much of the prompt context was served from the prompt
+ * cache rather than re-sent as fresh input tokens.
+ *
+ *   cache.read  — input tokens read from the cache (a hit)
+ *   input       — input tokens that were NOT cached (a miss)
+ */
+export function cacheHitRate(tokens: {
+  input?: number
+  output?: number
+  reasoning?: number
+  cache?: { read?: number; write?: number }
+}): number {
+  const read = tokens.cache?.read ?? 0
+  const fresh = tokens.input ?? 0
+  const denominator = read + fresh
+  return denominator > 0 ? read / denominator : 0
+}
