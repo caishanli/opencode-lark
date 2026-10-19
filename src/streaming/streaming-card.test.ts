@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest"
-import { StreamingCardSession } from "./streaming-card.js"
+import { StreamingCardSession, closeAllStreamingCards } from "./streaming-card.js"
 import { createMockFeishuClient } from "../__tests__/setup.js"
 
 function createStartedSession() {
@@ -135,5 +135,25 @@ describe("StreamingCardSession", () => {
     const updates = fc.updateMessage.mock.calls.length
     await session.close()
     expect(fc.updateMessage.mock.calls.length).toBe(updates)
+  })
+})
+
+describe("closeAllStreamingCards", () => {
+  it("closes a card left open by an interrupted turn", async () => {
+    const feishuClient = createMockFeishuClient()
+    ;(feishuClient.sendMessage as ReturnType<typeof vi.fn>).mockResolvedValue({
+      code: 0, msg: "ok", data: { message_id: "msg_456" },
+    })
+    ;(feishuClient.updateMessage as ReturnType<typeof vi.fn>).mockResolvedValue({ code: 0, msg: "ok" })
+    const session = new StreamingCardSession({ feishuClient, chatId: "chat_789" })
+    await session.start()
+    await session.setText("partial answer")
+
+    await closeAllStreamingCards("interrupted")
+
+    const updates = (feishuClient.updateMessage as ReturnType<typeof vi.fn>).mock.calls
+    const last = JSON.parse(updates[updates.length - 1][1])
+    const status = last.body.elements[last.body.elements.length - 1]
+    expect(status.content).toContain("已中断")
   })
 })

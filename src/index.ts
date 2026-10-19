@@ -30,6 +30,7 @@ import { EventProcessor } from "./streaming/event-processor.js"
 import { SubAgentTracker } from "./streaming/subagent-tracker.js"
 import { createMessageHandler } from "./handler/message-handler.js"
 import { createStreamingBridge } from "./handler/streaming-integration.js"
+import { closeAllStreamingCards } from "./streaming/streaming-card.js"
 import { createCommandHandler } from "./handler/command-handler.js"
 import { createOutboundMediaHandler } from "./handler/outbound-media.js"
 import { createSessionObserver } from "./streaming/session-observer.js"
@@ -408,6 +409,9 @@ async function main(): Promise<void> {
       logger.info(`${signal} received, shutting down...`)
       abortController.abort()
       sseAbort.abort()
+      // Close any card whose turn is still open, so it does not stay stuck
+      // on "running" after a restart.
+      await closeAllStreamingCards("interrupted")
       await channelManager.stopAll()
       await webhookServer.close()
       cronService?.stop()

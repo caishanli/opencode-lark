@@ -58,6 +58,19 @@ const TOOL_ICONS: Record<ToolCall["state"], string> = {
   error: "❌",
 }
 
+/** Every card that is currently open, so a shutdown can close them all. */
+const openCards = new Set<StreamingCardSession>()
+
+/**
+ * Close every open card, e.g. when the process is shutting down.
+ * Without this a card whose turn was interrupted (restart, crash, lost SSE)
+ * stays stuck on "running" forever.
+ */
+export async function closeAllStreamingCards(status: "error" | "interrupted" = "interrupted"): Promise<void> {
+  const cards = [...openCards]
+  await Promise.allSettled(cards.map((c) => c.close(undefined, status)))
+}
+
 export class StreamingCardSession {
   private readonly feishuClient: FeishuApiClient
   private readonly chatId: string
@@ -70,7 +83,7 @@ export class StreamingCardSession {
   private blocks: Block[] = []
   /** Number of blocks already delivered in a sealed card. */
   private sealedBlockCount = 0
-  private status: "running" | "completed" | "error" = "running"
+  private status: "running" | "completed" | "error" | "interrupted" = "running"
 
   constructor(options: StreamingCardOptions) {
     this.feishuClient = options.feishuClient
@@ -111,6 +124,7 @@ export class StreamingCardSession {
     if (this.messageId) {
       return
     }
+    openCards.add(this)
     await this.sync()
   }
 
@@ -174,11 +188,12 @@ export class StreamingCardSession {
     await this.sync()
   }
 
-  async close(finalText?: string): Promise<void> {
+  async close(finalText?: string, status?: "completed" | "error" | "interrupted"): Promise<void> {
     if (!this.messageId || this.closed) {
       return
     }
     this.closed = true
+    openCards.delete(this)
     await this.queue
 
     if (finalText !== undefined) {
@@ -190,7 +205,7 @@ export class StreamingCardSession {
         this.blocks.push({ kind: "message", text: finalText })
       }
     }
-    this.status = "completed"
+    this.status = status ?? "completed"
     await this.sync()
   }
 
@@ -261,6 +276,7 @@ export class StreamingCardSession {
 
   private statusLine(): string {
     if (this.status === "completed") return "✅ 已完成"
+    if (this.status === "interrupted") return "⚠️ 已中断（服务重启或连接断开）"
     if (this.status === "error") return "❌ 失败"
     return "⏳ 运行中…"
   }
