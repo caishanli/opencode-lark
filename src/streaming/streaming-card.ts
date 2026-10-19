@@ -63,6 +63,11 @@ export class StreamingCardSession {
     return this.state?.cardId ?? null
   }
 
+  /** The content most recently written to the card. */
+  get content(): string {
+    return this.lastSentContent
+  }
+
   async start(): Promise<void> {
     if (this.state) {
       return

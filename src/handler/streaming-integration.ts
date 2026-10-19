@@ -270,6 +270,12 @@ export function createStreamingBridge(
                 : Promise.resolve()
               closeCard
                 .then(async () => {
+                  if (card) {
+                    const written = card.content
+                    logger.info(
+                      `Card content (${written.length} chars, cardId=${card.id}):\n${written.slice(0, 2000)}`,
+                    )
+                  }
                   // The answer is already on the streaming card; only post a separate
                   // reply card when there was no streaming card at all.
                   if (hadCard) {
