@@ -14,7 +14,7 @@ import type { EventProcessor } from "../streaming/event-processor.js"
 import { FileTooLargeError, type FeishuApiClient } from "../feishu/api-client.js"
 import type { ProgressTracker } from "../session/progress-tracker.js"
 import type { Logger } from "../utils/logger.js"
-import type { FeishuMessageEvent } from "../types.js"
+import type { FeishuMessageEvent, FileAttachment } from "../types.js"
 import type { StreamingBridge } from "./streaming-integration.js"
 import { buildFinalResponseCard } from "./streaming-integration.js"
 import type { SessionObserver } from "../streaming/session-observer.js"
@@ -153,7 +153,7 @@ async function handleFileOrImageMessage(
   messageId: string,
   feishuClient: FeishuApiClient,
   logger: Logger,
-): Promise<string> {
+): Promise<{ text: string; attachment?: FileAttachment }> {
   const parsed = JSON.parse(content) as Record<string, string>
 
   const downloadDir = await resolveDownloadDir()
@@ -176,7 +176,11 @@ async function handleFileOrImageMessage(
     await writeFile(filepath, data, { mode: 0o600 })
     logger.info(`Saved image to ${filepath}`)
 
-    return `User sent an image.\nSaved to: ${filepath}\nPlease look at this image.`
+    return {
+      text: `User sent an image.\nSaved to: ${filepath}\nPlease look at this image.`,
+      // opencode v2 takes attachments as file:// URLs; a bare path is rejected.
+      attachment: { uri: `file://${filepath}`, name: safeName },
+    }
   }
 
   // type === "file"
@@ -198,7 +202,10 @@ async function handleFileOrImageMessage(
   await writeFile(filepath, data, { mode: 0o600 })
   logger.info(`Saved file to ${filepath}`)
 
-  return `User sent a file: ${fileName}\nSaved to: ${filepath}\nPlease review this file.`
+  return {
+    text: `User sent a file: ${fileName}\nSaved to: ${filepath}\nPlease review this file.`,
+    attachment: { uri: `file://${filepath}`, name: safeName },
+  }
 }
 
 // ── Helper: extract text from Feishu post rich content ──
@@ -449,15 +456,18 @@ export function createMessageHandler(
 
     // ── 3. Parse user text ──
     let userText: string
+    let attachment: FileAttachment | undefined
     if (messageType === "image" || messageType === "file") {
       try {
-        userText = await handleFileOrImageMessage(
+        const downloaded = await handleFileOrImageMessage(
           event.message.message_type as "image" | "file",
           event.message.content,
           event.message_id,
           feishuClient,
           logger,
         )
+        userText = downloaded.text
+        attachment = downloaded.attachment
       } catch (err) {
         logger.error(`Failed to handle ${messageType} message: ${err}`)
         // Forward error context to opencode instead of silently skipping
@@ -522,6 +532,7 @@ export function createMessageHandler(
           userText,
           event,
           timestamp: Date.now(),
+          attachment,
         }, { startTimer: false })
 
         if (isFirst) {
@@ -653,9 +664,7 @@ export function createMessageHandler(
       .filter((p: any) => p.type === "text")
       .map((p: any) => p.text)
       .join("\n")
-    const fileParts = parts
-      .filter((p: any) => p.type === "file")
-      .map((p: any) => ({ uri: p.url ?? p.uri }))
+    const fileParts: FileAttachment[] = attachment ? [attachment] : []
 
     async function postToOpencode(): Promise<string> {
       try {
@@ -924,9 +933,9 @@ export function createMessageHandler(
       .filter((p: any) => p.type === "text")
       .map((p: any) => p.text)
       .join("\n")
-    const fileParts = parts
-      .filter((p: any) => p.type === "file")
-      .map((p: any) => ({ uri: p.url ?? p.uri }))
+    const fileParts: FileAttachment[] = messages
+      .map((m) => m.attachment)
+      .filter((a): a is FileAttachment => Boolean(a))
 
     async function postToOpencode(): Promise<string> {
       try {

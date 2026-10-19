@@ -1119,7 +1119,7 @@ describe("createMessageHandler", () => {
     expect(feishuClient.getMessage).not.toHaveBeenCalled()
   })
 
-  it("handles image message — downloads and forwards as text", async () => {
+  it("handles image message — downloads it and attaches it to the prompt", async () => {
     const feishuClient = createMockFeishuClient()
     ;(feishuClient.downloadResource as ReturnType<typeof vi.fn>).mockResolvedValue({
       data: Buffer.from("fake-png-data"),
@@ -1156,7 +1156,11 @@ describe("createMessageHandler", () => {
     expect(prompt.text).toContain("User sent an image.")
     expect(prompt.text).toContain("Saved to:")
     expect(prompt.text).toContain("Please look at this image.")
-    expect(prompt.files).toBeUndefined()
+    // The image is now attached to the prompt as a file:// URL, so opencode
+    // can actually look at it (a bare path is rejected by the v2 API).
+    expect(prompt.files).toHaveLength(1)
+    expect(prompt.files?.[0]?.uri).toMatch(/^file:\/\//)
+    expect(prompt.files?.[0]?.name).toMatch(/image\.png$/)
   })
 
   it("handles JPEG image message — saves with .jpg extension", async () => {
@@ -1191,7 +1195,7 @@ describe("createMessageHandler", () => {
     expect(promptText).not.toMatch(/Saved to: .+image\.png/)
   })
 
-  it("handles file message — downloads and forwards as text", async () => {
+  it("handles file message — downloads it and attaches it to the prompt", async () => {
     const feishuClient = createMockFeishuClient()
     ;(feishuClient.downloadResource as ReturnType<typeof vi.fn>).mockResolvedValue({
       data: Buffer.from("fake-file-data"),
@@ -1226,7 +1230,9 @@ describe("createMessageHandler", () => {
     expect(prompt.text).toContain("User sent a file: report.pdf")
     expect(prompt.text).toContain("Saved to:")
     expect(prompt.text).toContain("Please review this file.")
-    expect(prompt.files).toBeUndefined()
+    // The file is attached to the prompt as a file:// URL so opencode can read it.
+    expect(prompt.files).toHaveLength(1)
+    expect(prompt.files?.[0]?.uri).toMatch(/^file:\/\//)
   })
 
   it("handles file download failure — forwards error to opencode", async () => {

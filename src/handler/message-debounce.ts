@@ -8,7 +8,7 @@
  */
 
 import type { Logger } from "../utils/logger.js"
-import type { FeishuMessageEvent } from "../types.js"
+import type { FeishuMessageEvent, FileAttachment } from "../types.js"
 
 // ── Types ──
 
@@ -16,6 +16,8 @@ export interface BufferedMessage {
   userText: string
   event: FeishuMessageEvent
   timestamp: number
+  /** Attachment downloaded for this message, if any. */
+  attachment?: FileAttachment
 }
 
 export interface BatchContext {

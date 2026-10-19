@@ -45,6 +45,15 @@ export interface FeishuMessageBody {
   content: string
 }
 
+/**
+ * A file/image the user sent, handed to opencode v2 as a prompt attachment.
+ * `uri` must be a file:// URL — opencode rejects bare paths.
+ */
+export interface FileAttachment {
+  uri: string
+  name?: string
+}
+
 export interface FeishuApiResponse {
   code: number
   msg: string
