@@ -134,6 +134,19 @@ describe("StreamingCardSession", () => {
     expect(texts).toEqual(["first part", "second part", "third part"])
   })
 
+  it("shows the token/rate summary next to the status line", async () => {
+    const { session, feishuClient: fc } = createStartedSession()
+    await session.start()
+    await session.setUsage("1.2k tokens · 340 tok/s")
+    await session.close("done")
+
+    const els = elements(fc)
+    const last = els[els.length - 1]
+    expect(last.content).toContain("✅ 已完成")
+    expect(last.content).toContain("1.2k tokens")
+    expect(last.content).toContain("340 tok/s")
+  })
+
   it("adds a status line that completes when the turn ends", async () => {
     const { session, feishuClient: fc } = createStartedSession()
     await session.start()

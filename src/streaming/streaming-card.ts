@@ -84,6 +84,8 @@ export class StreamingCardSession {
   private lastSentContent = ""
 
   private blocks: Block[] = []
+  /** Token/rate summary shown in the head line. */
+  private usageText = ""
   /** How many characters of the turn's text have been assigned to a block. */
   private assignedLength = 0
   /** Number of blocks already delivered in a sealed card. */
@@ -160,6 +162,14 @@ export class StreamingCardSession {
       this.assignedLength = fullText.length
       this.blocks.push({ kind: "message", start, text })
     }
+    await this.sync()
+  }
+
+  /** Show a token/rate summary next to the status line. */
+  async setUsage(text: string): Promise<void> {
+    if (!this.messageId || this.closed) return
+    if (text === this.usageText) return
+    this.usageText = text
     await this.sync()
   }
 
@@ -291,10 +301,12 @@ export class StreamingCardSession {
   }
 
   private statusLine(): string {
-    if (this.status === "completed") return "✅ 已完成"
-    if (this.status === "interrupted") return "⚠️ 已中断（服务重启或连接断开）"
-    if (this.status === "error") return "❌ 失败"
-    return "⏳ 运行中…"
+    const base =
+      this.status === "completed" ? "✅ 已完成"
+      : this.status === "interrupted" ? "⚠️ 已中断（服务重启或连接断开）"
+      : this.status === "error" ? "❌ 失败"
+      : "⏳ 运行中…"
+    return this.usageText ? `${base} · ${this.usageText}` : base
   }
 
   private countElements(card: Record<string, unknown>): number {

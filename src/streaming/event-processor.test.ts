@@ -668,3 +668,31 @@ describe("EventProcessor — tool identity for per-call rendering", () => {
     expect(done.toolName).toBe("read")
   })
 })
+
+describe("EventProcessor — token usage", () => {
+  it("turns session.usage.updated into a TokenUsage action", () => {
+    const proc = makeProcessor()
+    const result = proc.processEvent({
+      type: "session.usage.updated",
+      data: {
+        sessionID: "ses-1",
+        cost: 0.25,
+        tokens: { input: 100, output: 20, reasoning: 5, cache: { read: 50, write: 0 } },
+      },
+    })
+    expect(result).toEqual({
+      type: "TokenUsage",
+      sessionId: "ses-1",
+      cost: 0.25,
+      tokens: { input: 100, output: 20, reasoning: 5, cache: { read: 50, write: 0 } },
+    })
+  })
+
+  it("ignores usage for unowned sessions", () => {
+    const proc = makeProcessor(["ses-other"])
+    expect(proc.processEvent({
+      type: "session.usage.updated",
+      data: { sessionID: "ses-1", tokens: { input: 1 } },
+    })).toBeNull()
+  })
+})

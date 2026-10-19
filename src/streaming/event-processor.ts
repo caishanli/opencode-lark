@@ -65,6 +65,18 @@ export interface PermissionRequested {
   readonly metadata: Record<string, unknown>
 }
 
+export interface TokenUsage {
+  readonly type: "TokenUsage"
+  readonly sessionId: string
+  readonly cost?: number
+  readonly tokens: {
+    input?: number
+    output?: number
+    reasoning?: number
+    cache?: { read?: number; write?: number }
+  }
+}
+
 export type ProcessedAction =
   | TextDelta
   | ToolStateChange
@@ -72,6 +84,7 @@ export type ProcessedAction =
   | SessionIdle
   | QuestionAsked
   | PermissionRequested
+  | TokenUsage
 
 // ---------------------------------------------------------------------------
 // Input event shapes (from actual opencode SSE stream)
@@ -221,6 +234,7 @@ const KNOWN_TYPES = new Set([
   "session.next.text.delta",
   "session.status",
   "session.idle",
+  "session.usage.updated",
   "question.asked",
   "question.v2.asked",
   "permission.asked",
@@ -283,6 +297,8 @@ export class EventProcessor {
           return this.processSessionStatus(raw)
         case "session.idle":
           return this.processSessionIdle(raw)
+        case "session.usage.updated":
+          return this.processSessionUsage(raw)
         case "session.execution.succeeded":
         case "session.execution.failed":
         case "session.execution.interrupted":
@@ -520,6 +536,31 @@ export class EventProcessor {
         return { type: "SessionIdle", sessionId }
       default:
         return null
+    }
+  }
+
+  private processSessionUsage(event: any): TokenUsage | null {
+    const props = eventPayload(event)
+    if (!props) return null
+    const sessionId = props.sessionID
+    if (typeof sessionId !== "string") return null
+    if (!this.ownedSessions.has(sessionId)) return null
+    const t = (props.tokens ?? {}) as Record<string, unknown>
+    const cache = (t.cache ?? {}) as Record<string, unknown>
+    const num = (v: unknown): number | undefined => (typeof v === "number" ? v : undefined)
+    return {
+      type: "TokenUsage",
+      sessionId,
+      ...(typeof props.cost === "number" ? { cost: props.cost } : {}),
+      tokens: {
+        ...(num(t.input) !== undefined ? { input: num(t.input) } : {}),
+        ...(num(t.output) !== undefined ? { output: num(t.output) } : {}),
+        ...(num(t.reasoning) !== undefined ? { reasoning: num(t.reasoning) } : {}),
+        cache: {
+          ...(num(cache.read) !== undefined ? { read: num(cache.read) } : {}),
+          ...(num(cache.write) !== undefined ? { write: num(cache.write) } : {}),
+        },
+      },
     }
   }
 
