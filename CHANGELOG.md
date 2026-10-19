@@ -4,6 +4,47 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## Unreleased
+
+### Features
+
+- **opencode v2 support**: the bridge now targets opencode v2's `/api` namespace
+  with Basic auth (`OPENCODE_SERVER_PASSWORD` / `OPENCODE_SERVER_USERNAME`).
+  A new `OpencodeGateway` (`src/opencode/gateway.ts`) is the single access
+  point to the server; every consumer takes it by injection.
+- **Feishu QR onboarding**: `opencode-lark init` can now create the Feishu app
+  for you — a terminal QR code is shown, scanning it with the Feishu mobile app
+  yields the App ID / App Secret and writes them to the config.
+- **Streaming reply on the card**: the agent's text now streams into the
+  CardKit card (throttled) instead of being posted as a separate card at the end.
+- **Per-tool-call status**: each tool invocation gets its own status line with
+  a summary of what it ran, plus a grouped count summary (`shell ×3`).
+- **Markdown adapted to Feishu**: agent output is rewritten before it reaches a
+  card — tables become nested lists, headings become bold lines, task
+  checkboxes and blockquotes are converted. Fenced code blocks are untouched.
+
+### Bug Fixes
+
+- **Auth failures are detected**: the SDK does not throw on 4xx, so a wrong
+  password looked like a healthy server. `ping()` now reports it and the
+  startup check fails fast with a pointer to `OPENCODE_SERVER_PASSWORD`.
+- **Root-session discovery**: session discovery passes `parentID=null`, so
+  sub-agent sessions are no longer bound to a Feishu thread.
+- **Turn-end detection**: opencode v2 ends a turn with
+  `session.execution.succeeded` and does not emit `session.idle`; the reply
+  card is now closed correctly instead of buffering forever.
+- **Tool events**: the v2 tool event payload keys (`data.id`, `data.name`) are
+  read correctly, so tools are no longer collapsed into a single entry.
+- **Bun resolution**: the npm scripts resolve bun from `~/.bun/bin` when it is
+  not on `PATH`, so they work in non-interactive shells.
+
+### Known limitations
+
+- Question ("ask the user") cards are disabled on opencode v2.0.29 — it has no
+  question endpoints and no question events. Permission cards still work.
+- Attachments are forwarded to opencode as a saved path rather than as file
+  parts, so the model sees the path but not the file content.
+
 ## 0.1.21 (2026-03-04)
 
 ### Improvements

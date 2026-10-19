@@ -30,12 +30,12 @@
     "opencode-lark": "bin/opencode-lark.js"
   },
   "scripts": {
-    "start": "bun run src/index.ts",
-    "dev": "bun --watch run src/index.ts",
-    "build": "tsc",
-    "test": "bun node_modules/.bin/vitest",
-    "test:run": "bun node_modules/.bin/vitest run",
-    "test:coverage": "bun node_modules/.bin/vitest run --coverage"
+    "start": "sh scripts/run.sh run src/index.ts",
+    "dev": "sh scripts/run.sh --watch run src/index.ts",
+    "build": "sh scripts/run.sh node_modules/typescript/bin/tsc",
+    "test": "sh scripts/run.sh node_modules/.bin/vitest",
+    "test:run": "sh scripts/run.sh node_modules/.bin/vitest run",
+    "test:coverage": "sh scripts/run.sh node_modules/.bin/vitest run --coverage"
   },
   "exports": {
     ".": "./dist/index.js"

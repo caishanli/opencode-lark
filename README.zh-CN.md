@@ -86,8 +86,18 @@ bun install
 ### 前置要求
 
 - **[Bun](https://bun.sh)**（必需运行时，本项目使用 `bun:sqlite`，仅 Bun 支持）
-- **[opencode](https://opencode.ai)** 已安装在本地
+- **[opencode](https://opencode.ai)** v2 已在本地运行，并开启 Basic 鉴权
 - 已配置凭证的飞书开放平台应用（参见[飞书应用配置](#飞书应用配置)）
+
+> **让 bun 在 `PATH` 里。** bun 默认装在 `~/.bun/bin`，若提示找不到 bun，
+> 把下面两行加进 shell 配置：
+> ```bash
+> export BUN_INSTALL="$HOME/.bun"
+> export PATH="$BUN_INSTALL/bin:$PATH"
+> ```
+> npm 脚本（`npm start`、`npm test`）会经过 `scripts/run.sh`，即使 bun 不在
+> `PATH` 里也能从 `~/.bun/bin` 找到，因此在 CI、Docker、systemd 这类非交互
+> shell 里同样可用。
 
 ### 步骤
 
@@ -113,8 +123,10 @@ opencode-lark
 ```
 
 首次运行无配置时，交互式向导将引导你完成：
+- **扫码自动创建飞书应用**（推荐）：终端显示二维码，用手机飞书扫一下，App ID /
+  App Secret 会自动写入。跳过或超时会自动回退到手动输入。
 - 输入飞书 App ID 和 App Secret（密码遮蔽输入）
-- 验证 opencode server 连通性
+- 验证 opencode server 连通性（带 Basic 鉴权）
 - 保存凭证到 `.env` 文件
 
 配置完成后服务自动启动。
@@ -262,7 +274,9 @@ opencode attach http://127.0.0.1:4096 --session {session_id}
 |----------|----------|---------|-------------|
 | `FEISHU_APP_ID` | 是 | | 飞书应用 App ID |
 | `FEISHU_APP_SECRET` | 是 | | 飞书应用 App Secret |
-| `OPENCODE_SERVER_URL` | 否 | `http://localhost:4096` | opencode server 地址 |
+| `OPENCODE_SERVER_URL` | 否 | `http://localhost:4096` | opencode server 地址（v2 的 API 在 `/api` 前缀下） |
+| `OPENCODE_SERVER_USERNAME` | 否 | `opencode` | opencode server 的 Basic 鉴权用户名 |
+| `OPENCODE_SERVER_PASSWORD` | **是**（opencode v2） | | opencode server 的 Basic 鉴权密码。没有它服务端会返回 `401`，opencode-lark 会判定为连不上 |
 | `FEISHU_WEBHOOK_PORT` | 否 | `3001` | HTTP webhook 回退端口（仅在不使用 WebSocket 接收卡片回调时需要） |
 | `OPENCODE_CWD` | 否 | `process.cwd()` | 覆盖 session 发现目录 |
 | `FEISHU_VERIFICATION_TOKEN` | 否 | | 事件订阅验证 token |
@@ -295,6 +309,19 @@ opencode attach http://127.0.0.1:4096 --session {session_id}
 ```
 
 支持 `${ENV_VAR}` 环境变量插值和 JSONC 注释。无配置文件时自动从 `.env` 构建默认配置。
+
+---
+
+## 已知限制
+
+- **opencode v2.0.29 上「提问卡片」不可用。** 该版本没有 `/api/question/*`
+  接口，也不发提问事件（改用了 `form.*`）。opencode-lark 启动时打一条告警并
+  跳过该卡片；权限卡片不受影响。
+- **附件是以文本形式转交的，不是文件 part。** 从飞书下载的图片/文件只把保存
+  路径告诉 opencode，模型拿到的是路径而不是文件内容。
+- **飞书卡片无法渲染 GFM 表格和 `#` 标题。** agent 输出在放上卡片前会被改写：
+  表格变成嵌套列表，标题变成加粗行，任务复选框和引用块会被转换，围栏代码块
+  保持原样。
 
 ---
 

@@ -86,8 +86,18 @@ Get up and running in 5 minutes. You'll need a Feishu Open Platform app with bot
 ### Prerequisites
 
 - **[Bun](https://bun.sh)** (required runtime — this project uses `bun:sqlite` which is Bun-only)
-- **[opencode](https://opencode.ai)** installed locally
+- **[opencode](https://opencode.ai)** v2 running locally, with Basic auth enabled
 - A **Feishu Open Platform app** with credentials (see [Feishu App Setup](#feishu-app-setup))
+
+> **Bun on `PATH`.** Bun usually installs to `~/.bun/bin`. If `bun` is not found,
+> add it to your shell profile:
+> ```bash
+> export BUN_INSTALL="$HOME/.bun"
+> export PATH="$BUN_INSTALL/bin:$PATH"
+> ```
+> The npm scripts (`npm start`, `npm test`) go through `scripts/run.sh`, which
+> finds bun in `~/.bun/bin` even when it is not on `PATH` — so they work in
+> non-interactive shells (CI, Docker, systemd) too.
 
 ### Steps
 
@@ -113,8 +123,12 @@ opencode-lark
 ```
 
 On first run with no configuration, an interactive setup wizard guides you through:
+- **Scanning a QR code to create the Feishu app automatically** (recommended) — a
+  terminal QR code is shown; scan it with the Feishu mobile app and the App ID /
+  App Secret are written for you. Falls back to manual entry if you skip or the
+  scan times out.
 - Entering your Feishu App ID and App Secret (masked input)
-- Validating the opencode server connection
+- Validating the opencode server connection (with Basic auth)
 - Saving credentials to a `.env` file
 
 The service starts automatically after setup completes.
@@ -260,7 +274,9 @@ Navigate to **Development Config → Event Subscriptions → Callback Subscripti
 |----------|----------|---------|-------------|
 | `FEISHU_APP_ID` | yes | | Feishu App ID |
 | `FEISHU_APP_SECRET` | yes | | Feishu App Secret |
-| `OPENCODE_SERVER_URL` | no | `http://localhost:4096` | opencode server URL |
+| `OPENCODE_SERVER_URL` | no | `http://localhost:4096` | opencode server URL (v2 serves the API under `/api`) |
+| `OPENCODE_SERVER_USERNAME` | no | `opencode` | Basic-auth username for the opencode server |
+| `OPENCODE_SERVER_PASSWORD` | **yes** (opencode v2) | | Basic-auth password for the opencode server. Without it the server answers `401` and opencode-lark reports the server as unreachable |
 | `FEISHU_WEBHOOK_PORT` | no | `3001` | HTTP webhook fallback port (only needed if not using WebSocket for card callbacks) |
 | `OPENCODE_CWD` | no | `process.cwd()` | Override session discovery directory |
 | `FEISHU_VERIFICATION_TOKEN` | no | | Event subscription verification token |
@@ -294,6 +310,22 @@ Navigate to **Development Config → Event Subscriptions → Callback Subscripti
 ```
 
 Supports `${ENV_VAR}` interpolation and JSONC comments. If no config file is found, the app builds a default config from `.env` values directly.
+
+---
+
+## Known limitations
+
+- **Question ("ask the user") cards are disabled on opencode v2.0.29.** That
+  server exposes no `/api/question/*` endpoints and emits no question events
+  (it uses `form.*` instead). opencode-lark logs one warning at startup and
+  skips the card. Permission cards keep working.
+- **Attachments are forwarded as text, not as file parts.** Images and files
+  downloaded from Feishu are announced to opencode as a saved path, so the
+  model receives the path rather than the file content.
+- **Feishu cards cannot render GFM tables or `#` headings.** Agent output is
+  rewritten before it is put on the card: tables become nested lists, headings
+  become bold lines, task checkboxes and blockquotes are converted, and fenced
+  code blocks are left untouched.
 
 ---
 
