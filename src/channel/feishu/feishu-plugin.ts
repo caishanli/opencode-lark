@@ -22,7 +22,6 @@ import type {
 } from "../types.js"
 import type { AppConfig } from "../../utils/config.js"
 import type { FeishuApiClient } from "../../feishu/api-client.js"
-import type { CardKitClient } from "../../feishu/cardkit-client.js"
 import type { Logger } from "../../utils/logger.js"
 import type { FeishuMessageEvent, FeishuCardAction } from "../../types.js"
 import { buildResponseCard } from "../../feishu/card-builder.js"
@@ -34,7 +33,6 @@ import { createFeishuWSGateway } from "../../feishu/ws-client.js"
 export interface FeishuPluginDeps {
   appConfig: AppConfig
   feishuClient: FeishuApiClient
-  cardkitClient: CardKitClient
   logger: Logger
   onMessage?: (event: FeishuMessageEvent) => Promise<void>
   onCardAction?: (action: FeishuCardAction) => Promise<void>
@@ -52,7 +50,6 @@ export class FeishuPlugin extends BaseChannelPlugin {
 
   private readonly appConfig: AppConfig
   private readonly feishuClient: FeishuApiClient
-  private readonly cardkitClient: CardKitClient
   private readonly logger: Logger
 
   // ── Adapters ──
@@ -70,7 +67,6 @@ export class FeishuPlugin extends BaseChannelPlugin {
     super()
     this.appConfig = deps.appConfig
     this.feishuClient = deps.feishuClient
-    this.cardkitClient = deps.cardkitClient
     this.logger = deps.logger
 
     // 1. Config adapter
@@ -154,7 +150,6 @@ export class FeishuPlugin extends BaseChannelPlugin {
     this.streaming = {
       createStreamingSession: (target: StreamTarget): StreamingSession => {
         const _cardSession = new StreamingCardSession({
-          cardkitClient: this.cardkitClient,
           feishuClient: this.feishuClient,
           chatId: target.address,
         })

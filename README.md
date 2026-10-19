@@ -382,7 +382,7 @@ src/
 ├── index.ts         # Entry point, 9-phase startup + graceful shutdown
 ├── types.ts         # Shared type definitions
 ├── channel/         # ChannelPlugin interface, ChannelManager, FeishuPlugin
-├── feishu/          # Feishu REST client, CardKit, WebSocket, message dedup
+├── feishu/          # Feishu REST client, WebSocket, message dedup
 ├── handler/         # MessageHandler (inbound pipeline) + StreamingBridge (SSE → cards)
 ├── session/         # TUI session discovery, thread→session mapping, progress cards
 ├── streaming/       # EventProcessor (SSE parsing), SessionObserver, SubAgentTracker

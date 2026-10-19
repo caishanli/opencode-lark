@@ -29,7 +29,7 @@ Security model:
 Upload routing: `.png`/`.jpg`/`.jpeg`/`.gif`/`.webp` go via `uploadImage`; everything else goes via `uploadFile`.
 
 ### `streaming-integration.ts`
-SSE-to-CardKit bridge (also called `StreamingBridge` in the root docs).
+SSE-to-Feishu-card bridge (also called `StreamingBridge` in the root docs).
 
 - Subscribes to `EventProcessor` events for a specific session
 - Accumulates `TextDelta` chunks via queue-based serialization to prevent rate-limit issues

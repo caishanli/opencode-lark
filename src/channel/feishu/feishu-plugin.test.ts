@@ -7,7 +7,6 @@ import { FeishuPlugin } from "./feishu-plugin.js"
 import type { ChannelId, NormalizedMessage, ThreadKey } from "../types.js"
 import type { AppConfig } from "../../utils/config.js"
 import type { FeishuApiClient } from "../../feishu/api-client.js"
-import type { CardKitClient } from "../../feishu/cardkit-client.js"
 import type { Logger } from "../../utils/logger.js"
 import { createMockLogger, createMockFeishuClient } from "../../__tests__/setup.js"
 import type { FeishuMessageEvent } from "../../types.js"
@@ -27,24 +26,14 @@ function makeConfig(): AppConfig {
   }
 }
 
-function makeMockCardKitClient(): CardKitClient {
-  return {
-    createCard: vi.fn().mockResolvedValue("card_123"),
-    updateElement: vi.fn().mockResolvedValue(undefined),
-    closeStreaming: vi.fn().mockResolvedValue(undefined),
-  } as unknown as CardKitClient
-}
-
 function makeFeishuPlugin(overrides?: {
   appConfig?: AppConfig
   feishuClient?: FeishuApiClient
-  cardkitClient?: CardKitClient
   logger?: Logger
 }) {
   return new FeishuPlugin({
     appConfig: overrides?.appConfig ?? makeConfig(),
     feishuClient: overrides?.feishuClient ?? createMockFeishuClient(),
-    cardkitClient: overrides?.cardkitClient ?? makeMockCardKitClient(),
     logger: overrides?.logger ?? createMockLogger(),
   })
 }

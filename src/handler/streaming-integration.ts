@@ -1,5 +1,4 @@
 
-import type { CardKitClient } from "../feishu/cardkit-client.js"
 import type { FeishuApiClient } from "../feishu/api-client.js"
 import type { SubAgentTracker } from "../streaming/subagent-tracker.js"
 import type { Logger } from "../utils/logger.js"
@@ -20,7 +19,6 @@ import {
 // ── Types ──
 
 export interface StreamingBridgeDeps {
-  cardkitClient: CardKitClient
   feishuClient: FeishuApiClient
   subAgentTracker: SubAgentTracker
   logger: Logger
@@ -52,7 +50,7 @@ const FIRST_EVENT_TIMEOUT_MS = 5 * 60 * 1_000 // 5 minutes — long tasks may ta
 export function createStreamingBridge(
   deps: StreamingBridgeDeps,
 ): StreamingBridge {
-  const { cardkitClient, feishuClient, subAgentTracker, logger, seenInteractiveIds } = deps
+  const { feishuClient, subAgentTracker, logger, seenInteractiveIds } = deps
 
   return {
     async handleMessage(
@@ -71,7 +69,6 @@ export function createStreamingBridge(
       const ensureCard = (): void => {
         if (card || cardStartPromise) return
         card = new StreamingCardSession({
-          cardkitClient,
           feishuClient,
           chatId,
         })

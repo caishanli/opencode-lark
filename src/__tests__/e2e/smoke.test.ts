@@ -52,25 +52,24 @@ function makeFeishuEvent(overrides: Partial<FeishuMessageEvent> = {}): FeishuMes
   }
 }
 
-function createMockCardKitClient(): CardKitClient {
-  return {
-    createCard: vi.fn().mockResolvedValue("card_e2e_1"),
-    updateElement: vi.fn().mockResolvedValue(undefined),
-    appendElements: vi.fn().mockResolvedValue(undefined),
-    closeStreaming: vi.fn().mockResolvedValue(undefined),
-  } as unknown as CardKitClient
-}
 
-/** Everything the bridge wrote to the card: appended elements + element updates. */
-function cardContent(cardkitClient: any): string {
-  const parts: string[] = []
-  for (const c of cardkitClient.appendElements?.mock.calls ?? []) {
-    for (const el of c[1] ?? []) parts.push(String(el.content))
+
+/** The card content the bridge last wrote to Feishu. */
+function cardContent(feishuClient: any): string {
+  const updates = feishuClient.updateMessage?.mock.calls ?? []
+  const source = updates.length > 0
+    ? updates[updates.length - 1][1]
+    : (feishuClient.sendMessage?.mock.calls ?? []).at(-1)?.[1]?.content
+  if (!source) return ""
+  try {
+    const card = JSON.parse(source)
+    return (card.body?.elements ?? [])
+      .map((e: any) => e.content ?? (e.elements ?? []).map((x: any) => x.content).join("\n"))
+      .join("\n")
+  } catch {
+    return String(source)
   }
-  for (const c of cardkitClient.updateElement?.mock.calls ?? []) parts.push(String(c[2]))
-  return parts.join("\n")
 }
-
 
 function createMockSessionManager(sessionId = "ses-e2e-1"): SessionManager {
   return {
@@ -119,7 +118,6 @@ describe("E2E Smoke Tests", () => {
     const ownedSessions = new Set<string>()
     const eventListeners: EventListenerMap = new Map()
     const logger = createMockLogger()
-    const cardkitClient = createMockCardKitClient()
     const feishuClient = createMockFeishuClient()
 
     // feishuClient.sendMessage returns message_id (needed by StreamingCardSession.start())
@@ -152,7 +150,6 @@ describe("E2E Smoke Tests", () => {
     const subAgentTracker = new SubAgentTracker({ opencode })
 
     const streamingBridge = createStreamingBridge({
-      cardkitClient,
       feishuClient,
       subAgentTracker,
       logger,
@@ -217,7 +214,7 @@ describe("E2E Smoke Tests", () => {
     await handlerPromise
 
     // The reply is streamed into the card as it arrives; no separate final card is posted.
-    expect(cardContent(cardkitClient)).toContain("Hello World!")
+    expect(cardContent(feishuClient)).toContain("Hello World!")
     expect(feishuClient.replyMessage).not.toHaveBeenCalled()
 
     // Verify listener was cleaned up
@@ -235,7 +232,6 @@ describe("E2E Smoke Tests", () => {
     const ownedSessions = new Set<string>()
     const eventListeners: EventListenerMap = new Map()
     const logger = createMockLogger()
-    const cardkitClient = createMockCardKitClient()
     const feishuClient = createMockFeishuClient()
 
     ;(feishuClient.sendMessage as ReturnType<typeof vi.fn>).mockResolvedValue({
@@ -252,7 +248,6 @@ describe("E2E Smoke Tests", () => {
     const subAgentTracker = new SubAgentTracker({ opencode })
 
     const streamingBridge = createStreamingBridge({
-      cardkitClient,
       feishuClient,
       subAgentTracker,
       logger,

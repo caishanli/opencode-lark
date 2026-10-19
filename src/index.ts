@@ -23,7 +23,6 @@ import { createLogger } from "./utils/logger.js"
 import type { EventListenerMap } from "./utils/event-listeners.js"
 import type { FeishuCardAction } from "./types.js"
 import { createFeishuApiClient } from "./feishu/api-client.js"
-import { CardKitClient } from "./feishu/cardkit-client.js"
 import { MessageDedup } from "./feishu/message-dedup.js"
 import { createSessionManager } from "./session/session-manager.js"
 import { createProgressTracker } from "./session/progress-tracker.js"
@@ -156,10 +155,6 @@ async function main(): Promise<void> {
     logger.warn(`Failed to fetch bot info — group @mention filtering disabled: ${err}`)
   }
 
-  const cardkitClient = new CardKitClient({
-    appId: config.feishu.appId,
-    appSecret: config.feishu.appSecret,
-  })
 
   const sessionManager = createSessionManager({
     opencode: gateway,
@@ -198,7 +193,6 @@ async function main(): Promise<void> {
   })
 
   const streamingBridge = createStreamingBridge({
-    cardkitClient,
     feishuClient,
     subAgentTracker,
     logger,
@@ -347,7 +341,6 @@ async function main(): Promise<void> {
   const feishuPlugin = new FeishuPlugin({
     appConfig: config,
     feishuClient,
-    cardkitClient,
     logger,
     onMessage: handleMessage,
     onCardAction: handleCardAction,

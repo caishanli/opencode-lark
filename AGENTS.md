@@ -4,7 +4,7 @@ Architecture guide for contributors. Covers module layout, key abstractions, dat
 
 ## What This Project Does
 
-`opencode-lark` bridges Feishu group chats with opencode TUI sessions. Messages sent in Feishu flow into opencode as if typed in the terminal. Agent replies stream back to Feishu — `StreamingBridge` accumulates `TextDelta` events and queues them into CardKit streaming card updates (with serialized delivery to avoid rate limits), while tool and sub-agent status are shown via separate CardKit cards.
+`opencode-lark` bridges Feishu group chats with opencode TUI sessions. Messages sent in Feishu flow into opencode as if typed in the terminal. Agent replies stream back to Feishu — `StreamingBridge` accumulates `TextDelta` events and updates one Feishu interactive message in place (with serialized delivery to avoid rate limits). The card body is a chronological list of blocks — text runs and tool panels — following the ZCode reference implementation.
 
 ```
 Feishu client
@@ -28,7 +28,7 @@ src/
 ├── types.ts         Shared type definitions
 ├── channel/         ChannelPlugin interface, ChannelManager, FeishuPlugin
 ├── cli/             Setup wizard + Feishu QR onboarding (device-code flow)
-├── feishu/          Feishu REST client, CardKit, WebSocket, message dedup, markdown adapter
+├── feishu/          Feishu REST client, WebSocket, message dedup, markdown adapter
 ├── handler/         MessageHandler (inbound pipeline) + StreamingBridge (SSE → cards)
 ├── opencode/        OpencodeGateway (the only opencode access point) + event payload helper
 ├── session/         TUI session discovery, thread→session mapping, progress cards
@@ -114,7 +114,7 @@ Discovers live opencode TUI sessions for a working directory. Binds a Feishu thr
 
 ### StreamingBridge (`src/handler/streaming-integration.ts`)
 
-Buffers `TextDelta` events and queues them into CardKit streaming card updates (serialized to avoid rate limits). Tool status is rendered **per tool call** (keyed by the call id) with a grouped count summary, and the card is closed **with** the final text when `SessionIdle` fires — no separate reply card is posted.
+Buffers `TextDelta` events and updates a single Feishu interactive message in place (serialized to avoid rate limits). The card body is a chronological list of blocks: a text run becomes a markdown element, a run of tool calls becomes a `collapsible_panel` whose header carries the count (`🛠️ 工具 (3)`) and whose body lists one line per call. The card is closed **with** the final text when `SessionIdle` fires — no separate reply card is posted.
 
 ---
 
@@ -142,7 +142,7 @@ opencode SSE stream (/api/event)
   → gateway.subscribeEvents() → EventProcessor: parse raw event → typed event
     → SessionObserver: fan-out to registered listeners
       → StreamingBridge
-          TextDelta  → accumulate text, queued CardKit update (throttled)
+          TextDelta  → accumulate text, queued in-place card update (throttled)
           ToolStateChange → per-call status line + grouped count summary
           SessionIdle → close the card WITH the final text
 ```
@@ -201,7 +201,7 @@ opencode SSE stream (/api/event)
 
 ### Adding a Heartbeat Check
 
-`src/cron/heartbeat.ts` pings the opencode server and optionally posts a status message to a Feishu chat. Extend `HeartbeatService` to check additional endpoints or post richer status cards via `CardKitClient`.
+`src/cron/heartbeat.ts` pings the opencode server and optionally posts a status message to a Feishu chat. Extend `HeartbeatService` to check additional endpoints or post richer status cards via `FeishuApiClient`.
 
 ## Environment Variables
 

@@ -24,7 +24,7 @@ Manages per-session observation for forwarding TUI-initiated events to Feishu. K
 Also handles a secondary path: if a message was sent from the opencode TUI directly (not via Feishu), `SessionObserver` can still forward the resulting events to any active Feishu listener for that session.
 
 ### `streaming-card.ts`
-Builds and manages a live Feishu streaming card during a session. Uses queue-based update serialization (not debouncing). Key methods: `start()` creates the CardKit streaming card, `setToolStatus(name, state, title?)` adds/updates tool status indicators on the card, `addSubtaskButton(label, actionValue)` adds sub-agent buttons, and `close(finalText?)` sends the final content update and closes streaming mode.
+Builds and manages the live Feishu reply card during a session. The card is a normal interactive message updated in place (`PATCH /im/v1/messages/{id}`) — not a CardKit card. Its body is a chronological list of blocks: text runs and tool panels (`collapsible_panel` with the call count in the header). Uses queue-based update serialization (not debouncing). Key methods: `start()` creates the card message, `setText(fullText)` updates the current text block, `setToolStatus(name, state, title?, callId?)` records a tool call, `addSubtaskButton(label, actionValue)` adds sub-agent links, and `close(finalText?)` writes the final content.
 
 ## Design notes
 

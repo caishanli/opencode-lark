@@ -1,6 +1,6 @@
 # feishu/
 
-All direct Feishu platform I/O: REST API calls, WebSocket connection to Open Platform, CardKit card building, and the webhook server for card callbacks.
+All direct Feishu platform I/O: REST API calls, WebSocket connection to Open Platform, card building, and the webhook server for card callbacks.
 
 ## Files
 
@@ -23,8 +23,6 @@ Long-lived WebSocket connection to Feishu's event gateway (not user-level WebSoc
 
 The `mentions` array contains objects with `id.open_id`. Compare against `botOpenId` to determine if the bot was mentioned.
 
-### `cardkit-client.ts`
-CardKit v2 wrapper. Provides methods for creating and managing streaming cards. Key methods: `createCard(cardJson)` creates a new streaming card and returns a `cardId`, `updateElement(cardId, elementId, content, sequence)` updates a card element's content, and `closeStreaming(cardId, summary, sequence)` ends streaming mode. Cards are sent to Feishu chats via `api-client.ts`.
 
 ### `webhook-server.ts`
 Minimal HTTP server on port `3001` (overridable via `FEISHU_WEBHOOK_PORT`). Receives POST callbacks from Feishu when a user clicks a button in a card. Verifies the request signature, parses the action payload, and forwards to `InteractiveHandler`.
@@ -32,5 +30,5 @@ Minimal HTTP server on port `3001` (overridable via `FEISHU_WEBHOOK_PORT`). Rece
 ## Gotchas
 
 - Token refresh is automatic, but if `FEISHU_APP_ID` or `FEISHU_APP_SECRET` are wrong, the first API call will fail with a 403 and the error surfaces at startup, not lazily.
-- CardKit cards have a max element count. If a streaming response is very long, truncate or paginate before building card elements.
+- The streaming reply card is a normal interactive message updated in place (PATCH /im/v1/messages/{id}), not a CardKit card. Feishu rejects cards with more than 200 components, so `streaming-card.ts` owns a 180-element budget and seals the card into a new one when it overflows.
 - The webhook server must be reachable from Feishu's servers. In local dev, use ngrok or equivalent and configure the callback URL in the Feishu app portal.

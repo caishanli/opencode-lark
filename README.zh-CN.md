@@ -332,7 +332,7 @@ src/
 ├── index.ts         # 入口，9 阶段启动 + 优雅关闭
 ├── types.ts         # 共享类型定义
 ├── channel/         # ChannelPlugin 接口、ChannelManager、FeishuPlugin
-├── feishu/          # 飞书 REST 客户端、CardKit、WebSocket、消息去重
+├── feishu/          # 飞书 REST 客户端、WebSocket、消息去重
 ├── handler/         # MessageHandler（入站管道）+ StreamingBridge（SSE → 卡片）
 ├── session/         # TUI session 发现、thread→session 映射、进度卡片
 ├── streaming/       # EventProcessor（SSE 解析）、SessionObserver、SubAgentTracker

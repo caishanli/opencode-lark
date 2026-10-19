@@ -68,23 +68,21 @@ function createMockInteractiveCardRegistry() {
   }
 }
 
-function createMockCardKitClient() {
-  return {
-    createCard: vi.fn().mockResolvedValue("card_123"),
-    updateElement: vi.fn().mockResolvedValue(undefined),
-    appendElements: vi.fn().mockResolvedValue(undefined),
-    closeStreaming: vi.fn().mockResolvedValue(undefined),
-  } as unknown as CardKitClient
-}
-
-/** Everything the bridge wrote to the card: appended elements + element updates. */
-function cardContent(cardkitClient: any): string {
-  const parts: string[] = []
-  for (const c of cardkitClient.appendElements?.mock.calls ?? []) {
-    for (const el of c[1] ?? []) parts.push(String(el.content))
+/** The card content the bridge last wrote to Feishu. */
+function cardContent(feishuClient: any): string {
+  const updates = feishuClient.updateMessage?.mock.calls ?? []
+  const source = updates.length > 0
+    ? updates[updates.length - 1][1]
+    : (feishuClient.sendMessage?.mock.calls ?? []).at(-1)?.[1]?.content
+  if (!source) return ""
+  try {
+    const card = JSON.parse(source)
+    return (card.body?.elements ?? [])
+      .map((e: any) => e.content ?? (e.elements ?? []).map((x: any) => x.content).join("\n"))
+      .join("\n")
+  } catch {
+    return String(source)
   }
-  for (const c of cardkitClient.updateElement?.mock.calls ?? []) parts.push(String(c[2]))
-  return parts.join("\n")
 }
 
 
@@ -111,7 +109,6 @@ function makeDeps(overrides: Partial<StreamingBridgeDeps> = {}): StreamingBridge
   createdSeenInteractiveIds.push(seenInteractiveIds)
 
   return {
-    cardkitClient: createMockCardKitClient(),
     feishuClient: createMockFeishuClient(),
     subAgentTracker: createMockSubAgentTracker(),
     logger: createMockLogger(),
@@ -360,7 +357,7 @@ describe("createStreamingBridge", () => {
     })
 
     await handlePromise
-    expect((deps.cardkitClient as any).updateElement).toHaveBeenCalled()
+    expect((deps.feishuClient as any).updateMessage).toHaveBeenCalled()
   })
 
   it("handles SubtaskDiscovered by sending separate card via sendMessage", async () => {
@@ -594,7 +591,7 @@ describe("createStreamingBridge", () => {
 
     await handlePromise
 
-    expect((deps.cardkitClient as any).closeStreaming).toHaveBeenCalled()
+    expect((deps.feishuClient as any).updateMessage).toHaveBeenCalled()
   })
 
   it("logs info when streaming card starts", async () => {
@@ -657,18 +654,15 @@ describe("createStreamingBridge", () => {
     )
   })
 
-  it("still completes even if card.close() throws", async () => {
-    const mockCardKit = createMockCardKitClient()
-    ;(mockCardKit as any).closeStreaming = vi.fn().mockRejectedValue(new Error("close fail"))
-
+  it("still completes even if the card update throws", async () => {
     const deps = makeDeps({
-      cardkitClient: mockCardKit,
       feishuClient: {
         ...createMockFeishuClient(),
         sendMessage: vi.fn().mockResolvedValue({
           code: 0,
           data: { message_id: "msg_456" },
         }),
+        updateMessage: vi.fn().mockRejectedValue(new Error("update fail")),
         replyMessage: vi.fn().mockResolvedValue({ code: 0 }),
       },
     })
@@ -733,8 +727,7 @@ describe("createStreamingBridge", () => {
       }),
       replyMessage: vi.fn().mockResolvedValue({ code: 0 }),
     }
-    const cardkitClient = createMockCardKitClient()
-    const deps = makeDeps({ feishuClient: mockFeishu, cardkitClient })
+    const deps = makeDeps({ feishuClient: mockFeishu })
     const bridge = createStreamingBridge(deps)
 
     const onComplete = vi.fn()
@@ -780,7 +773,7 @@ describe("createStreamingBridge", () => {
 
     // The reply now streams into the card instead of being posted as a separate card.
     expect(mockFeishu.replyMessage).not.toHaveBeenCalled()
-    expect(cardContent(cardkitClient)).toContain("Hello World")
+    expect(cardContent(mockFeishu)).toContain("Hello World")
     expect(onComplete).toHaveBeenCalledWith("Hello World")
   })
 
@@ -793,8 +786,7 @@ describe("createStreamingBridge", () => {
       }),
       replyMessage: vi.fn().mockResolvedValue({ code: 0 }),
     }
-    const cardkitClient = createMockCardKitClient()
-    const deps = makeDeps({ feishuClient: mockFeishu, cardkitClient })
+    const deps = makeDeps({ feishuClient: mockFeishu })
     const bridge = createStreamingBridge(deps)
 
     const onComplete = vi.fn()
@@ -864,8 +856,7 @@ describe("createStreamingBridge", () => {
       }),
       replyMessage: vi.fn().mockResolvedValue({ code: 0 }),
     }
-    const cardkitClient = createMockCardKitClient()
-    const deps = makeDeps({ feishuClient: mockFeishu, cardkitClient })
+    const deps = makeDeps({ feishuClient: mockFeishu })
     const bridge = createStreamingBridge(deps)
 
     const onComplete = vi.fn()
@@ -904,7 +895,7 @@ describe("createStreamingBridge", () => {
 
     // The reply streams into the card, so no separate reply card is posted.
     expect(mockFeishu.replyMessage).not.toHaveBeenCalled()
-    const content = cardContent(cardkitClient)
+    const content = cardContent(mockFeishu)
     expect(content).toContain("…(内容过长，已截断)")
     expect(content.length).toBeLessThan(110_000)
   })
@@ -919,8 +910,7 @@ describe("createStreamingBridge", () => {
       replyMessage: vi.fn().mockResolvedValue({ code: 0 }),
       deleteReaction: vi.fn().mockResolvedValue({ code: 0 }),
     }
-    const cardkitClient = createMockCardKitClient()
-    const deps = makeDeps({ feishuClient: mockFeishu, cardkitClient })
+    const deps = makeDeps({ feishuClient: mockFeishu })
     const bridge = createStreamingBridge(deps)
 
     const onComplete = vi.fn()
@@ -966,7 +956,7 @@ describe("createStreamingBridge", () => {
 
     // Text now streams into the card rather than being posted as a separate reply.
     expect(mockFeishu.replyMessage).not.toHaveBeenCalled()
-    expect(cardContent(cardkitClient)).toContain("Hello World")
+    expect(cardContent(mockFeishu)).toContain("Hello World")
     // deleteReaction called with correct args
     expect(mockFeishu.deleteReaction).toHaveBeenCalledWith("msg_original", "reaction_123")
   })
@@ -981,8 +971,7 @@ describe("createStreamingBridge", () => {
       replyMessage: vi.fn().mockResolvedValue({ code: 0 }),
       deleteReaction: vi.fn().mockResolvedValue({ code: 0 }),
     }
-    const cardkitClient = createMockCardKitClient()
-    const deps = makeDeps({ feishuClient: mockFeishu, cardkitClient })
+    const deps = makeDeps({ feishuClient: mockFeishu })
     const bridge = createStreamingBridge(deps)
 
     const onComplete = vi.fn()
@@ -1019,7 +1008,7 @@ describe("createStreamingBridge", () => {
 
     // Text now streams into the card rather than being posted as a separate reply.
     expect(mockFeishu.replyMessage).not.toHaveBeenCalled()
-    expect(cardContent(cardkitClient)).toContain("Hello World")
+    expect(cardContent(mockFeishu)).toContain("Hello World")
     // deleteReaction called
     expect(mockFeishu.deleteReaction).toHaveBeenCalledWith("msg_original", "reaction_123")
   })
