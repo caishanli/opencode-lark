@@ -261,6 +261,10 @@ export function eventPayload(event: unknown): Record<string, unknown> | null
 | `src/handler/interactive-poller.ts` | 轮询问题/权限 → gateway |
 | `src/cron/cron-service.ts` | 3 处 → gateway |
 | `src/cron/heartbeat.ts` | 1 处 → gateway.ping |
+| `src/streaming/event-processor.ts` | 事件名对齐 v2 真实事件；`eventPayload` 取代直读 `properties` |
+| `src/feishu/markdown.ts`（新增） | 飞书卡片不支持表格/标题，agent 输出在入卡前改写 |
+| `src/cli/feishu-onboard.ts`（新增） | 飞书扫码建应用（设备码流程） |
+| `src/feishu/cardkit-client.ts`（**已删除**） | 卡片改为普通交互消息 + `PATCH /im/v1/messages/{id}` 整卡更新，不再用 CardKit |
 
 ## 6. Part 2 — 飞书扫码建应用
 

@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## Unreleased
+## 0.4.0 (2026-10-20)
 
 ### Features
 
@@ -22,6 +22,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Markdown adapted to Feishu**: agent output is rewritten before it reaches a
   card — tables become nested lists, headings become bold lines, task
   checkboxes and blockquotes are converted. Fenced code blocks are untouched.
+- **Attachments reach the model**: images and files sent in Feishu are now
+  attached to the opencode prompt as `files: [{uri, name}]` with a `file://`
+  URI, so the model can actually look at them instead of only being told a
+  path.
+- **Visible failure messages**: when opencode cannot answer a question (no
+  `/api/question` endpoint) or a permission action fails, the user is told
+  instead of the click silently doing nothing.
 
 ### Bug Fixes
 
@@ -41,9 +48,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Known limitations
 
 - Question ("ask the user") cards are disabled on opencode v2.0.29 — it has no
-  question endpoints and no question events. Permission cards still work.
-- Attachments are forwarded to opencode as a saved path rather than as file
-  parts, so the model sees the path but not the file content.
+  question endpoints and no question events. Permission cards still work, and
+  clicking a question button now explains why nothing happened.
 
 ## 0.1.21 (2026-03-04)
 

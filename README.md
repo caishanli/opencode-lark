@@ -151,6 +151,31 @@ The `session_id` is shown in opencode-lark's startup logs (e.g. `Bound to TUI se
 
 ---
 
+### Run as a background service
+
+To keep the bridge running (and to survive logout/reboot), install it as a
+systemd **user** service:
+
+```bash
+mkdir -p ~/.config/systemd/user ~/.local/state/opencode-lark
+sed -e "s#__REPO__#$PWD#" -e "s#__BUN__#$(command -v bun)#" \
+    -e "s#__STATE__#$HOME/.local/state#" \
+    packaging/opencode-lark.service > ~/.config/systemd/user/opencode-lark.service
+
+systemctl --user daemon-reload
+systemctl --user enable --now opencode-lark
+loginctl enable-linger "$USER"   # keep it running after logout
+```
+
+The service does not carry credentials: the app loads them itself from
+`~/.config/opencode-lark/.env.<appId>` on startup. Logs go to
+`~/.local/state/opencode-lark/bridge.log`.
+
+```bash
+systemctl --user status opencode-lark
+systemctl --user restart opencode-lark
+```
+
 ## Feishu App Setup
 
 ### 1. Create an Internal App
@@ -319,9 +344,6 @@ Supports `${ENV_VAR}` interpolation and JSONC comments. If no config file is fou
   server exposes no `/api/question/*` endpoints and emits no question events
   (it uses `form.*` instead). opencode-lark logs one warning at startup and
   skips the card. Permission cards keep working.
-- **Attachments are forwarded as text, not as file parts.** Images and files
-  downloaded from Feishu are announced to opencode as a saved path, so the
-  model receives the path rather than the file content.
 - **Feishu cards cannot render GFM tables or `#` headings.** Agent output is
   rewritten before it is put on the card: tables become nested lists, headings
   become bold lines, task checkboxes and blockquotes are converted, and fenced

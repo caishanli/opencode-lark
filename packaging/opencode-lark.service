@@ -1,0 +1,27 @@
+# opencode-lark as a systemd user service.
+#
+#   mkdir -p ~/.config/systemd/user ~/.local/state/opencode-lark
+#   sed -e "s#__REPO__#$PWD#" -e "s#__BUN__#$(command -v bun)#" \
+#       -e "s#__STATE__#$HOME/.local/state#" \
+#       packaging/opencode-lark.service > ~/.config/systemd/user/opencode-lark.service
+#   systemctl --user daemon-reload && systemctl --user enable --now opencode-lark
+#
+# Credentials are NOT set here: the app loads them itself from
+# ~/.config/opencode-lark/.env.<appId> on startup.
+[Unit]
+Description=opencode-lark — Feishu bridge for opencode
+Documentation=https://github.com/caishanli/opencode-lark
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=__REPO__
+ExecStart=__BUN__ run __REPO__/src/index.ts
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:__STATE__/opencode-lark/bridge.log
+StandardError=append:__STATE__/opencode-lark/bridge.log
+
+[Install]
+WantedBy=default.target

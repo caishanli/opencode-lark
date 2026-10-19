@@ -149,6 +149,29 @@ opencode attach http://127.0.0.1:4096 --session {session_id}
 
 ---
 
+### 作为后台服务运行
+
+想让桥接常驻（并在注销/重启后自动拉起），可以装成 systemd **用户级**服务：
+
+```bash
+mkdir -p ~/.config/systemd/user ~/.local/state/opencode-lark
+sed -e "s#__REPO__#$PWD#" -e "s#__BUN__#$(command -v bun)#" \
+    -e "s#__STATE__#$HOME/.local/state#" \
+    packaging/opencode-lark.service > ~/.config/systemd/user/opencode-lark.service
+
+systemctl --user daemon-reload
+systemctl --user enable --now opencode-lark
+loginctl enable-linger "$USER"   # 注销后仍然运行
+```
+
+服务里不保存凭据：应用启动时会自己从 `~/.config/opencode-lark/.env.<appId>` 读取。
+日志在 `~/.local/state/opencode-lark/bridge.log`。
+
+```bash
+systemctl --user status opencode-lark
+systemctl --user restart opencode-lark
+```
+
 ## 飞书应用配置
 
 本节介绍如何创建飞书企业自建应用并配置所需权限。
@@ -317,8 +340,6 @@ opencode attach http://127.0.0.1:4096 --session {session_id}
 - **opencode v2.0.29 上「提问卡片」不可用。** 该版本没有 `/api/question/*`
   接口，也不发提问事件（改用了 `form.*`）。opencode-lark 启动时打一条告警并
   跳过该卡片；权限卡片不受影响。
-- **附件是以文本形式转交的，不是文件 part。** 从飞书下载的图片/文件只把保存
-  路径告诉 opencode，模型拿到的是路径而不是文件内容。
 - **飞书卡片无法渲染 GFM 表格和 `#` 标题。** agent 输出在放上卡片前会被改写：
   表格变成嵌套列表，标题变成加粗行，任务复选框和引用块会被转换，围栏代码块
   保持原样。
