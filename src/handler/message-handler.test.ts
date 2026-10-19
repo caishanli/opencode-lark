@@ -969,6 +969,45 @@ describe("createMessageHandler", () => {
     expect(observer.markOwned).toHaveBeenCalledWith("oc-msg-42")
   })
 
+  it("marks ownership from a v2 event that carries assistantMessageID", async () => {
+    // v2 renamed messageID -> assistantMessageID. Without this the observer
+    // treats the reply as TUI-initiated and forwards it AGAIN as a second card.
+    const observer = {
+      observe: vi.fn(),
+      markOwned: vi.fn(),
+      markSessionBusy: vi.fn(),
+      markSessionFree: vi.fn(),
+      getChatForSession: vi.fn(),
+      stop: vi.fn(),
+    }
+    const deps = makeDeps({ observer })
+    const { handleMessage: handler } = createMessageHandler(deps)
+
+    const handlerPromise = handler(makeEvent())
+
+    await waitFor(() => {
+      expect(deps.eventListeners.size).toBe(1)
+    })
+
+    ;[...deps.eventListeners.get("ses-1")!].forEach((fn) => {
+      fn({
+        type: "session.text.delta",
+        data: { sessionID: "ses-1", assistantMessageID: "oc-msg-v2", delta: "Hello" },
+      })
+    })
+
+    ;[...deps.eventListeners.get("ses-1")!].forEach((fn) => {
+      fn({
+        type: "session.execution.succeeded",
+        data: { sessionID: "ses-1" },
+      })
+    })
+
+    await handlerPromise
+
+    expect(observer.markOwned).toHaveBeenCalledWith("oc-msg-v2")
+  })
+
   it("works without observer (backward compatible)", async () => {
     const deps = makeDeps() // No observer
     const { handleMessage: handler } = createMessageHandler(deps)

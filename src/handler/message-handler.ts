@@ -8,7 +8,7 @@
 
 import type { SessionManager } from "../session/session-manager.js"
 import type { OpencodeGateway } from "../opencode/gateway.js"
-import { eventPayload } from "../opencode/events.js"
+import { eventMessageId } from "../opencode/events.js"
 import type { MessageDedup } from "../feishu/message-dedup.js"
 import type { EventProcessor } from "../streaming/event-processor.js"
 import { FileTooLargeError, type FeishuApiClient } from "../feishu/api-client.js"
@@ -706,11 +706,8 @@ export function createMessageHandler(
         let ownershipListener: ((event: unknown) => void) | null = null
         if (deps.observer) {
           ownershipListener = (rawEvent: unknown): void => {
-            const props = eventPayload(rawEvent)
-            if (!props || typeof props !== "object") return
-            const p = props as Record<string, unknown>
-            const part = p.part
-            const mid = part && typeof part === "object" ? (part as Record<string, unknown>).messageID : p.messageID
+            // v2 renamed messageID -> assistantMessageID.
+            const mid = eventMessageId(rawEvent)
             if (typeof mid === "string") deps.observer!.markOwned(mid)
           }
           addListener(eventListeners, sid, ownershipListener)
@@ -821,11 +818,8 @@ export function createMessageHandler(
     let ownershipListenerEd: ((event: unknown) => void) | null = null
     if (deps.observer) {
       ownershipListenerEd = (rawEvent: unknown): void => {
-        const props = eventPayload(rawEvent)
-        if (!props || typeof props !== "object") return
-        const p = props as Record<string, unknown>
-        const part = p.part
-        const mid = part && typeof part === "object" ? (part as Record<string, unknown>).messageID : p.messageID
+        // v2 renamed messageID -> assistantMessageID.
+        const mid = eventMessageId(rawEvent)
         if (typeof mid === "string") deps.observer!.markOwned(mid)
       }
       addListener(eventListeners, sessionId, ownershipListenerEd)
@@ -979,11 +973,8 @@ export function createMessageHandler(
         let ownershipListener: ((ev: unknown) => void) | null = null
         if (deps.observer) {
           ownershipListener = (rawEvent: unknown): void => {
-            const props = eventPayload(rawEvent)
-            if (!props || typeof props !== "object") return
-            const p = props as Record<string, unknown>
-            const part = p.part
-            const mid = part && typeof part === "object" ? (part as Record<string, unknown>).messageID : p.messageID
+            // v2 renamed messageID -> assistantMessageID.
+            const mid = eventMessageId(rawEvent)
             if (typeof mid === "string") deps.observer!.markOwned(mid)
           }
           addListener(eventListeners, sid, ownershipListener)
@@ -1080,11 +1071,8 @@ export function createMessageHandler(
     let ownershipListenerEd: ((ev: unknown) => void) | null = null
     if (deps.observer) {
       ownershipListenerEd = (rawEvent: unknown): void => {
-        const props = eventPayload(rawEvent)
-        if (!props || typeof props !== "object") return
-        const p = props as Record<string, unknown>
-        const part = p.part
-        const mid = part && typeof part === "object" ? (part as Record<string, unknown>).messageID : p.messageID
+        // v2 renamed messageID -> assistantMessageID.
+        const mid = eventMessageId(rawEvent)
         if (typeof mid === "string") deps.observer!.markOwned(mid)
       }
       addListener(eventListeners, sessionId, ownershipListenerEd)

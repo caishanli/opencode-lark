@@ -18,3 +18,25 @@ export function eventPayload(event: unknown): Record<string, unknown> | null {
   }
   return null
 }
+/**
+ * The id of the assistant message an event belongs to.
+ *
+ * v1 carried it as `messageID` (on the part or on the event); v2 renamed it
+ * to `assistantMessageID`. Both are accepted so the "this reply was started
+ * from Feishu" ownership check keeps working.
+ */
+export function eventMessageId(event: unknown): string | undefined {
+  const props = eventPayload(event)
+  if (!props) return undefined
+  const part = props.part
+  if (part && typeof part === "object") {
+    const rec = part as Record<string, unknown>
+    for (const key of ["messageID", "assistantMessageID"]) {
+      if (typeof rec[key] === "string") return rec[key] as string
+    }
+  }
+  for (const key of ["messageID", "assistantMessageID"]) {
+    if (typeof props[key] === "string") return props[key] as string
+  }
+  return undefined
+}
