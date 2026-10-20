@@ -8,7 +8,7 @@ import type { EventListenerMap } from "../utils/event-listeners.js"
 import { addListener, removeListener } from "../utils/event-listeners.js"
 import { StreamingCardSession } from "../streaming/streaming-card.js"
 import { toFeishuMarkdown } from "../feishu/markdown.js"
-import { cacheHitRate, formatRate, formatTokens, totalTokens } from "../streaming/usage.js"
+import { cacheHitRate, formatPercent, formatRate, formatTokens, totalTokens } from "../streaming/usage.js"
 import type { OpencodeGateway } from "../opencode/gateway.js"
 import type { OutboundMediaHandler } from "./outbound-media.js"
 import type { ExpiringSet } from "../utils/expiring-set.js"
@@ -301,7 +301,7 @@ export function createStreamingBridge(
             // (older server), fall back to the whole turn.
             const modelMs = llmMs > 0 ? llmMs : turnMs
             const rate = modelMs > 0 ? generated / (modelMs / 1000) : 0
-            const hit = Math.round(cacheHitRate(stepDelta) * 100)
+            const hit = formatPercent(cacheHitRate(stepDelta))
             const cost = action.cost !== undefined && action.cost > 0 ? ` · $${action.cost.toFixed(4)}` : ""
             const contextPart = context > 0 ? ` · 上下文 ${formatTokens(context)}` : ""
             const cachePart = delta.cache.read > 0 ? ` · 缓存 ${hit}%` : ""

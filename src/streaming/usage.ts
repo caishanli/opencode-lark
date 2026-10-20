@@ -43,6 +43,18 @@ export function totalTokens(tokens: {
  *   cache.read  — input tokens read from the cache (a hit)
  *   input       — input tokens that were NOT cached (a miss)
  */
+/**
+ * A percentage with enough precision to stay meaningful: a warm cache reads
+ * 99.986% of the prompt, and rounding that to "100%" hides the fact that
+ * the new message was not cached at all.
+ */
+export function formatPercent(value: number): string {
+  if (!Number.isFinite(value)) return "0"
+  const pct = value * 100
+  if (pct >= 99.995) return "100"
+  return pct.toFixed(2).replace(/\.?0+$/, "")
+}
+
 export function cacheHitRate(tokens: {
   input?: number
   output?: number
