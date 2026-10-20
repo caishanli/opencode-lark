@@ -270,7 +270,9 @@ function buildModelCard(options: {
     elements.push({
       tag: "action",
       actions: chunk.map((m) => {
-        const label = m.name.length > 16 ? `${m.name.slice(0, 15)}…` : m.name
+        // The button is full width, so the name fits — only cut absurdly
+        // long ones.
+        const label = m.name.length > 40 ? `${m.name.slice(0, 39)}…` : m.name
         const isCurrent = `${m.providerID}/${m.id}` === current
         return {
           tag: "button",
