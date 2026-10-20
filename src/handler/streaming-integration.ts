@@ -306,9 +306,9 @@ export function createStreamingBridge(
             const contextPart = context > 0 ? ` · 上下文 ${formatTokens(context)}` : ""
             // The hit rate is computed on the last step, so the label has to
             // follow the same basis — otherwise a cold cache (0% hit) would
-            // hide the number altogether.
-            const cachePart = context > 0 ? ` · 缓存命中 ${hit}%` : ""
-            const timePart = turnMs > 0 ? ` · 耗时 ${(turnMs / 1000).toFixed(1)}s` : ""
+            // hide the number altogether. It sits next to the token count.
+            const hitPart = context > 0 ? `(${hit}%)` : ""
+            const timePart = turnMs > 0 ? `耗时 ${(turnMs / 1000).toFixed(1)}s · ` : ""
             logger.info(
               `Turn usage: generated=${generated} context=${context} cacheHit=${hit}% ` +
               `model=${(modelMs / 1000).toFixed(1)}s ` +
@@ -317,7 +317,8 @@ export function createStreamingBridge(
             )
             writeToCard((c) =>
               void c.setUsage(
-                `${formatTokens(generated)} tokens · ${formatRate(rate)} tok/s${timePart}${contextPart}${cachePart}${cost}`,
+                `${timePart}${formatTokens(generated)} tokens${hitPart} · ` +
+                  `${formatRate(rate)} tok/s${contextPart}${cost}`,
               ),
             )
             // `session.usage.updated` fires after EVERY step, not once per

@@ -693,7 +693,8 @@ describe("createStreamingBridge", () => {
     expect(content).toContain("100 tokens")
     expect(content).toContain("tok/s")
     expect(content).toContain("上下文 4.0k")
-    expect(content).toContain("缓存命中 75%")
+    // the hit rate sits next to the token count
+    expect(content).toContain("tokens(75%)")
   })
 
   it("reports the turn's usage delta, not the session's cumulative total", async () => {
@@ -740,7 +741,7 @@ describe("createStreamingBridge", () => {
     // delta = input 100 + output 10 + cache.read 100
     expect(content).toContain("10 tokens")      // generated only
     expect(content).toContain("上下文 200")      // input + cache read
-    expect(content).toContain("缓存命中 50%")
+    expect(content).toContain("tokens(50%)")
     // the cumulative numbers must not show up
     expect(content).not.toContain("4.1k")
     expect(content).not.toContain("4.0k")
