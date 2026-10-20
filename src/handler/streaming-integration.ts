@@ -304,7 +304,10 @@ export function createStreamingBridge(
             const hit = formatPercent(cacheHitRate(stepDelta))
             const cost = action.cost !== undefined && action.cost > 0 ? ` · $${action.cost.toFixed(4)}` : ""
             const contextPart = context > 0 ? ` · 上下文 ${formatTokens(context)}` : ""
-            const cachePart = delta.cache.read > 0 ? ` · 缓存 ${hit}%` : ""
+            // The hit rate is computed on the last step, so the label has to
+            // follow the same basis — otherwise a cold cache (0% hit) would
+            // hide the number altogether.
+            const cachePart = context > 0 ? ` · 缓存命中 ${hit}%` : ""
             const timePart = turnMs > 0 ? ` · 耗时 ${(turnMs / 1000).toFixed(1)}s` : ""
             logger.info(
               `Turn usage: generated=${generated} context=${context} cacheHit=${hit}% ` +
