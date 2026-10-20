@@ -34,7 +34,16 @@ export type CommandHandler = (
   chatId: string,
   messageId: string,
   commandText: string,
+  options?: CommandHandlerOptions,
 ) => Promise<boolean>
+
+export interface CommandHandlerOptions {
+  /**
+   * The model menu card this command came from. The menu is then updated
+   * in place instead of sending a new card.
+   */
+  menuId?: string
+}
 
 interface Session {
   id: string
@@ -217,12 +226,16 @@ function isFreeModel(model: ModelInfo): boolean {
 function buildProviderCard(
   providers: string[],
   models: ModelInfo[],
-  currentProvider?: string,
+  currentProvider: string | undefined,
+  menuId: string,
+  notice?: string,
 ): Record<string, unknown> {
   const elements: Record<string, unknown>[] = [
     {
       tag: "markdown",
-      content: "**第 1 步：选择 provider**",
+      content: notice
+        ? `${notice}\n**第 1 步：选择 provider**`
+        : "**第 1 步：选择 provider**",
     },
   ]
 
@@ -242,7 +255,7 @@ function buildProviderCard(
             content: isCurrent ? `✅ ${provider} (${count})` : `${provider} (${count})`,
           },
           type: isCurrent ? "primary" : "default",
-          value: { action: "command_execute", command: `/模型 ${provider}` },
+          value: { action: "model_menu", menu: menuId, command: `/模型 ${provider}` },
         }
       }),
     })
@@ -275,12 +288,15 @@ function buildModelCard(options: {
   page: number
   pages: number
   provider?: string
+  menuId: string
+  notice?: string
 }): Record<string, unknown> {
-  const { models, current, title, total, page, pages, provider } = options
+  const { models, current, title, total, page, pages, provider, menuId, notice } = options
+  const head = `**第 2 步：${title}**（共 ${total} 个，第 ${page}/${pages} 页）\n**当前模型：** ${current}`
   const elements: Record<string, unknown>[] = [
     {
       tag: "markdown",
-      content: `**第 2 步：${title}**（共 ${total} 个，第 ${page}/${pages} 页）\n**当前模型：** ${current}`,
+      content: notice ? `${notice}\n${head}` : head,
     },
   ]
 
@@ -298,7 +314,8 @@ function buildModelCard(options: {
           text: { tag: "plain_text", content: isCurrent ? `✅ ${label}` : label },
           type: isCurrent ? "primary" : "default",
           value: {
-            action: "command_execute",
+            action: "model_menu",
+            menu: menuId,
             command: `/模型 ${m.providerID}|${m.id}`,
           },
         }
@@ -310,7 +327,7 @@ function buildModelCard(options: {
   const backAction = {
     tag: "button",
     text: { tag: "plain_text", content: "← 返回 provider 列表" },
-    value: { action: "command_execute", command: "/模型" },
+    value: { action: "model_menu", menu: menuId, command: "/模型" },
   }
 
   if (pages > 1 && provider) {
@@ -319,7 +336,7 @@ function buildModelCard(options: {
       actions.push({
         tag: "button",
         text: { tag: "plain_text", content: `← 上一页 (${page - 1})` },
-        value: { action: "command_execute", command: `/模型 ${provider} ${page - 1}` },
+        value: { action: "model_menu", menu: menuId, command: `/模型 ${provider} ${page - 1}` },
       })
     }
     if (page < pages) {
@@ -327,7 +344,7 @@ function buildModelCard(options: {
         tag: "button",
         text: { tag: "plain_text", content: `下一页 (${page + 1}) →` },
         type: "primary",
-        value: { action: "command_execute", command: `/模型 ${provider} ${page + 1}` },
+        value: { action: "model_menu", menu: menuId, command: `/模型 ${provider} ${page + 1}` },
       })
     }
     elements.push({ tag: "action", actions })
@@ -350,10 +367,53 @@ function buildModelCard(options: {
   }
 }
 
+// ── Model menu ──
+
+/** How long a model menu card stays navigable. */
+const MODEL_MENU_TTL_MS = 30 * 60 * 1000
+
+/** Which view the menu card is showing. */
+interface ModelMenuView {
+  /** 1 = the provider list, 2 = the models of one provider. */
+  level: 1 | 2
+  /** The provider (or the search keyword) of level 2. */
+  provider?: string
+  page: number
+}
+
+/** A model menu card that can be updated in place. */
+interface ModelMenuEntry {
+  id: string
+  /** The card's own message id — this is what gets patched. */
+  messageId: string
+  chatId: string
+  /** The key the session is bound to ("chat" or "chat:root" in a group). */
+  feishuKey: string
+  createdAt: number
+  view: ModelMenuView
+}
+
 // ── Factory ──
 
 export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
   const { opencode, sessionManager, feishuClient, logger } = deps
+
+  // The model menu cards that can be updated in place, plus the latest one
+  // per chat so that typing /模型 again refreshes the same card.
+  const modelMenus = new Map<string, ModelMenuEntry>()
+  const latestMenuByChat = new Map<string, string>()
+
+  const purgeModelMenus = (now = Date.now()): void => {
+    for (const [id, entry] of modelMenus) {
+      if (now - entry.createdAt > MODEL_MENU_TTL_MS) {
+        modelMenus.delete(id)
+        if (latestMenuByChat.get(entry.chatId) === id) latestMenuByChat.delete(entry.chatId)
+      }
+    }
+  }
+
+  const newMenuId = (): string =>
+    `mm_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
 
   async function replyText(
     _chatId: string,
@@ -493,13 +553,33 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
    *   /模型 <provider>|<id> → switch to that model
    *   /模型 <keyword>       → search all providers
    */
+  /**
+   * The model menu. Every navigation updates the same card in place —
+   * entering level 2, paging and switching never send a new message.
+   *
+   *   /模型                 → the providers
+   *   /模型 <provider>      → the models of that provider
+   *   /模型 <provider> <n>  → page n of that provider
+   *   /模型 <provider>|<id> → switch to that model
+   *   /模型 <keyword>       → search all providers
+   */
   async function handleModel(
     feishuKey: string,
     chatId: string,
     messageId: string,
     argument: string,
+    menuId?: string,
   ): Promise<void> {
-    const sessionId = await sessionManager.getExisting(feishuKey)
+    purgeModelMenus()
+
+    // A card click keeps the key the menu was created with: in a group chat
+    // the message key is "chat:root" while the callback only knows the chat.
+    const fromCard = menuId ? modelMenus.get(menuId) : undefined
+    const existing = fromCard ?? modelMenus.get(latestMenuByChat.get(chatId) ?? "")
+    const key = existing?.feishuKey ?? feishuKey
+    const activeId = existing?.id ?? newMenuId()
+
+    const sessionId = await sessionManager.getExisting(key)
     if (!sessionId) {
       await replyText(chatId, messageId, "当前没有绑定的会话，先发一句话或用 /new 建一个")
       return
@@ -512,10 +592,17 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
       const modelId = argument.slice(separator + 1)
       try {
         await opencode.switchModel(sessionId, { id: modelId, providerID })
-        await replyText(chatId, messageId, `已切换模型：${providerID}/${modelId}`)
       } catch (err) {
+        logger.warn(`Could not switch the model: ${err}`)
         await replyText(chatId, messageId, `切换模型失败：${err}`)
+        return
       }
+      if (existing) {
+        // The card stays where it is — it just shows the new model.
+        await renderModelMenu(existing, sessionId, `✅ 已切换到 ${providerID}/${modelId}`)
+        return
+      }
+      await replyText(chatId, messageId, `已切换模型：${providerID}/${modelId}`)
       return
     }
 
@@ -534,24 +621,42 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
       : "未知"
     const currentProvider = session?.model?.providerID
 
+    const usable = models.filter((m) => m.enabled !== false)
+    const providers = [...new Set(usable.map((m) => m.providerID))].sort()
+
     const args = argument.split(/\s+/).filter(Boolean)
     const provider = args[0]
     const page = Math.max(1, Number(args[1] ?? 1) || 1)
 
-    const usable = models.filter((m) => m.enabled !== false)
-    const providers = [...new Set(usable.map((m) => m.providerID))].sort()
-
     // Level 1: the providers
     if (!provider) {
-      const card = buildProviderCard(providers, usable, currentProvider)
-      await feishuClient.replyMessage(messageId, {
-        msg_type: "interactive",
-        content: JSON.stringify(card),
-      })
+      const card = buildProviderCard(providers, usable, currentProvider, activeId)
+      await publishModelMenu(chatId, messageId, existing, activeId, card, { level: 1, page: 1 }, key)
       return
     }
 
     // Level 2: the models of that provider (or a search over all of them)
+    const built = buildLevel2Card(usable, providers, provider, page, current, activeId)
+    if (!built) {
+      await replyText(chatId, messageId, `没有匹配「${provider}」的模型`)
+      return
+    }
+    await publishModelMenu(chatId, messageId, existing, activeId, built.card, built.view, key)
+  }
+
+  /**
+   * The models of one provider — or a search over all of them — with the
+   * free ones first and the requested page.
+   */
+  function buildLevel2Card(
+    usable: ModelInfo[],
+    providers: string[],
+    provider: string,
+    page: number,
+    current: string,
+    menuId: string,
+    notice?: string,
+  ): { card: Record<string, unknown>; view: ModelMenuView } | null {
     const isProvider = providers.includes(provider)
     const candidates = isProvider
       ? usable.filter((m) => m.providerID === provider)
@@ -561,10 +666,7 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
             m.name.toLowerCase().includes(provider.toLowerCase()),
         )
 
-    if (candidates.length === 0) {
-      await replyText(chatId, messageId, `没有匹配「${provider}」的模型`)
-      return
-    }
+    if (candidates.length === 0) return null
 
     // Free models first — a provider can list hundreds, and the paid ones are
     // useless without credits. Stable sort keeps the rest in API order.
@@ -576,19 +678,100 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
     const shown = Math.min(page, pages)
     const slice = sorted.slice((shown - 1) * perPage, shown * perPage)
 
-    const card = buildModelCard({
-      models: slice,
-      current,
-      title: isProvider ? `provider：${provider}` : `搜索「${provider}」`,
-      total: sorted.length,
-      page: shown,
-      pages,
-      provider: isProvider ? provider : undefined,
-    })
-    await feishuClient.replyMessage(messageId, {
+    return {
+      card: buildModelCard({
+        models: slice,
+        current,
+        title: isProvider ? `provider：${provider}` : `搜索「${provider}」`,
+        total: sorted.length,
+        page: shown,
+        pages,
+        provider: isProvider ? provider : undefined,
+        menuId,
+        notice,
+      }),
+      view: { level: 2, provider, page: shown },
+    }
+  }
+
+  /**
+   * Redraw the menu card in the view it is showing — used after a switch,
+   * so the card shows the new current model.
+   */
+  async function renderModelMenu(
+    entry: ModelMenuEntry,
+    sessionId: string,
+    notice?: string,
+  ): Promise<void> {
+    let models: ModelInfo[] = []
+    try {
+      models = await opencode.listModels()
+    } catch (err) {
+      logger.warn(`Could not fetch the model list: ${err}`)
+      return
+    }
+
+    const session = await opencode.getSession(sessionId).catch(() => null)
+    const current = session?.model
+      ? `${session.model.providerID ?? ""}/${session.model.id ?? ""}`
+      : "未知"
+    const currentProvider = session?.model?.providerID
+
+    const usable = models.filter((m) => m.enabled !== false)
+    const providers = [...new Set(usable.map((m) => m.providerID))].sort()
+
+    if (entry.view.level === 1) {
+      const card = buildProviderCard(providers, usable, currentProvider, entry.id, notice)
+      await publishModelMenu(entry.chatId, entry.messageId, entry, entry.id, card, entry.view, entry.feishuKey)
+      return
+    }
+
+    const provider = entry.view.provider ?? ""
+    const built = buildLevel2Card(usable, providers, provider, entry.view.page, current, entry.id, notice)
+    if (!built) return
+    await publishModelMenu(entry.chatId, entry.messageId, entry, entry.id, built.card, built.view, entry.feishuKey)
+  }
+
+  /**
+   * Put the card on the chat: update the menu card that is already there,
+   * or send a new one and remember it for the next click.
+   */
+  async function publishModelMenu(
+    chatId: string,
+    messageId: string,
+    existing: ModelMenuEntry | undefined,
+    menuId: string,
+    card: Record<string, unknown>,
+    view: ModelMenuView,
+    feishuKey: string,
+  ): Promise<void> {
+    if (existing) {
+      const res = await feishuClient.updateMessage(existing.messageId, JSON.stringify(card))
+      if (res.code === 0) {
+        existing.view = view
+        return
+      }
+      logger.warn(`Could not update the model menu card: ${res.code} ${res.msg}`)
+    }
+
+    const res = await feishuClient.replyMessage(messageId, {
       msg_type: "interactive",
       content: JSON.stringify(card),
     })
+    const cardMessageId = res.data?.["message_id"] as string | undefined
+    if (!cardMessageId) {
+      logger.warn("The model menu card was sent but its message id is unknown")
+      return
+    }
+    modelMenus.set(menuId, {
+      id: menuId,
+      messageId: cardMessageId,
+      chatId,
+      feishuKey,
+      createdAt: Date.now(),
+      view,
+    })
+    latestMenuByChat.set(chatId, menuId)
   }
 
   /**
@@ -648,6 +831,7 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
     chatId: string,
     messageId: string,
     commandText: string,
+    options?: CommandHandlerOptions,
   ): Promise<boolean> {
     const trimmed = commandText.trim()
     const parts = trimmed.split(/\s+/)
@@ -684,7 +868,7 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
         case "/模型":
         case "/model":
         case "/models":
-          await handleModel(feishuKey, chatId, messageId, parts.slice(1).join(" "))
+          await handleModel(feishuKey, chatId, messageId, parts.slice(1).join(" "), options?.menuId)
           return true
 
         case "/":

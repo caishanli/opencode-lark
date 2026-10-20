@@ -490,6 +490,80 @@ describe("createCommandHandler", () => {
       expect(back.value.command).toBe("/模型")
     })
 
+    it("the menu card is patched in place, not sent again", async () => {
+      mockFeishuClient.replyMessage = vi.fn().mockResolvedValue({
+        code: 0,
+        msg: "ok",
+        data: { message_id: "card-1" },
+      })
+      mockFeishuClient.updateMessage = vi.fn().mockResolvedValue({ code: 0, msg: "ok" })
+      ;(mockGateway.listModels as ReturnType<typeof vi.fn>).mockResolvedValue([
+        { id: "flash-free", providerID: "opencode", name: "Flash Free" },
+        { id: "other", providerID: "openrouter", name: "Other" },
+      ])
+      mockSessionManager.getExisting = vi.fn().mockResolvedValue("ses-1")
+      mockGateway.getSession = vi.fn().mockResolvedValue({ id: "ses-1", model: {} })
+
+      const handler = createHandler()
+      // the user types /模型 — a card is sent
+      await handler("chat-1", "chat-1", "msg-1", "/模型")
+      expect(mockFeishuClient.replyMessage).toHaveBeenCalledTimes(1)
+
+      // the menu id the buttons carry
+      const card = JSON.parse((mockFeishuClient.replyMessage as any).mock.calls[0][1].content)
+      const button = card.elements
+        .filter((el: any) => el.tag === "action")
+        .flatMap((el: any) => el.actions)[0]
+      expect(button.value.action).toBe("model_menu")
+      const menuId = button.value.menu
+
+      // the user clicks the provider — the same card is patched
+      await handler("chat-1", "chat-1", "msg-1", "/模型 openrouter", { menuId })
+
+      expect(mockFeishuClient.replyMessage).toHaveBeenCalledTimes(1)
+      expect(mockFeishuClient.updateMessage).toHaveBeenCalledTimes(1)
+      const [patchedId, patchedContent] = (mockFeishuClient.updateMessage as any).mock.calls[0]
+      expect(patchedId).toBe("card-1")
+      const patched = JSON.parse(patchedContent)
+      expect(patched.elements[0].content).toContain("第 2 步")
+    })
+
+    it("a switch from the card updates the card instead of replying", async () => {
+      mockFeishuClient.replyMessage = vi.fn().mockResolvedValue({
+        code: 0,
+        msg: "ok",
+        data: { message_id: "card-1" },
+      })
+      mockFeishuClient.updateMessage = vi.fn().mockResolvedValue({ code: 0, msg: "ok" })
+      ;(mockGateway.listModels as ReturnType<typeof vi.fn>).mockResolvedValue([
+        { id: "flash-free", providerID: "opencode", name: "Flash Free" },
+      ])
+      mockSessionManager.getExisting = vi.fn().mockResolvedValue("ses-1")
+      mockGateway.getSession = vi.fn().mockResolvedValue({
+        id: "ses-1",
+        model: { id: "flash-free", providerID: "opencode" },
+      })
+
+      const handler = createHandler()
+      await handler("chat-1", "chat-1", "msg-1", "/模型")
+      const card = JSON.parse((mockFeishuClient.replyMessage as any).mock.calls[0][1].content)
+      const menuId = card.elements
+        .filter((el: any) => el.tag === "action")
+        .flatMap((el: any) => el.actions)[0].value.menu
+
+      await handler("chat-1", "chat-1", "msg-1", "/模型 opencode|flash-free", { menuId })
+
+      expect(mockGateway.switchModel).toHaveBeenCalledWith("ses-1", {
+        id: "flash-free",
+        providerID: "opencode",
+      })
+      // no new message — the card was patched
+      expect(mockFeishuClient.replyMessage).toHaveBeenCalledTimes(1)
+      expect(mockFeishuClient.updateMessage).toHaveBeenCalledTimes(1)
+      const patched = JSON.parse((mockFeishuClient.updateMessage as any).mock.calls[0][1])
+      expect(patched.elements[0].content).toContain("已切换到")
+    })
+
     it("sorts the free models of a provider first", async () => {
       mockFeishuClient.replyMessage = vi.fn().mockResolvedValue({ code: 0, msg: "ok" })
       // the paid ones come first from the API — that must not be the order
