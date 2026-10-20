@@ -172,6 +172,13 @@ systemctl --user status opencode-lark
 systemctl --user restart opencode-lark
 ```
 
+> **改完代码后**请用「等空闲再重启」的脚本——在一轮还在跑的时候直接
+> `systemctl --user restart` 会掐断事件流，回复卡片会卡在「已中断」：
+> ```bash
+> scripts/restart-when-idle.sh [session_id]
+> ```
+> 它会等到会话空闲后再重启。
+
 ## 飞书应用配置
 
 本节介绍如何创建飞书企业自建应用并配置所需权限。

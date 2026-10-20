@@ -176,6 +176,14 @@ systemctl --user status opencode-lark
 systemctl --user restart opencode-lark
 ```
 
+> **After changing the code**, restart it with the idle-aware helper — a plain
+> `systemctl --user restart` in the middle of a running turn kills the event
+> stream and leaves the reply card stuck on "interrupted":
+> ```bash
+> scripts/restart-when-idle.sh [session_id]
+> ```
+> It waits until the session is idle, then restarts.
+
 ## Feishu App Setup
 
 ### 1. Create an Internal App
