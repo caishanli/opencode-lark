@@ -163,13 +163,17 @@ opencode SSE stream (/api/event)
 
 ## Gotchas
 
-- **The opencode event names are not what the SDK claims.** On v2.0.29 the real
+- **The opencode event names are not what the SDK claims.** On v2.0.29+ the real
   ones are `session.text.delta`, `session.tool.input.started`,
   `session.tool.called`, `session.tool.success/failed` and
   `session.execution.succeeded/failed/interrupted`. The SDK's `session.next.*`
   names do **not** occur in the server binary. The server also does not emit
   `session.idle` at the end of a normal turn — `session.execution.succeeded` is
   the turn-end signal, and `EventProcessor` maps it to `SessionIdle`.
+- **A turn is many steps, and `session.usage.updated` fires per step.** It is
+  *not* the turn boundary — closing the card on it truncates the reply after
+  the first tool call. Close on `session.execution.succeeded`. See
+  `src/streaming/AGENTS.md` for the measured event sequence.
 - **Tool call ids live in `data.id`, the tool name in `data.name`** (only on
   `session.tool.input.started`). `session.tool.called` carries no tool name.
 - **Feishu card markdown cannot render tables or `#` headings.**
