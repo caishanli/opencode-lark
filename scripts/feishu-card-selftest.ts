@@ -188,7 +188,11 @@ console.log(`第一段在卡里: ${hasStep1 ? "✅" : "❌"}`)
 console.log(`第二段在卡里: ${hasStep2 ? "✅" : "❌"}`)
 
 const statusLine = lastContent.includes("tok/s")
+const hasDuration = lastContent.includes("耗时")
+const hasContext = lastContent.includes("上下文")
 console.log(`状态行含 tok/s: ${statusLine ? "✅" : "❌"}`)
+console.log(`状态行含总耗时: ${hasDuration ? "✅" : "❌"}`)
+console.log(`状态行含上下文: ${hasContext ? "✅" : "❌"}`)
 if (statusLine) {
   const m = /"content":"([^"]*tok\/s[^"]*)"/.exec(lastContent)
   console.log(`  → ${m?.[1] ?? "(未取到)"}`)
@@ -200,6 +204,9 @@ if (fresh.length !== 1) {
   failed = true
 } else if (!statusLine) {
   console.error("\n❌ 失败：卡片内容里没有 tok/s")
+  failed = true
+} else if (!hasDuration || !hasContext) {
+  console.error("\n❌ 失败：状态行缺少总耗时或上下文")
   failed = true
 } else if (!hasStep1 || !hasStep2) {
   console.error("\n❌ 失败：卡片内容缺少多步轮次里的正文")

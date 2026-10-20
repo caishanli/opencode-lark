@@ -769,9 +769,11 @@ describe("createStreamingBridge", () => {
 
     emit({ type: "session.text.delta", data: { sessionID: "ses-1", assistantMessageID: "m-1", delta: "hello" } })
     // one model call
+    const modelStart = Date.now()
     emit({ type: "session.step.started", data: { sessionID: "ses-1", assistantMessageID: "m-1" } })
     await new Promise((r) => setTimeout(r, 25))
     emit({ type: "session.step.ended", data: { sessionID: "ses-1", assistantMessageID: "m-1" } })
+    const modelMs = Date.now() - modelStart
     // ...and time spent outside the model call (tool time) must not count
     await new Promise((r) => setTimeout(r, 60))
     emit({
@@ -783,10 +785,59 @@ describe("createStreamingBridge", () => {
     await handlePromise
 
     const content = cardContent(mockFeishu)
-    // the LLM-time part is present because step events were seen
-    expect(content).toMatch(/LLM [\d.]+s/)
+    // the card shows the TOTAL turn duration …
+    expect(content).toMatch(/耗时 [\d.]+s/)
     expect(content).toContain("100 tokens")
-    expect(content).toContain("tok/s")
+    // … but the rate is timed against the model time only: it must match
+    // 100 tokens / model time (not 100 tokens / whole turn).
+    const match = /([\d.]+)(k?) tok\/s/.exec(content)
+    expect(match).toBeTruthy()
+    const rate = Number(match![1]) * (match![2] === "k" ? 1000 : 1)
+    const expected = 100 / (modelMs / 1000)
+    expect(rate).toBeGreaterThan(expected * 0.5)
+    expect(rate).toBeLessThan(expected * 2)
+  })
+
+  it("reports the context of the last step, not the sum over the turn", async () => {
+    // Every step re-reads the whole context. Summing the turn's context
+    // reads reported far more tokens than the model can hold (1.4M for a
+    // 1M window). The context window as it is now = the last step's read.
+    const mockFeishu = {
+      ...createMockFeishuClient(),
+      sendMessage: vi.fn().mockResolvedValue({ code: 0, data: { message_id: "msg_456" } }),
+      replyMessage: vi.fn().mockResolvedValue({ code: 0 }),
+    }
+    const deps = makeDeps({ feishuClient: mockFeishu })
+    const bridge = createStreamingBridge(deps)
+
+    const handlePromise = bridge.handleMessage(
+      "chat-1", "ses-1", eventListeners, eventProcessor, mockSendMessage, vi.fn(), "msg_original", null,
+    )
+    await waitFor(() => { expect(eventListeners.size).toBe(1) })
+    const emit = (ev: unknown) => {
+      ;[...(eventListeners.get("ses-1") ?? [])].forEach((fn) => fn(ev))
+    }
+
+    // some text first, so the card exists
+    emit({ type: "session.text.delta", data: { sessionID: "ses-1", assistantMessageID: "m-1", delta: "hi" } })
+
+    // step 1: context of 6000 (1000 input + 5000 cache read)
+    emit({
+      type: "session.usage.updated",
+      data: { sessionID: "ses-1", tokens: { input: 1000, output: 100, reasoning: 0, cache: { read: 5000, write: 0 } } },
+    })
+    // step 2: the context grew to 12000 (2000 input + 10000 cache read)
+    emit({
+      type: "session.usage.updated",
+      data: { sessionID: "ses-1", tokens: { input: 2000, output: 200, reasoning: 0, cache: { read: 10000, write: 0 } } },
+    })
+    emit({ type: "session.execution.succeeded", data: { sessionID: "ses-1" } })
+    await handlePromise
+
+    const content = cardContent(mockFeishu)
+    // the last step's context (6000) — not the sum over both steps (18000)
+    expect(content).toContain("上下文 6.0k")
+    expect(content).not.toContain("上下文 18.0k")
   })
 
   it("closes the turn on session.execution.succeeded", async () => {
