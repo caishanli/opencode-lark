@@ -7,6 +7,9 @@
  */
 
 import type { SessionManager } from "../session/session-manager.js"
+import type { StreamingBridge } from "./streaming-integration.js"
+import type { EventProcessor } from "../streaming/event-processor.js"
+import type { EventListenerMap } from "../utils/event-listeners.js"
 import type { FeishuApiClient } from "../feishu/api-client.js"
 import type { Logger } from "../utils/logger.js"
 import type { OpencodeGateway } from "../opencode/gateway.js"
@@ -18,6 +21,10 @@ export interface CommandHandlerDeps {
   sessionManager: SessionManager
   feishuClient: FeishuApiClient
   logger: Logger
+  /** Used to run opencode's own commands and stream the answer into a card. */
+  streamingBridge?: StreamingBridge
+  eventListeners?: EventListenerMap
+  eventProcessor?: EventProcessor
 }
 
 // ── Types ──
@@ -174,7 +181,15 @@ function buildOpencodeCommandElements(
   return [
     {
       tag: "markdown",
-      content: `**opencode 命令：**\n${lines.join("\n")}`,
+      content: `**opencode 命令：**（点击即可运行）\n${lines.join("\n")}`,
+    },
+    {
+      tag: "action",
+      actions: commands.map((c) => ({
+        tag: "button",
+        text: { tag: "plain_text", content: `/${c.name}` },
+        value: { action: "command_execute", command: `/${c.name}` },
+      })),
     },
   ]
 }
@@ -313,6 +328,58 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
     })
   }
 
+  /**
+   * Run one of opencode's own commands (the ones /api/command lists) in the
+   * session bound to this chat. The answer is streamed into a card exactly
+   * like a normal message.
+   */
+  async function runOpencodeCommand(
+    feishuKey: string,
+    chatId: string,
+    messageId: string,
+    cmd: string,
+    args: string[],
+  ): Promise<boolean> {
+    const name = cmd.replace(/^\//, "").toLowerCase()
+    if (!name) return false
+
+    let commands: { name: string; description?: string }[] = []
+    try {
+      commands = await opencode.commands()
+    } catch (err) {
+      logger.warn(`Could not fetch the opencode commands: ${err}`)
+      return false
+    }
+    const command = commands.find((c) => c.name.toLowerCase() === name)
+    if (!command) return false
+
+    if (!deps.streamingBridge || !deps.eventListeners || !deps.eventProcessor) {
+      await replyText(chatId, messageId, `opencode 命令 /${command.name} 需要桥的流式通道才能运行`)
+      return true
+    }
+
+    const sessionId = await sessionManager.getOrCreate(feishuKey)
+    const arguments_ = args.join(" ")
+    logger.info(`Running opencode command /${command.name} in session ${sessionId}`)
+    await deps.streamingBridge.handleMessage(
+      chatId,
+      sessionId,
+      deps.eventListeners,
+      deps.eventProcessor,
+      async () => {
+        await opencode.sendCommand(sessionId, {
+          command: command.name,
+          arguments: arguments_ || undefined,
+        })
+        return ""
+      },
+      () => {},
+      messageId,
+      null,
+    )
+    return true
+  }
+
   return async function handleCommand(
     feishuKey: string,
     chatId: string,
@@ -357,8 +424,11 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
           await handleHelp(chatId, messageId)
           return true
 
-        default:
-          return false
+        default: {
+          // Not a bridge command — maybe one of opencode's own ("/review").
+          const handled = await runOpencodeCommand(feishuKey, chatId, messageId, cmd, parts.slice(1))
+          return handled
+        }
       }
     } catch (err) {
       logger.error(`Command ${cmd} failed: ${err}`)

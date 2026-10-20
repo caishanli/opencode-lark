@@ -261,6 +261,11 @@ async function main(): Promise<void> {
     sessionManager,
     feishuClient,
     logger,
+    // opencode's own commands are run through the bridge, so their answer
+    // is streamed into a card like a normal message.
+    streamingBridge,
+    eventListeners,
+    eventProcessor,
   })
 
   const { handleMessage, dispose: disposeDebouncer } = createMessageHandler({

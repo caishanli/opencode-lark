@@ -346,6 +346,49 @@ describe("createCommandHandler", () => {
       expect(content.header?.title?.content).toContain("命令菜单")
     })
 
+    it("runs an opencode command through the bridge", async () => {
+      mockFeishuClient.replyMessage = vi.fn().mockResolvedValue({ code: 0, msg: "ok" })
+      ;(mockGateway.commands as ReturnType<typeof vi.fn>).mockResolvedValue([
+        { name: "review", description: "review changes" },
+      ])
+      const handleMessage = vi.fn().mockResolvedValue(undefined)
+      const handler = createHandler(undefined, mockGateway)
+      // the handler needs the bridge for opencode commands
+      const withBridge = createCommandHandler({
+        opencode: mockGateway,
+        sessionManager: mockSessionManager,
+        feishuClient: mockFeishuClient,
+        logger: mockLogger,
+        streamingBridge: { handleMessage } as never,
+        eventListeners: new Map(),
+        eventProcessor: {} as never,
+      })
+
+      const result = await withBridge("chat-1", "chat-1", "msg-1", "/review HEAD~1")
+      expect(result).toBe(true)
+      expect(handleMessage).toHaveBeenCalled()
+      // the command is sent to opencode, the answer streams into a card
+      const sendMessage = handleMessage.mock.calls[0][4] as () => Promise<string>
+      await sendMessage()
+      expect(mockGateway.sendCommand).toHaveBeenCalledWith(
+        expect.any(String),
+        { command: "review", arguments: "HEAD~1" },
+      )
+      void handler
+    })
+
+    it("leaves unknown commands to the message handler", async () => {
+      mockFeishuClient.replyMessage = vi.fn().mockResolvedValue({ code: 0, msg: "ok" })
+      ;(mockGateway.commands as ReturnType<typeof vi.fn>).mockResolvedValue([
+        { name: "review", description: "review changes" },
+      ])
+
+      const handler = createHandler()
+      const result = await handler("chat-1", "chat-1", "msg-1", "/nonsense")
+
+      expect(result).toBe(false)
+    })
+
     it("/ alone sends interactive card", async () => {
       mockFeishuClient.replyMessage = vi.fn().mockResolvedValue({ code: 0, msg: "ok" })
 

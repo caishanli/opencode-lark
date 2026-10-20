@@ -31,6 +31,42 @@ import { randomBytes } from "node:crypto"
 
 // ── Dependency injection interface ──
 
+/**
+ * opencode's own commands (the ones /api/command lists) are per project.
+ * The list is cached briefly — it only changes when the project changes.
+ */
+let opencodeCommandsCache: { at: number; names: string[] } | null = null
+
+/**
+ * Match a message against opencode's command list. Returns the command and
+ * its arguments when the message is one of them ("/review HEAD~1").
+ */
+async function matchOpencodeCommand(
+  opencode: OpencodeGateway,
+  text: string,
+  logger: Logger,
+): Promise<{ command: string; arguments?: string } | null> {
+  const trimmed = text.trim()
+  if (!trimmed.startsWith("/")) return null
+  const parts = trimmed.split(/\s+/)
+  const name = (parts[0] ?? "").slice(1).toLowerCase()
+  if (!name) return null
+
+  const now = Date.now()
+  if (!opencodeCommandsCache || now - opencodeCommandsCache.at > 30_000) {
+    try {
+      const commands = await opencode.commands()
+      opencodeCommandsCache = { at: now, names: commands.map((c) => c.name.toLowerCase()) }
+    } catch (err) {
+      logger.warn(`Could not fetch the opencode commands: ${err}`)
+      return null
+    }
+  }
+  if (!opencodeCommandsCache.names.includes(name)) return null
+  const args = parts.slice(1).join(" ")
+  return { command: name, arguments: args || undefined }
+}
+
 export interface HandlerDeps {
   opencode: OpencodeGateway
   sessionManager: SessionManager
@@ -671,6 +707,15 @@ export function createMessageHandler(
 
     async function postToOpencode(): Promise<string> {
       try {
+        // A message that is one of opencode's own commands ("/review") is run
+        // as a command, so the server expands its template instead of the
+        // agent reading the literal text.
+        const command = await matchOpencodeCommand(opencode, textParts, logger)
+        if (command) {
+          logger.info(`Running opencode command: /${command.command}`)
+          await opencode.sendCommand(currentSessionId, command)
+          return ""
+        }
         await opencode.sendPrompt(currentSessionId, { text: textParts, files: fileParts.length ? fileParts : undefined })
         return ""
       } catch (err) {
@@ -936,6 +981,15 @@ export function createMessageHandler(
 
     async function postToOpencode(): Promise<string> {
       try {
+        // A message that is one of opencode's own commands ("/review") is run
+        // as a command, so the server expands its template instead of the
+        // agent reading the literal text.
+        const command = await matchOpencodeCommand(opencode, textParts, logger)
+        if (command) {
+          logger.info(`Running opencode command: /${command.command}`)
+          await opencode.sendCommand(currentSessionId, command)
+          return ""
+        }
         await opencode.sendPrompt(currentSessionId, { text: textParts, files: fileParts.length ? fileParts : undefined })
         return ""
       } catch (err) {

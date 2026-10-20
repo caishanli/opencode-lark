@@ -77,6 +77,8 @@ export interface OpencodeGateway {
   children(parentSessionID: string): Promise<SessionRef[]>
   messages(sessionID: string, query?: { limit?: number; order?: "asc" | "desc"; type?: string }): Promise<any[]>
   sendPrompt(sessionID: string, input: PromptInput, opts?: { delivery?: "steer" | "queue" }): Promise<void>
+  /** Run one of opencode's own commands (the ones listed by /api/command). */
+  sendCommand(sessionID: string, input: { command: string; arguments?: string }): Promise<void>
   abort(sessionID: string): Promise<void>
   activeStatuses(): Promise<Record<string, { type: string }>>
 
@@ -173,6 +175,14 @@ export function createOpencodeGateway(options: OpencodeGatewayOptions): Opencode
         $body_delivery: opts.delivery,
       })
       throwIfError(res, "sendPrompt")
+    },
+    async sendCommand(sessionID, input) {
+      const res = await client.v2.session.command({
+        sessionID,
+        $body_command: input.command,
+        $body_arguments: input.arguments,
+      })
+      throwIfError(res, "sendCommand")
     },
     async abort(sessionID) {
       await client.v2.session.interrupt({ sessionID })
