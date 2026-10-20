@@ -297,6 +297,55 @@ describe("createCommandHandler", () => {
       expect(content.header?.title?.content).toContain("命令菜单")
     })
 
+    it("/help lists the commands opencode offers in this project", async () => {
+      mockFeishuClient.replyMessage = vi.fn().mockResolvedValue({ code: 0, msg: "ok" })
+      ;(mockGateway.commands as ReturnType<typeof vi.fn>).mockResolvedValue([
+        { name: "init", description: "guided AGENTS.md setup" },
+        { name: "review", description: "review changes" },
+      ])
+
+      const handler = createHandler()
+      const result = await handler("chat-1", "chat-1", "msg-1", "/help")
+
+      expect(result).toBe(true)
+      const callArgs = (mockFeishuClient.replyMessage as any).mock.calls[0]
+      const content = JSON.parse(callArgs?.[1]?.content as string)
+      const markdown = content.elements
+        .filter((el: any) => el.tag === "markdown")
+        .map((el: any) => el.content)
+        .join("\n")
+      expect(markdown).toContain("/init")
+      expect(markdown).toContain("guided AGENTS.md setup")
+      expect(markdown).toContain("/review")
+    })
+
+    it("/帮助 is an alias for /help", async () => {
+      mockFeishuClient.replyMessage = vi.fn().mockResolvedValue({ code: 0, msg: "ok" })
+
+      const handler = createHandler()
+      const result = await handler("chat-1", "chat-1", "msg-1", "/帮助")
+
+      expect(result).toBe(true)
+      const callArgs = (mockFeishuClient.replyMessage as any).mock.calls[0]
+      const content = JSON.parse(callArgs?.[1]?.content as string)
+      expect(content.header?.title?.content).toContain("命令菜单")
+    })
+
+    it("/help still works when opencode's command list is unavailable", async () => {
+      mockFeishuClient.replyMessage = vi.fn().mockResolvedValue({ code: 0, msg: "ok" })
+      ;(mockGateway.commands as ReturnType<typeof vi.fn>).mockRejectedValue(
+        new Error("boom"),
+      )
+
+      const handler = createHandler()
+      const result = await handler("chat-1", "chat-1", "msg-1", "/help")
+
+      expect(result).toBe(true)
+      const callArgs = (mockFeishuClient.replyMessage as any).mock.calls[0]
+      const content = JSON.parse(callArgs?.[1]?.content as string)
+      expect(content.header?.title?.content).toContain("命令菜单")
+    })
+
     it("/ alone sends interactive card", async () => {
       mockFeishuClient.replyMessage = vi.fn().mockResolvedValue({ code: 0, msg: "ok" })
 

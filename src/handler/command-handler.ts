@@ -109,7 +109,7 @@ function buildSessionsCard(sessions: Session[], currentSessionId?: string): Reco
 
 // ── Help card builder ──
 
-function buildHelpCard(): Record<string, unknown> {
+function buildHelpCard(opencodeCommands: { name: string; description?: string }[] = []): Record<string, unknown> {
   return {
     config: { wide_screen_mode: true },
     header: {
@@ -146,8 +146,37 @@ function buildHelpCard(): Record<string, unknown> {
           },
         ],
       },
+      ...buildOpencodeCommandElements(opencodeCommands),
     ],
   }
+}
+
+/**
+ * The commands opencode itself offers in this project (from /api/command).
+ * They are shown as text — they are executed in the opencode TUI, not by
+ * the bridge.
+ */
+function buildOpencodeCommandElements(
+  commands: { name: string; description?: string }[],
+): Record<string, unknown>[] {
+  if (commands.length === 0) {
+    return [
+      {
+        tag: "markdown",
+        content: "**opencode 命令：**\n_（当前项目没有自定义命令）_",
+      },
+    ]
+  }
+  const lines = commands.map((c) => {
+    const description = c.description ? ` — ${c.description}` : ""
+    return `- /${c.name}${description}`
+  })
+  return [
+    {
+      tag: "markdown",
+      content: `**opencode 命令：**\n${lines.join("\n")}`,
+    },
+  ]
 }
 
 // ── Factory ──
@@ -269,7 +298,15 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
     _chatId: string,
     messageId: string,
   ): Promise<void> {
-    const card = buildHelpCard()
+    // The opencode commands are per project — fetch them so the menu shows
+    // what this project actually offers.
+    let opencodeCommands: { name: string; description?: string }[] = []
+    try {
+      opencodeCommands = await opencode.commands()
+    } catch (err) {
+      logger.warn(`Could not fetch the opencode commands: ${err}`)
+    }
+    const card = buildHelpCard(opencodeCommands)
     await feishuClient.replyMessage(messageId, {
       msg_type: "interactive",
       content: JSON.stringify(card),
@@ -316,6 +353,7 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
 
         case "/":
         case "/help":
+        case "/帮助":
           await handleHelp(chatId, messageId)
           return true
 
