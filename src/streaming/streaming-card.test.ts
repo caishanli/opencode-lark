@@ -268,3 +268,24 @@ describe("StreamingCardSession — the open card state file", () => {
     expect(existsSync(file)).toBe(false)
   })
 })
+
+describe("StreamingCardSession — the state entry survives a failed final update", () => {
+  it("keeps the card listed so the next process can close it", async () => {
+    const file = "/tmp/opencode/state-fail-test.json"
+    rmSync(file, { force: true })
+    const feishuClient = createMockFeishuClient()
+    ;(feishuClient.sendMessage as ReturnType<typeof vi.fn>).mockResolvedValue({
+      code: 0, msg: "ok", data: { message_id: "msg_x" },
+    })
+    ;(feishuClient.updateMessage as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error("feishu is down"),
+    )
+    const session = new StreamingCardSession({ feishuClient, chatId: "chat-x", stateFile: file })
+    await session.start()
+    expect(existsSync(file)).toBe(true)
+
+    await expect(session.close("bye", "interrupted")).rejects.toThrow("feishu is down")
+    // The card is still listed: the next process must be able to close it.
+    expect(JSON.parse(readFileSync(file, "utf-8"))).toEqual({ "chat-x": "msg_x" })
+  })
+})

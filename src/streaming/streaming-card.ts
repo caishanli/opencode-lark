@@ -76,9 +76,14 @@ const openCards = new Set<StreamingCardSession>()
  * Without this a card whose turn was interrupted (restart, crash, lost SSE)
  * stays stuck on "running" forever.
  */
-export async function closeAllStreamingCards(status: "error" | "interrupted" = "interrupted"): Promise<void> {
+export async function closeAllStreamingCards(
+  status: "error" | "interrupted" = "interrupted",
+): Promise<number> {
   const cards = [...openCards]
-  await Promise.allSettled(cards.map((c) => c.close(undefined, status)))
+  const results = await Promise.allSettled(cards.map((c) => c.close(undefined, status)))
+  const failed = results.filter((r) => r.status === "rejected").length
+  if (failed > 0) logger.warn(`${failed} card(s) could not be closed`)
+  return cards.length
 }
 
 export class StreamingCardSession {
@@ -231,7 +236,6 @@ export class StreamingCardSession {
     }
     this.closed = true
     openCards.delete(this)
-    this.forgetOpenCard()
     await this.queue
 
     if (finalText !== undefined) {
@@ -245,7 +249,21 @@ export class StreamingCardSession {
       }
     }
     this.status = status ?? "completed"
-    await this.sync()
+    try {
+      await this.sync()
+      // Only forget the card once it really carries the final state — if the
+      // update did not land, the next process has to be able to close it.
+      this.forgetOpenCard()
+    } catch (err) {
+      // The state entry is kept on purpose: the next process has to be able
+      // to close this card. The error is passed on so the caller can fall
+      // back to posting the answer as a plain reply.
+      logger.warn(
+        `Could not write the final card state: ` +
+          `${err instanceof Error ? err.message : String(err)}`,
+      )
+      throw err
+    }
   }
 
   // ── internals ──

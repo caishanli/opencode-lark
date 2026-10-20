@@ -450,11 +450,14 @@ async function main(): Promise<void> {
   function shutdown(signal: string) {
     return async () => {
       logger.info(`${signal} received, shutting down...`)
+      // Close the open cards FIRST: their final update is the only thing
+      // that would be lost if the process disappears right now. (The state
+      // file keeps a card listed until its final update landed, so a
+      // failed update is picked up by the next process.)
+      const closed = await closeAllStreamingCards("interrupted")
+      logger.info(`Closed ${closed} open card(s)`)
       abortController.abort()
       sseAbort.abort()
-      // Close any card whose turn is still open, so it does not stay stuck
-      // on "running" after a restart.
-      await closeAllStreamingCards("interrupted")
       await channelManager.stopAll()
       await webhookServer.close()
       cronService?.stop()
