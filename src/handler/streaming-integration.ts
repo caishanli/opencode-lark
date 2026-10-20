@@ -24,6 +24,8 @@ export interface StreamingBridgeDeps {
   /** Used to read the session's cumulative usage before the turn, so the turn's
    *  own usage delta can be computed. */
   opencode?: OpencodeGateway
+  /** How long a turn may stay silent before the card is closed anyway. */
+  idleCloseMs?: number
   feishuClient: FeishuApiClient
   subAgentTracker: SubAgentTracker
   logger: Logger
@@ -49,6 +51,7 @@ export interface StreamingBridge {
 
 
 const FIRST_EVENT_TIMEOUT_MS = 5 * 60 * 1_000 // 5 minutes — long tasks may take minutes before first SSE event
+const IDLE_CLOSE_MS = 120_000 // close a card whose turn-end event never arrived
 
 // ── Factory ──
 
@@ -58,6 +61,13 @@ export function createStreamingBridge(
   const { feishuClient, subAgentTracker, logger, seenInteractiveIds } = deps
   /** In-flight turn per chat, so turns never overlap for the same conversation. */
   const chatTurns = new Map<string, Promise<void>>()
+  /**
+   * Assistant message ids already seen. An execution that was still running
+   * when the next message arrived keeps emitting events; its text would
+   * otherwise be appended to the new turn's card (the reply shows up twice).
+   */
+  const seenAssistantMessageIds = new Set<string>()
+  const idleCloseMs = deps.idleCloseMs ?? IDLE_CLOSE_MS
 
   async function runTurn(
     chatId: string,
@@ -99,6 +109,7 @@ export function createStreamingBridge(
       let textBuffer = ""
       let gotFirstEvent = false
       let settled = false
+      let idleTimer: ReturnType<typeof setTimeout> | null = null
       let syncResponseBody = ""
       const clearReaction = async (): Promise<void> => {
         if (!reactionId) return
@@ -157,9 +168,28 @@ export function createStreamingBridge(
         if (action.sessionId !== sessionId) return
 
         gotFirstEvent = true
+        // Safety net: if the turn-end event never arrives (lost, or swallowed
+        // by an overlapping execution) the card must not stay on "running".
+        if (idleTimer) clearTimeout(idleTimer)
+        idleTimer = setTimeout(() => {
+          if (settled) return
+          logger.warn(
+            `No opencode events for ${IDLE_CLOSE_MS}ms — closing the card as finished`,
+          )
+          myListener({
+            type: "session.execution.succeeded",
+            data: { sessionID: sessionId },
+          })
+        }, idleCloseMs)
 
         switch (action.type) {
           case "TextDelta": {
+            // Skip text belonging to an execution that already ran (leftover
+            // from a turn that was still running when this one started).
+            if (action.assistantMessageId) {
+              if (seenAssistantMessageIds.has(action.assistantMessageId)) break
+              seenAssistantMessageIds.add(action.assistantMessageId)
+            }
             if (!turnStartedAt) turnStartedAt = Date.now()
             textBuffer += action.text
             if (textBuffer.length > 102_400) {
@@ -345,6 +375,7 @@ export function createStreamingBridge(
             if (settled) return
             settled = true
             clearTimeout(firstEventTimer)
+            if (idleTimer) clearTimeout(idleTimer)
             removeListener(eventListeners, sessionId, myListener)
             const responseText = textBuffer.trim() || "（无回复）"
             const hadCard = card !== null

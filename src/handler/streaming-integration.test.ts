@@ -786,6 +786,66 @@ describe("createStreamingBridge", () => {
     expect(content).toContain("tok/s")
   })
 
+  it("ignores text from an execution that already ran in a previous turn", async () => {
+    // A turn that was still running when the next message arrived keeps
+    // emitting text; that leftover must not land in the new turn's card.
+    const mockFeishu = {
+      ...createMockFeishuClient(),
+      sendMessage: vi.fn().mockResolvedValue({ code: 0, data: { message_id: "msg_456" } }),
+      replyMessage: vi.fn().mockResolvedValue({ code: 0 }),
+    }
+    const deps = makeDeps({ feishuClient: mockFeishu })
+    const bridge = createStreamingBridge(deps)
+
+    const run = async (assistantMessageId: string, delta: string) => {
+      const p = bridge.handleMessage(
+        "chat-1", "ses-1", eventListeners, eventProcessor, mockSendMessage, vi.fn(), "msg_original", null,
+      )
+      await waitFor(() => { expect(eventListeners.size).toBe(1) })
+      const listener = [...eventListeners.get("ses-1")!][0]!
+      listener({
+        type: "session.text.delta",
+        data: { sessionID: "ses-1", assistantMessageID: assistantMessageId, delta },
+      })
+      listener({ type: "session.execution.succeeded", data: { sessionID: "ses-1" } })
+      await p
+    }
+
+    // first turn: the assistant message id is consumed
+    await run("msg-old", "old text")
+    // second turn: the same (leftover) assistant message id must be ignored
+    await run("msg-old", "LEFTOVER")
+
+    const contents = (mockFeishu.updateMessage as any).mock.calls.map((c: any) => String(c[1]))
+    expect(contents.some((c) => c.includes("LEFTOVER"))).toBe(false)
+  })
+
+  it("closes the card when the turn-end event never arrives", async () => {
+    const mockFeishu = {
+      ...createMockFeishuClient(),
+      sendMessage: vi.fn().mockResolvedValue({ code: 0, data: { message_id: "msg_456" } }),
+      replyMessage: vi.fn().mockResolvedValue({ code: 0 }),
+    }
+    const deps = makeDeps({ feishuClient: mockFeishu, idleCloseMs: 60 } as any)
+    const bridge = createStreamingBridge(deps)
+
+    void bridge.handleMessage(
+      "chat-1", "ses-1", eventListeners, eventProcessor, mockSendMessage, vi.fn(), "msg_original", null,
+    )
+    await waitFor(() => { expect(eventListeners.size).toBe(1) })
+    const listener = [...eventListeners.get("ses-1")!][0]!
+    listener({
+      type: "session.text.delta",
+      data: { sessionID: "ses-1", assistantMessageID: "msg-x", delta: "partial" },
+    })
+
+    // no session.execution.succeeded ever arrives
+    await new Promise((r) => setTimeout(r, 250))
+
+    const contents = (mockFeishu.updateMessage as any).mock.calls.map((c: any) => String(c[1]))
+    expect(contents.some((c) => c.includes("已完成"))).toBe(true)
+  })
+
   it("serialises turns per chat: a second message waits for the first to finish", async () => {
     const deps = makeDeps()
     const bridge = createStreamingBridge(deps)

@@ -541,7 +541,12 @@ describe("EventProcessor — real v2.0.29 event names", () => {
         delta: "hello world",
       },
     })
-    expect(result).toEqual<TextDelta>({ type: "TextDelta", sessionId: "ses-1", text: "hello world" })
+    expect(result).toEqual<TextDelta>({
+      type: "TextDelta",
+      sessionId: "ses-1",
+      text: "hello world",
+      assistantMessageId: "msg-1",
+    })
   })
 
   it("extracts TextDelta from session.text.delta carried under properties too", () => {

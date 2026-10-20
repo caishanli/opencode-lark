@@ -13,6 +13,9 @@ export interface TextDelta {
   readonly type: "TextDelta"
   readonly sessionId: string
   readonly text: string
+  /** The assistant message this text belongs to. Lets a consumer tell the
+   *  events of one execution from those of a leftover one. */
+  readonly assistantMessageId?: string
 }
 
 
@@ -411,7 +414,13 @@ export class EventProcessor {
     if (!this.ownedSessions.has(sessionId)) return null
     const delta = props.delta
     if (typeof delta !== "string" || delta.length === 0) return null
-    return { type: "TextDelta", sessionId, text: delta }
+    const assistantMessageId = props.assistantMessageID
+    return {
+      type: "TextDelta",
+      sessionId,
+      text: delta,
+      ...(typeof assistantMessageId === "string" ? { assistantMessageId } : {}),
+    }
   }
 
   /**
