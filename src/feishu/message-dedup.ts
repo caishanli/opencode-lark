@@ -55,23 +55,26 @@ export class MessageDedup {
       "DELETE FROM message_dedup WHERE created_at < ?",
     )
 
+    // NOTE: the event_id table above is already called "message_dedup" — this
+    // one needs a different name or CREATE TABLE IF NOT EXISTS would silently
+    // keep the old (event_id) schema.
     this.db.exec(`
-      CREATE TABLE IF NOT EXISTS message_dedup (
+      CREATE TABLE IF NOT EXISTS feishu_message_dedup (
         message_id TEXT PRIMARY KEY,
         created_at INTEGER NOT NULL
       )
     `)
 
     this.checkMessageStmt = this.db.prepare(
-      "SELECT message_id FROM message_dedup WHERE message_id = ?",
+      "SELECT message_id FROM feishu_message_dedup WHERE message_id = ?",
     )
 
     this.insertMessageStmt = this.db.prepare(
-      "INSERT OR IGNORE INTO message_dedup (message_id, created_at) VALUES (?, ?)",
+      "INSERT OR IGNORE INTO feishu_message_dedup (message_id, created_at) VALUES (?, ?)",
     )
 
     this.cleanupMessageStmt = this.db.prepare(
-      "DELETE FROM message_dedup WHERE created_at < ?",
+      "DELETE FROM feishu_message_dedup WHERE created_at < ?",
     )
 
 
