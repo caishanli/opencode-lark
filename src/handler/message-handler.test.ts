@@ -56,6 +56,7 @@ function makeDeps(overrides: Partial<HandlerDeps> = {}): HandlerDeps {
     },
     dedup: {
       isDuplicate: vi.fn().mockReturnValue(false),
+      isDuplicateMessage: vi.fn().mockReturnValue(false),
       close: vi.fn(),
     } as any,
     eventProcessor: new EventProcessor({ ownedSessions }),
@@ -247,6 +248,32 @@ describe("createMessageHandler", () => {
     expect(prompt.text).toContain("1. first item")
     expect(prompt.text).toContain("2. second item")
     expect(prompt.files).toBeUndefined()
+  })
+
+  it("ignores a redelivered message (same message_id, new event_id)", async () => {
+    // Feishu's long connection redelivers events with a NEW event_id, so the
+    // event_id check misses it. The message_id is the stable identity.
+    const isDuplicateMessage = vi.fn().mockReturnValueOnce(false).mockReturnValue(true)
+    const deps = makeDeps({
+      dedup: {
+        isDuplicate: vi.fn().mockReturnValue(false),
+        isDuplicateMessage,
+        close: vi.fn(),
+      } as any,
+    })
+    const { handleMessage: handler } = createMessageHandler(deps)
+
+    // first delivery
+    void handler(makeEvent({ event_id: "evt-1", message_id: "msg-redelivered" }))
+    await waitFor(() => {
+      expect(deps.opencode.sendPrompt).toHaveBeenCalledTimes(1)
+    })
+    // redelivery: different event_id, same message
+    void handler(makeEvent({ event_id: "evt-2", message_id: "msg-redelivered" }))
+    await new Promise((r) => setTimeout(r, 50))
+
+    expect(isDuplicateMessage).toHaveBeenCalledTimes(2)
+    expect(deps.opencode.sendPrompt).toHaveBeenCalledTimes(1)
   })
 
   it("resolves text message mention placeholders and strips the bot mention", async () => {

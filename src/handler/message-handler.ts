@@ -423,7 +423,10 @@ export function createMessageHandler(
     event: FeishuMessageEvent,
   ): Promise<void> {
     // ── 1. Dedup check ──
-    if (dedup.isDuplicate(event.event_id)) {
+    // Feishu redelivers events with a NEW event_id, so event_id alone does not
+    // catch a redelivery — the message_id does. Without this every message is
+    // processed twice: two turns, two cards, doubled usage.
+    if (dedup.isDuplicate(event.event_id) || dedup.isDuplicateMessage(event.message_id)) {
       return
     }
 

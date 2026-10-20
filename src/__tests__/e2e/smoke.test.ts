@@ -159,7 +159,7 @@ describe("E2E Smoke Tests", () => {
     const { handleMessage } = createMessageHandler({
       opencode,
       sessionManager,
-      dedup: { isDuplicate: vi.fn().mockReturnValue(false), close: vi.fn() } as any,
+      dedup: { isDuplicate: vi.fn().mockReturnValue(false), isDuplicateMessage: vi.fn().mockReturnValue(false), close: vi.fn() } as any,
       eventProcessor,
       feishuClient,
       progressTracker,
@@ -257,7 +257,7 @@ describe("E2E Smoke Tests", () => {
     const { handleMessage } = createMessageHandler({
       opencode,
       sessionManager: createMockSessionManager(sessionId),
-      dedup: { isDuplicate: vi.fn().mockReturnValue(false), close: vi.fn() } as any,
+      dedup: { isDuplicate: vi.fn().mockReturnValue(false), isDuplicateMessage: vi.fn().mockReturnValue(false), close: vi.fn() } as any,
       eventProcessor,
       feishuClient,
       progressTracker: createMockProgressTracker(),
@@ -351,7 +351,7 @@ describe("E2E Smoke Tests", () => {
     const { handleMessage } = createMessageHandler({
       opencode,
       sessionManager: createMockSessionManager(sessionId),
-      dedup: { isDuplicate: vi.fn().mockReturnValue(false), close: vi.fn() } as any,
+      dedup: { isDuplicate: vi.fn().mockReturnValue(false), isDuplicateMessage: vi.fn().mockReturnValue(false), close: vi.fn() } as any,
       eventProcessor,
       feishuClient,
       progressTracker,
@@ -440,7 +440,7 @@ describe("session sharing", () => {
     const { handleMessage } = createMessageHandler({
       opencode,
       sessionManager: createMockSessionManager(sessionId),
-      dedup: { isDuplicate: vi.fn().mockReturnValue(false), close: vi.fn() } as any,
+      dedup: { isDuplicate: vi.fn().mockReturnValue(false), isDuplicateMessage: vi.fn().mockReturnValue(false), close: vi.fn() } as any,
       eventProcessor,
       feishuClient,
       progressTracker,
@@ -524,7 +524,7 @@ describe("session sharing", () => {
     const { handleMessage } = createMessageHandler({
       opencode,
       sessionManager: createMockSessionManager(sessionId),
-      dedup: { isDuplicate: vi.fn().mockReturnValue(false), close: vi.fn() } as any,
+      dedup: { isDuplicate: vi.fn().mockReturnValue(false), isDuplicateMessage: vi.fn().mockReturnValue(false), close: vi.fn() } as any,
       eventProcessor,
       feishuClient,
       progressTracker,
@@ -610,7 +610,7 @@ describe("session sharing", () => {
     const { handleMessage } = createMessageHandler({
       opencode,
       sessionManager: createMockSessionManager(sessionId),
-      dedup: { isDuplicate: vi.fn().mockReturnValue(false), close: vi.fn() } as any,
+      dedup: { isDuplicate: vi.fn().mockReturnValue(false), isDuplicateMessage: vi.fn().mockReturnValue(false), close: vi.fn() } as any,
       eventProcessor,
       feishuClient,
       progressTracker,
@@ -709,7 +709,7 @@ describe("session sharing", () => {
     const { handleMessage } = createMessageHandler({
       opencode,
       sessionManager: createMockSessionManager(sessionId),
-      dedup: { isDuplicate: vi.fn().mockReturnValue(false), close: vi.fn() } as any,
+      dedup: { isDuplicate: vi.fn().mockReturnValue(false), isDuplicateMessage: vi.fn().mockReturnValue(false), close: vi.fn() } as any,
       eventProcessor,
       feishuClient,
       progressTracker,
