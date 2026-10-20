@@ -254,7 +254,9 @@ export function createStreamingBridge(
             // generation speed.
             const generated = (delta.output ?? 0) + (delta.reasoning ?? 0)
             const context = (delta.input ?? 0) + (delta.cache.read ?? 0)
-            const turnMs = Date.now() - turnStartedAt
+            // turnStartedAt is only set once the first text arrives; before
+            // that the turn duration is unknown (not "since 1970").
+            const turnMs = turnStartedAt ? Date.now() - turnStartedAt : 0
             // The rate is per second of MODEL time. If no step events were seen
             // (older server), fall back to the whole turn.
             const modelMs = llmMs > 0 ? llmMs : turnMs
@@ -266,7 +268,8 @@ export function createStreamingBridge(
             const timePart = llmMs > 0 ? ` · LLM ${(llmMs / 1000).toFixed(1)}s` : ""
             logger.info(
               `Turn usage: generated=${generated} context=${context} cacheHit=${hit}% ` +
-              `model=${(modelMs / 1000).toFixed(1)}s totalTurn=${(turnMs / 1000).toFixed(1)}s`,
+              `model=${(modelMs / 1000).toFixed(1)}s ` +
+              `totalTurn=${turnMs > 0 ? `${(turnMs / 1000).toFixed(1)}s` : "n/a"}`,
             )
             writeToCard((c) =>
               void c.setUsage(
