@@ -307,7 +307,7 @@ export function createStreamingBridge(
             // The hit rate is computed on the last step, so the label has to
             // follow the same basis — otherwise a cold cache (0% hit) would
             // hide the number altogether. It sits next to the token count.
-            const hitPart = context > 0 ? `(${hit}%)` : ""
+            const hitPart = context > 0 ? `(缓存 ${hit}%)` : ""
             const timePart = turnMs > 0 ? `耗时 ${(turnMs / 1000).toFixed(1)}s · ` : ""
             logger.info(
               `Turn usage: generated=${generated} context=${context} cacheHit=${hit}% ` +
