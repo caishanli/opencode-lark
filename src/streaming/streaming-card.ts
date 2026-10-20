@@ -249,6 +249,10 @@ export class StreamingCardSession {
       }
     }
     this.status = status ?? "completed"
+    // The live "≈ N tok/s" is only an estimate; when the turn ends without a
+    // usage report (interrupted, error) it would be the only number on the
+    // card and it means nothing.
+    if (this.usageText.startsWith("≈")) this.usageText = ""
     try {
       await this.sync()
       // Only forget the card once it really carries the final state — if the
