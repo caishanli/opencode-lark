@@ -24,12 +24,16 @@
 import type { FeishuApiClient } from "../feishu/api-client.js"
 import { toFeishuMarkdown } from "../feishu/markdown.js"
 import { createLogger } from "../utils/logger.js"
+import { rmSync, writeFileSync } from "node:fs"
 
 const logger = createLogger("streaming-card")
 
 export interface StreamingCardOptions {
   feishuClient: FeishuApiClient
   chatId: string
+  /** File used to remember the open card, so a restarted process can close it
+   *  instead of leaving it stuck on "running". */
+  stateFile?: string
 }
 
 /** A run of assistant text. */
@@ -80,6 +84,7 @@ export async function closeAllStreamingCards(status: "error" | "interrupted" = "
 export class StreamingCardSession {
   private readonly feishuClient: FeishuApiClient
   private readonly chatId: string
+  private readonly stateFile?: string
 
   private messageId: string | null = null
   private closed = false
@@ -98,6 +103,7 @@ export class StreamingCardSession {
   constructor(options: StreamingCardOptions) {
     this.feishuClient = options.feishuClient
     this.chatId = options.chatId
+    this.stateFile = options.stateFile
   }
 
   get isActive(): boolean {
@@ -222,6 +228,7 @@ export class StreamingCardSession {
     }
     this.closed = true
     openCards.delete(this)
+    this.forgetOpenCard()
     await this.queue
 
     if (finalText !== undefined) {
@@ -303,6 +310,24 @@ export class StreamingCardSession {
     }
   }
 
+  private rememberOpenCard(messageId: string): void {
+    if (!this.stateFile) return
+    try {
+      writeFileSync(this.stateFile, JSON.stringify({ messageId, chatId: this.chatId }))
+    } catch {
+      // best effort
+    }
+  }
+
+  private forgetOpenCard(): void {
+    if (!this.stateFile) return
+    try {
+      rmSync(this.stateFile, { force: true })
+    } catch {
+      // best effort
+    }
+  }
+
   private statusLine(): string {
     const base =
       this.status === "completed" ? "✅ 已完成"
@@ -378,6 +403,7 @@ export class StreamingCardSession {
           content,
         })
         this.messageId = (res.data?.["message_id"] as string | undefined) ?? null
+        if (this.messageId) this.rememberOpenCard(this.messageId)
       }
       this.lastSentContent = content
     })

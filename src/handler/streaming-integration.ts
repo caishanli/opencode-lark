@@ -26,6 +26,8 @@ export interface StreamingBridgeDeps {
   opencode?: OpencodeGateway
   /** How long a turn may stay silent before the card is closed anyway. */
   idleCloseMs?: number
+  /** Where the open card is remembered, so a restarted process can close it. */
+  cardStateFile?: string
   feishuClient: FeishuApiClient
   subAgentTracker: SubAgentTracker
   logger: Logger
@@ -97,6 +99,7 @@ export function createStreamingBridge(
       card = new StreamingCardSession({
         feishuClient,
         chatId,
+        stateFile: deps.cardStateFile,
       })
       cardStartPromise = card.start().then(() => {
         logger.info(

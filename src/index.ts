@@ -15,6 +15,8 @@
  *   9. Graceful shutdown
  */
 
+import { existsSync, readFileSync, rmSync } from "node:fs"
+import path from "node:path"
 import { createOpencodeGateway } from "./opencode/gateway.js"
 import { eventPayload } from "./opencode/events.js"
 import { loadConfig } from "./utils/config.js"
@@ -193,8 +195,37 @@ async function main(): Promise<void> {
     logger,
   })
 
+  const cardStateFile = path.join(config.dataDir, "open-card.json")
+
+  // A card left open by a previous process (crash, restart) would stay on
+  // "running" for ever: close it before starting a new one.
+  try {
+    if (existsSync(cardStateFile)) {
+      const stale = JSON.parse(readFileSync(cardStateFile, "utf-8")) as { messageId?: string }
+      if (stale.messageId) {
+        await feishuClient.updateMessage(
+          stale.messageId,
+          JSON.stringify({
+            schema: "2.0",
+            config: { wide_screen_mode: true },
+            body: {
+              elements: [
+                { tag: "markdown", content: "⚠️ 已中断（服务在上一轮回复完成前重启）" },
+              ],
+            },
+          }),
+        )
+        logger.info(`Closed the card left open by the previous process: ${stale.messageId}`)
+      }
+      rmSync(cardStateFile, { force: true })
+    }
+  } catch (err) {
+    logger.warn(`Failed to close a stale card: ${err}`)
+  }
+
   const streamingBridge = createStreamingBridge({
     opencode: gateway,
+    cardStateFile,
     feishuClient,
     subAgentTracker,
     logger,
