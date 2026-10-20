@@ -389,6 +389,49 @@ describe("createCommandHandler", () => {
       expect(result).toBe(false)
     })
 
+    it("/模型 shows the model menu", async () => {
+      mockFeishuClient.replyMessage = vi.fn().mockResolvedValue({ code: 0, msg: "ok" })
+      ;(mockGateway.listModels as ReturnType<typeof vi.fn>).mockResolvedValue([
+        { id: "flash-free", providerID: "opencode", name: "Flash Free", context: 1000000 },
+        { id: "pro", providerID: "opencode", name: "Pro", context: 200000 },
+        { id: "other-free", providerID: "opencode", name: "Other Free", context: 200000 },
+      ])
+      mockSessionManager.getExisting = vi.fn().mockResolvedValue("ses-1")
+      mockGateway.getSession = vi.fn().mockResolvedValue({
+        id: "ses-1",
+        model: { id: "flash-free", providerID: "opencode" },
+      })
+
+      const handler = createHandler()
+      const result = await handler("chat-1", "chat-1", "msg-1", "/模型")
+
+      expect(result).toBe(true)
+      const callArgs = (mockFeishuClient.replyMessage as any).mock.calls[0]
+      const content = JSON.parse(callArgs?.[1]?.content as string)
+      expect(content.header?.title?.content).toContain("模型菜单")
+      const buttons = content.elements
+        .filter((el: any) => el.tag === "action")
+        .flatMap((el: any) => el.actions)
+      // without a keyword only the free models are offered
+      expect(buttons.length).toBe(2)
+      // the button carries the provider and the model id
+      expect(buttons[0].value.command).toBe("/模型 opencode|flash-free")
+    })
+
+    it("/模型 <provider|id> switches the model", async () => {
+      mockFeishuClient.replyMessage = vi.fn().mockResolvedValue({ code: 0, msg: "ok" })
+      mockSessionManager.getExisting = vi.fn().mockResolvedValue("ses-1")
+
+      const handler = createHandler()
+      const result = await handler("chat-1", "chat-1", "msg-1", "/模型 opencode|flash-free")
+
+      expect(result).toBe(true)
+      expect(mockGateway.switchModel).toHaveBeenCalledWith("ses-1", {
+        id: "flash-free",
+        providerID: "opencode",
+      })
+    })
+
     it("/ alone sends interactive card", async () => {
       mockFeishuClient.replyMessage = vi.fn().mockResolvedValue({ code: 0, msg: "ok" })
 

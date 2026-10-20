@@ -63,6 +63,16 @@ export interface QuestionRequest {
 
 export interface CommandRef { name: string; description?: string }
 
+/** A model as opencode reports it. */
+export interface ModelInfo {
+  id: string
+  providerID: string
+  name: string
+  /** The context window in tokens. */
+  context?: number
+  enabled?: boolean
+}
+
 export type OpencodeEvent = {
   id?: string
   type: string
@@ -79,6 +89,10 @@ export interface OpencodeGateway {
   sendPrompt(sessionID: string, input: PromptInput, opts?: { delivery?: "steer" | "queue" }): Promise<void>
   /** Run one of opencode's own commands (the ones listed by /api/command). */
   sendCommand(sessionID: string, input: { command: string; arguments?: string }): Promise<void>
+  /** The models available for this project. */
+  listModels(): Promise<ModelInfo[]>
+  /** Change the model of a session. */
+  switchModel(sessionID: string, model: { id: string; providerID: string }): Promise<void>
   abort(sessionID: string): Promise<void>
   activeStatuses(): Promise<Record<string, { type: string }>>
 
@@ -183,6 +197,25 @@ export function createOpencodeGateway(options: OpencodeGatewayOptions): Opencode
         $body_arguments: input.arguments,
       })
       throwIfError(res, "sendCommand")
+    },
+    async listModels() {
+      const res = await client.v2.model.list({ location: { directory: dir() } })
+      const body = unwrap(res)
+      if (!Array.isArray(body)) return []
+      return body.map((m: any) => ({
+        id: String(m.id ?? ""),
+        providerID: String(m.providerID ?? ""),
+        name: String(m.name ?? m.id ?? ""),
+        context: typeof m.limit?.context === "number" ? m.limit.context : undefined,
+        enabled: m.enabled !== false,
+      })) as ModelInfo[]
+    },
+    async switchModel(sessionID, model) {
+      const res = await client.v2.session.switchModel({
+        sessionID,
+        model: { id: model.id, providerID: model.providerID },
+      })
+      throwIfError(res, "switchModel")
     },
     async abort(sessionID) {
       await client.v2.session.interrupt({ sessionID })

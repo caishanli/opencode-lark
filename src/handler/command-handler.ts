@@ -12,7 +12,7 @@ import type { EventProcessor } from "../streaming/event-processor.js"
 import type { EventListenerMap } from "../utils/event-listeners.js"
 import type { FeishuApiClient } from "../feishu/api-client.js"
 import type { Logger } from "../utils/logger.js"
-import type { OpencodeGateway } from "../opencode/gateway.js"
+import type { ModelInfo, OpencodeGateway } from "../opencode/gateway.js"
 
 // ── Dependency injection interface ──
 
@@ -194,6 +194,57 @@ function buildOpencodeCommandElements(
   ]
 }
 
+/** The model picker: one button per model. */
+function buildModelCard(
+  models: ModelInfo[],
+  current: string,
+  keyword: string,
+): Record<string, unknown> {
+  const elements: Record<string, unknown>[] = [
+    {
+      tag: "markdown",
+      content: `**当前模型：** ${current}\n${
+        keyword ? `**匹配「${keyword}」的模型：**` : "**可用模型（免费优先）：**"
+      }`,
+    },
+  ]
+
+  // Feishu shows a few buttons per row — five per action element.
+  for (let i = 0; i < models.length; i += 5) {
+    const chunk = models.slice(i, i + 5)
+    elements.push({
+      tag: "action",
+      actions: chunk.map((m) => {
+        const label = m.name.length > 18 ? `${m.name.slice(0, 17)}…` : m.name
+        const isCurrent = `${m.providerID}/${m.id}` === current
+        return {
+          tag: "button",
+          text: { tag: "plain_text", content: isCurrent ? `✅ ${label}` : label },
+          type: isCurrent ? "primary" : "default",
+          value: {
+            action: "command_execute",
+            command: `/模型 ${m.providerID}|${m.id}`,
+          },
+        }
+      }),
+    })
+  }
+
+  elements.push({
+    tag: "markdown",
+    content: "_用 `/模型 <关键词>` 可以搜索更多模型_",
+  })
+
+  return {
+    config: { wide_screen_mode: true },
+    header: {
+      title: { tag: "plain_text", content: "🧠 模型菜单" },
+      template: "blue",
+    },
+    elements,
+  }
+}
+
 // ── Factory ──
 
 export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
@@ -329,6 +380,81 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
   }
 
   /**
+   * Show the models this project can use and switch to the chosen one.
+   *
+   *   /模型            → the menu with the free models
+   *   /模型 gemini     → the menu filtered by name
+   *   /模型 <prov|id>  → switch to that model
+   */
+  async function handleModel(
+    feishuKey: string,
+    chatId: string,
+    messageId: string,
+    argument: string,
+  ): Promise<void> {
+    const sessionId = await sessionManager.getExisting(feishuKey)
+    if (!sessionId) {
+      await replyText(chatId, messageId, "当前没有绑定的会话，先发一句话或用 /new 建一个")
+      return
+    }
+
+    // A model id carries the provider, so it is encoded as "provider|id".
+    if (argument.includes("|")) {
+      const separator = argument.indexOf("|")
+      const providerID = argument.slice(0, separator)
+      const modelId = argument.slice(separator + 1)
+      try {
+        await opencode.switchModel(sessionId, { id: modelId, providerID })
+        await replyText(chatId, messageId, `已切换模型：${providerID}/${modelId}`)
+      } catch (err) {
+        await replyText(chatId, messageId, `切换模型失败：${err}`)
+      }
+      return
+    }
+
+    let models: ModelInfo[] = []
+    try {
+      models = await opencode.listModels()
+    } catch (err) {
+      logger.warn(`Could not fetch the model list: ${err}`)
+      await replyText(chatId, messageId, `获取模型列表失败：${err}`)
+      return
+    }
+
+    const keyword = argument.trim().toLowerCase()
+    let candidates = models.filter((m) => m.enabled !== false)
+    if (keyword) {
+      candidates = candidates.filter(
+        (m) =>
+          m.id.toLowerCase().includes(keyword) ||
+          m.name.toLowerCase().includes(keyword) ||
+          m.providerID.toLowerCase().includes(keyword),
+      )
+    } else {
+      // Without a keyword the free models are the useful ones.
+      const free = candidates.filter((m) => /free/i.test(m.id))
+      if (free.length > 0) candidates = free
+    }
+    candidates = candidates.slice(0, 20)
+
+    if (candidates.length === 0) {
+      await replyText(chatId, messageId, `没有匹配「${argument}」的模型`)
+      return
+    }
+
+    const session = await opencode.getSession(sessionId).catch(() => null)
+    const current = session?.model
+      ? `${session.model.providerID ?? ""}/${session.model.id ?? ""}`
+      : "未知"
+
+    const card = buildModelCard(candidates, current, keyword)
+    await feishuClient.replyMessage(messageId, {
+      msg_type: "interactive",
+      content: JSON.stringify(card),
+    })
+  }
+
+  /**
    * Run one of opencode's own commands (the ones /api/command lists) in the
    * session bound to this chat. The answer is streamed into a card exactly
    * like a normal message.
@@ -417,6 +543,11 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
           await handleConnect(feishuKey, chatId, messageId, targetSessionId)
           return true
         }
+
+        case "/模型":
+        case "/model":
+          await handleModel(feishuKey, chatId, messageId, parts.slice(1).join(" "))
+          return true
 
         case "/":
         case "/help":
