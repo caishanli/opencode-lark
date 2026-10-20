@@ -196,6 +196,7 @@ async function main(): Promise<void> {
   })
 
   const cardStateFile = path.join(config.dataDir, "open-card.json")
+  logger.info(`Open card state file: ${path.resolve(cardStateFile)}`)
 
   // A card left open by a previous process (crash, restart) would stay on
   // "running" for ever: close it before starting a new one.

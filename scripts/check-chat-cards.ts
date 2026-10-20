@@ -47,6 +47,19 @@ const items = (res.data?.["items"] ?? []) as unknown as {
   deleted?: boolean
 }[]
 
+// The card the bridge is currently filling in is not a duplicate — it is
+// simply not updated yet. It is remembered in <dataDir>/open-card.json.
+const openCardFile = join(process.cwd(), "data", "open-card.json")
+let openCardId = ""
+if (existsSync(openCardFile)) {
+  try {
+    openCardId = (JSON.parse(readFileSync(openCardFile, "utf-8")) as { messageId?: string })
+      .messageId ?? ""
+  } catch {
+    openCardId = ""
+  }
+}
+
 const since = (Date.now() - sinceMinutes * 60_000).toString()
 const cards = items
   .filter(
@@ -55,7 +68,8 @@ const cards = items
       i.create_time >= since &&
       // A deleted message keeps an update_time (the delete time) — it is gone
       // from the chat, so it must not count as a card.
-      !i.deleted,
+      !i.deleted &&
+      i.message_id !== openCardId,
   )
   .sort((a, b) => Number(a.create_time) - Number(b.create_time))
 
@@ -70,6 +84,7 @@ for (const c of cards) {
     `  ${fmt(c.create_time)}  ${updated ? "流式卡(就地更新)" : "⚠️ 静态卡(一次性 = 重复)"}  ${c.message_id}`,
   )
 }
+if (openCardId) console.log(`(当前打开的卡 ${openCardId} 不计入)`)
 console.log(`\n流式卡 ${cards.length - statics} 张，静态重复卡 ${statics} 张`)
 if (statics > 0) {
   console.error("❌ 存在重复的静态卡")

@@ -317,8 +317,13 @@ export class StreamingCardSession {
     if (!this.stateFile) return
     try {
       writeFileSync(this.stateFile, JSON.stringify({ messageId, chatId: this.chatId }))
-    } catch {
-      // best effort
+    } catch (err) {
+      // Not fatal — but a silent failure here means a card left open by a
+      // crashed process is never closed, so it must be visible.
+      logger.warn(
+        `Could not remember the open card (${this.stateFile}): ` +
+          `${err instanceof Error ? err.message : String(err)}`,
+      )
     }
   }
 
@@ -326,8 +331,11 @@ export class StreamingCardSession {
     if (!this.stateFile) return
     try {
       rmSync(this.stateFile, { force: true })
-    } catch {
-      // best effort
+    } catch (err) {
+      logger.warn(
+        `Could not forget the open card (${this.stateFile}): ` +
+          `${err instanceof Error ? err.message : String(err)}`,
+      )
     }
   }
 
