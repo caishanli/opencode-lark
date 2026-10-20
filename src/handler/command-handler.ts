@@ -213,6 +213,28 @@ function buildOpencodeCommandElements(
 }
 
 /**
+ * The model of the session, both as "provider/id" and as the name the user
+ * knows it by.
+ */
+function describeCurrentModel(
+  session: { model?: { id?: string; providerID?: string } } | null,
+  models: ModelInfo[],
+): { current: string; currentName: string; currentProvider?: string } {
+  const model = session?.model
+  if (!model?.id) {
+    return { current: "未知", currentName: "未知", currentProvider: undefined }
+  }
+  const providerID = model.providerID
+  const current = `${providerID ?? ""}/${model.id}`
+  const found = models.find((m) => m.id === model.id && (!providerID || m.providerID === providerID))
+  return {
+    current,
+    currentName: found?.name ?? model.id,
+    currentProvider: providerID,
+  }
+}
+
+/**
  * Free models carry "free" in their id — ":free" on OpenRouter, "-free" on
  * the opencode provider.
  */
@@ -229,13 +251,18 @@ function buildProviderCard(
   currentProvider: string | undefined,
   menuId: string,
   notice?: string,
+  currentName?: string,
 ): Record<string, unknown> {
+  const head = [
+    currentName ? `**当前模型：** ${currentName}` : "",
+    "**第 1 步：选择 provider**",
+  ]
+    .filter(Boolean)
+    .join("\n")
   const elements: Record<string, unknown>[] = [
     {
       tag: "markdown",
-      content: notice
-        ? `${notice}\n**第 1 步：选择 provider**`
-        : "**第 1 步：选择 provider**",
+      content: notice ? `${notice}\n${head}` : head,
     },
   ]
 
@@ -598,7 +625,9 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
         return
       }
       if (existing) {
-        // The card stays where it is — it just shows the new model.
+        // The model list folds away — the card falls back to the provider
+        // level and shows the model that is now in use.
+        existing.view = { level: 1, page: 1 }
         await renderModelMenu(existing, sessionId, `✅ 已切换到 ${providerID}/${modelId}`)
         return
       }
@@ -616,10 +645,7 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
     }
 
     const session = await opencode.getSession(sessionId).catch(() => null)
-    const current = session?.model
-      ? `${session.model.providerID ?? ""}/${session.model.id ?? ""}`
-      : "未知"
-    const currentProvider = session?.model?.providerID
+    const { currentName, currentProvider } = describeCurrentModel(session, models)
 
     const usable = models.filter((m) => m.enabled !== false)
     const providers = [...new Set(usable.map((m) => m.providerID))].sort()
@@ -630,13 +656,13 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
 
     // Level 1: the providers
     if (!provider) {
-      const card = buildProviderCard(providers, usable, currentProvider, activeId)
+      const card = buildProviderCard(providers, usable, currentProvider, activeId, undefined, currentName)
       await publishModelMenu(chatId, messageId, existing, activeId, card, { level: 1, page: 1 }, key)
       return
     }
 
     // Level 2: the models of that provider (or a search over all of them)
-    const built = buildLevel2Card(usable, providers, provider, page, current, activeId)
+    const built = buildLevel2Card(usable, providers, provider, page, currentName, activeId)
     if (!built) {
       await replyText(chatId, messageId, `没有匹配「${provider}」的模型`)
       return
@@ -712,22 +738,19 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
     }
 
     const session = await opencode.getSession(sessionId).catch(() => null)
-    const current = session?.model
-      ? `${session.model.providerID ?? ""}/${session.model.id ?? ""}`
-      : "未知"
-    const currentProvider = session?.model?.providerID
+    const { currentName, currentProvider } = describeCurrentModel(session, models)
 
     const usable = models.filter((m) => m.enabled !== false)
     const providers = [...new Set(usable.map((m) => m.providerID))].sort()
 
     if (entry.view.level === 1) {
-      const card = buildProviderCard(providers, usable, currentProvider, entry.id, notice)
+      const card = buildProviderCard(providers, usable, currentProvider, entry.id, notice, currentName)
       await publishModelMenu(entry.chatId, entry.messageId, entry, entry.id, card, entry.view, entry.feishuKey)
       return
     }
 
     const provider = entry.view.provider ?? ""
-    const built = buildLevel2Card(usable, providers, provider, entry.view.page, current, entry.id, notice)
+    const built = buildLevel2Card(usable, providers, provider, entry.view.page, currentName, entry.id, notice)
     if (!built) return
     await publishModelMenu(entry.chatId, entry.messageId, entry, entry.id, built.card, built.view, entry.feishuKey)
   }
