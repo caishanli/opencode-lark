@@ -697,6 +697,57 @@ describe("createStreamingBridge", () => {
     expect(content).toContain("tokens(缓存 75%)")
   })
 
+  it("shows how much of the context window is in use", async () => {
+    const mockFeishu = {
+      ...createMockFeishuClient(),
+      sendMessage: vi.fn().mockResolvedValue({ code: 0, data: { message_id: "msg_456" } }),
+      replyMessage: vi.fn().mockResolvedValue({ code: 0 }),
+    }
+    const modelContextLimit = vi.fn().mockResolvedValue(10000)
+    const deps = makeDeps({
+      feishuClient: mockFeishu,
+      opencode: { modelContextLimit } as any,
+    })
+    const bridge = createStreamingBridge(deps)
+
+    const handlePromise = bridge.handleMessage(
+      "chat-1", "ses-1", eventListeners, eventProcessor, mockSendMessage, vi.fn(), "msg_original", null,
+    )
+    await waitFor(() => {
+      expect(eventListeners.size).toBe(1)
+    })
+
+    const emit = (ev: unknown) => {
+      ;[...(eventListeners.get("ses-1") ?? [])].forEach((fn) => fn(ev))
+    }
+
+    // the step tells us which model is running
+    emit({
+      type: "session.step.started",
+      data: { sessionID: "ses-1", model: { id: "m1", providerID: "p1" } },
+    })
+    // the window limit is fetched in the background
+    await new Promise((r) => setTimeout(r, 0))
+    emit({ type: "session.text.delta", data: { sessionID: "ses-1", assistantMessageID: "m-1", delta: "hello" } })
+    emit({
+      type: "session.usage.updated",
+      data: {
+        sessionID: "ses-1",
+        cost: 0,
+        tokens: { input: 1000, output: 100, reasoning: 0, cache: { read: 3000, write: 0 } },
+      },
+    })
+    emit({ type: "session.execution.succeeded", data: { sessionID: "ses-1" } })
+
+    await handlePromise
+
+    const content = cardContent(mockFeishu)
+    // 4000 of 10000 tokens = 40%
+    // 4000 of 10000 tokens = 40%
+    expect(content).toContain("上下文 4.0k (40%)")
+    expect(modelContextLimit).toHaveBeenCalledWith("p1", "m1")
+  })
+
   it("reports the turn's usage delta, not the session's cumulative total", async () => {
     const mockFeishu = {
       ...createMockFeishuClient(),

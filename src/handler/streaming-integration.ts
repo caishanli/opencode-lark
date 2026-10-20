@@ -110,6 +110,37 @@ export function createStreamingBridge(
     /** Time actually spent in model calls (step.started -> step.ended). Tool
      *  time between steps is NOT part of it. */
     let llmMs = 0
+    // The model of this turn and its context window — the card shows how
+    // much of the window is in use.
+    let turnModel: { id: string; providerID: string } | undefined
+    let turnContextLimit: number | undefined
+    let lastUsage: {
+      generated: number
+      context: number
+      rate: number
+      hit: string
+      cost: string
+      turnMs: number
+    } | null = null
+
+    /**
+     * The status line: how much was generated, how fast, how much of the
+     * context window is in use.
+     */
+    const usageLine = (): string | null => {
+      if (!lastUsage) return null
+      const { generated, context, rate, hit, cost, turnMs } = lastUsage
+      const hitPart = context > 0 ? `(缓存 ${hit}%)` : ""
+      const timePart = turnMs > 0 ? `耗时 ${(turnMs / 1000).toFixed(1)}s · ` : ""
+      const limit = turnContextLimit
+      const used =
+        limit && limit > 0 && context > 0 ? ` (${formatPercent(context / limit)}%)` : ""
+      const contextPart = context > 0 ? ` · 上下文 ${formatTokens(context)}${used}` : ""
+      return (
+        `${timePart}${formatTokens(generated)} tokens${hitPart} · ` +
+        `${formatRate(rate)} tok/s${contextPart}${cost}`
+      )
+    }
     let stepStartedAt = 0
 
     const ensureCard = (): void => {
@@ -252,6 +283,22 @@ export function createStreamingBridge(
           case "ModelCall": {
             if (action.phase === "started") {
               stepStartedAt = Date.now()
+              if (action.model && action.model.id) {
+                turnModel = action.model
+                // The window limit is fetched in the background: the usage
+                // event of this step may arrive before it is known.
+                if (!turnContextLimit) {
+                  void deps.opencode
+                    ?.modelContextLimit(action.model.providerID, action.model.id)
+                    .then((limit) => {
+                      if (!limit) return
+                      turnContextLimit = limit
+                      const line = usageLine()
+                      if (line) writeToCard((c) => void c.setUsage(line))
+                    })
+                    .catch((err) => logger.warn(`Could not fetch the model limit: ${err}`))
+                }
+              }
             } else if (stepStartedAt) {
               llmMs += Date.now() - stepStartedAt
               stepStartedAt = 0
@@ -303,24 +350,15 @@ export function createStreamingBridge(
             const rate = modelMs > 0 ? generated / (modelMs / 1000) : 0
             const hit = formatPercent(cacheHitRate(stepDelta))
             const cost = action.cost !== undefined && action.cost > 0 ? ` · $${action.cost.toFixed(4)}` : ""
-            const contextPart = context > 0 ? ` · 上下文 ${formatTokens(context)}` : ""
-            // The hit rate is computed on the last step, so the label has to
-            // follow the same basis — otherwise a cold cache (0% hit) would
-            // hide the number altogether. It sits next to the token count.
-            const hitPart = context > 0 ? `(缓存 ${hit}%)` : ""
-            const timePart = turnMs > 0 ? `耗时 ${(turnMs / 1000).toFixed(1)}s · ` : ""
             logger.info(
               `Turn usage: generated=${generated} context=${context} cacheHit=${hit}% ` +
               `model=${(modelMs / 1000).toFixed(1)}s ` +
               `turn=${turnMs > 0 ? `${(turnMs / 1000).toFixed(1)}s` : "n/a"} ` +
               `(last step: input=${stepDelta.input} cacheRead=${stepDelta.cache.read})`,
             )
-            writeToCard((c) =>
-              void c.setUsage(
-                `${timePart}${formatTokens(generated)} tokens${hitPart} · ` +
-                  `${formatRate(rate)} tok/s${contextPart}${cost}`,
-              ),
-            )
+            lastUsage = { generated, context, rate, hit, cost, turnMs }
+            const line = usageLine()
+            if (line) writeToCard((c) => void c.setUsage(line))
             // `session.usage.updated` fires after EVERY step, not once per
             // turn — closing the card here cut the reply off after the first
             // tool call. The turn ends with `session.execution.succeeded`.

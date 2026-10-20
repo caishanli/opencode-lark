@@ -131,6 +131,9 @@ async function main(): Promise<void> {
 
   await waitForServer()
   logger.info("Opencode server ready")
+  // Warm the model limits, so the first card of the first turn already knows
+  // the context window of the model.
+  void gateway.warmModelLimits().catch(() => {})
 
   // ═══════════════════════════════════════════
   // Phase 3: Database Init

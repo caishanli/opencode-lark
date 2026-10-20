@@ -63,6 +63,9 @@ export interface QuestionRequest {
 
 export interface CommandRef { name: string; description?: string }
 
+/** How long the model limits (context windows) are cached. */
+const MODEL_LIMITS_TTL_MS = 5 * 60 * 1000
+
 /** A model as opencode reports it. */
 export interface ModelInfo {
   id: string
@@ -91,6 +94,10 @@ export interface OpencodeGateway {
   sendCommand(sessionID: string, input: { command: string; arguments?: string }): Promise<void>
   /** The models available for this project. */
   listModels(): Promise<ModelInfo[]>
+  /** The context window of a model, in tokens (undefined if unknown). */
+  modelContextLimit(providerID: string, modelID: string): Promise<number | undefined>
+  /** Fetch the context windows of all models, so the first lookup is instant. */
+  warmModelLimits(): Promise<void>
   /** Change the model of a session. */
   switchModel(sessionID: string, model: { id: string; providerID: string }): Promise<void>
   abort(sessionID: string): Promise<void>
@@ -138,6 +145,27 @@ export function createOpencodeGateway(options: OpencodeGatewayOptions): Opencode
 
   const throwIfError = (res: any, label: string) => {
     if (res?.error) throw new Error(res.error?.message ?? `${label} failed`)
+  }
+
+  // The context window of every model — the list changes rarely, so it is
+  // cached instead of being fetched on every usage event.
+  let modelLimits: { at: number; limits: Map<string, number> } | null = null
+
+  /** Fetch the context window of every model (cached). */
+  const loadModelLimits = async (): Promise<void> => {
+    const now = Date.now()
+    if (modelLimits && now - modelLimits.at <= MODEL_LIMITS_TTL_MS) return
+    try {
+      const models = await gw.listModels()
+      const limits = new Map<string, number>()
+      for (const m of models) {
+        if (m.context && m.context > 0) limits.set(`${m.providerID}/${m.id}`, m.context)
+      }
+      modelLimits = { at: now, limits }
+    } catch (err) {
+      // Keep the stale limits rather than losing the percentage.
+      options.logger?.warn?.(`Could not fetch the model limits: ${err}`)
+    }
   }
 
   const gw: OpencodeGateway = {
@@ -209,6 +237,13 @@ export function createOpencodeGateway(options: OpencodeGatewayOptions): Opencode
         context: typeof m.limit?.context === "number" ? m.limit.context : undefined,
         enabled: m.enabled !== false,
       })) as ModelInfo[]
+    },
+    async warmModelLimits() {
+      await loadModelLimits()
+    },
+    async modelContextLimit(providerID, modelID) {
+      await loadModelLimits()
+      return modelLimits?.limits.get(`${providerID}/${modelID}`)
     },
     async switchModel(sessionID, model) {
       const res = await client.v2.session.switchModel({

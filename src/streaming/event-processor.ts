@@ -89,6 +89,8 @@ export interface ModelCall {
   readonly type: "ModelCall"
   readonly sessionId: string
   readonly phase: "started" | "ended"
+  /** The model of the step — needed for the context window. */
+  readonly model?: { id: string; providerID: string }
 }
 
 export type ProcessedAction =
@@ -572,7 +574,20 @@ export class EventProcessor {
     const sessionId = props.sessionID
     if (typeof sessionId !== "string") return null
     if (!this.ownedSessions.has(sessionId)) return null
-    return { type: "ModelCall", sessionId, phase }
+    const model = (props as { model?: unknown }).model
+    const modelRef =
+      model && typeof model === "object"
+        ? {
+            id: String((model as { id?: unknown }).id ?? ""),
+            providerID: String((model as { providerID?: unknown }).providerID ?? ""),
+          }
+        : undefined
+    return {
+      type: "ModelCall",
+      sessionId,
+      phase,
+      ...(modelRef && modelRef.id ? { model: modelRef } : {}),
+    }
   }
 
   private processSessionUsage(event: any): TokenUsage | null {
