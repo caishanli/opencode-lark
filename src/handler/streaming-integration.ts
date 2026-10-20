@@ -309,7 +309,8 @@ export function createStreamingBridge(
             logger.info(
               `Turn usage: generated=${generated} context=${context} cacheHit=${hit}% ` +
               `model=${(modelMs / 1000).toFixed(1)}s ` +
-              `turn=${turnMs > 0 ? `${(turnMs / 1000).toFixed(1)}s` : "n/a"}`,
+              `turn=${turnMs > 0 ? `${(turnMs / 1000).toFixed(1)}s` : "n/a"} ` +
+              `(last step: input=${stepDelta.input} cacheRead=${stepDelta.cache.read})`,
             )
             writeToCard((c) =>
               void c.setUsage(
