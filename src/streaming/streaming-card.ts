@@ -24,7 +24,7 @@
 import type { FeishuApiClient } from "../feishu/api-client.js"
 import { toFeishuMarkdown } from "../feishu/markdown.js"
 import { createLogger } from "../utils/logger.js"
-import { rmSync, writeFileSync } from "node:fs"
+import { readFileSync, rmSync, writeFileSync } from "node:fs"
 
 const logger = createLogger("streaming-card")
 
@@ -316,7 +316,12 @@ export class StreamingCardSession {
   private rememberOpenCard(messageId: string): void {
     if (!this.stateFile) return
     try {
-      writeFileSync(this.stateFile, JSON.stringify({ messageId, chatId: this.chatId }))
+      // One entry per chat: a turn that is still closing must not wipe the
+      // entry of the turn that is already running (that is what left cards
+      // stuck on "running" after a restart).
+      const open = this.readOpenCards()
+      open[this.chatId] = messageId
+      writeFileSync(this.stateFile, JSON.stringify(open))
     } catch (err) {
       // Not fatal — but a silent failure here means a card left open by a
       // crashed process is never closed, so it must be visible.
@@ -330,13 +335,41 @@ export class StreamingCardSession {
   private forgetOpenCard(): void {
     if (!this.stateFile) return
     try {
-      rmSync(this.stateFile, { force: true })
+      const open = this.readOpenCards()
+      if (open[this.chatId] === this.messageId) {
+        delete open[this.chatId]
+      }
+      if (Object.keys(open).length === 0) {
+        rmSync(this.stateFile, { force: true })
+      } else {
+        writeFileSync(this.stateFile, JSON.stringify(open))
+      }
     } catch (err) {
       logger.warn(
         `Could not forget the open card (${this.stateFile}): ` +
           `${err instanceof Error ? err.message : String(err)}`,
       )
     }
+  }
+
+  /** The cards that are currently open, per chat. */
+  private readOpenCards(): Record<string, string> {
+    if (!this.stateFile) return {}
+    try {
+      const raw = readFileSync(this.stateFile, "utf-8").trim()
+      if (!raw) return {}
+      const parsed = JSON.parse(raw) as unknown
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        const out: Record<string, string> = {}
+        for (const [chatId, messageId] of Object.entries(parsed as Record<string, unknown>)) {
+          if (typeof messageId === "string") out[chatId] = messageId
+        }
+        return out
+      }
+    } catch {
+      // a broken state file is not worth failing over
+    }
+    return {}
   }
 
   private statusLine(): string {

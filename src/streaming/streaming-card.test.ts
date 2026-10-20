@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest"
+import { existsSync, readFileSync, rmSync } from "node:fs"
 import { StreamingCardSession, closeAllStreamingCards } from "./streaming-card.js"
 import { createMockFeishuClient } from "../__tests__/setup.js"
 
@@ -232,5 +233,38 @@ describe("StreamingCardSession — usage that arrives before the card exists", (
       .map((c: any) => String(c[1]))
     const contents = [...sent, ...updated]
     expect(contents.some((c) => c.includes("1.2k tokens"))).toBe(true)
+  })
+})
+
+describe("StreamingCardSession — the open card state file", () => {
+  it("keeps one entry per chat and only removes its own", async () => {
+    const file = "/tmp/opencode/state-test.json"
+    rmSync(file, { force: true })
+
+    const make = async (chatId: string, messageId: string) => {
+      const feishuClient = createMockFeishuClient()
+      ;(feishuClient.sendMessage as ReturnType<typeof vi.fn>).mockResolvedValue({
+        code: 0, msg: "ok", data: { message_id: messageId },
+      })
+      const session = new StreamingCardSession({ feishuClient, chatId, stateFile: file })
+      await session.start()
+      return session
+    }
+
+    const a = await make("chat-a", "msg_a")
+    const b = await make("chat-b", "msg_b")
+    expect(JSON.parse(readFileSync(file, "utf-8"))).toEqual({
+      "chat-a": "msg_a",
+      "chat-b": "msg_b",
+    })
+
+    // Closing one chat must not drop the other chat's entry — a late close
+    // of a finished turn used to wipe the entry of the running one, which
+    // left cards stuck on "running" after a restart.
+    await a.close("done", "completed")
+    expect(JSON.parse(readFileSync(file, "utf-8"))).toEqual({ "chat-b": "msg_b" })
+
+    await b.close("done", "completed")
+    expect(existsSync(file)).toBe(false)
   })
 })

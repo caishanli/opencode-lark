@@ -202,10 +202,16 @@ async function main(): Promise<void> {
   // "running" for ever: close it before starting a new one.
   try {
     if (existsSync(cardStateFile)) {
-      const stale = JSON.parse(readFileSync(cardStateFile, "utf-8")) as { messageId?: string }
-      if (stale.messageId) {
+      const stale = JSON.parse(readFileSync(cardStateFile, "utf-8")) as unknown
+      const openCards: Record<string, string> = {}
+      if (stale && typeof stale === "object" && !Array.isArray(stale)) {
+        for (const [chatId, messageId] of Object.entries(stale as Record<string, unknown>)) {
+          if (typeof messageId === "string") openCards[chatId] = messageId
+        }
+      }
+      for (const [chatId, messageId] of Object.entries(openCards)) {
         await feishuClient.updateMessage(
-          stale.messageId,
+          messageId,
           JSON.stringify({
             schema: "2.0",
             config: { wide_screen_mode: true },
@@ -216,7 +222,7 @@ async function main(): Promise<void> {
             },
           }),
         )
-        logger.info(`Closed the card left open by the previous process: ${stale.messageId}`)
+        logger.info(`Closed the card left open by the previous process: ${messageId} (chat ${chatId})`)
       }
       rmSync(cardStateFile, { force: true })
     }
