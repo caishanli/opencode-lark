@@ -823,6 +823,40 @@ describe("createStreamingBridge", () => {
     expect(contents.some((c) => c.includes("the answer"))).toBe(true)
   })
 
+  it("keeps every delta of a step, not just the first one", async () => {
+    // Regression: all deltas of one step share the same assistant message id.
+    // Treating that id as "already seen" dropped everything but the first
+    // delta, so the card showed only the first few characters of each run.
+    const mockFeishu = {
+      ...createMockFeishuClient(),
+      sendMessage: vi.fn().mockResolvedValue({ code: 0, data: { message_id: "msg_456" } }),
+      replyMessage: vi.fn().mockResolvedValue({ code: 0 }),
+    }
+    const deps = makeDeps({ feishuClient: mockFeishu })
+    const bridge = createStreamingBridge(deps)
+
+    const handlePromise = bridge.handleMessage(
+      "chat-1", "ses-1", eventListeners, eventProcessor, mockSendMessage, vi.fn(), "msg_original", null,
+    )
+    await waitFor(() => { expect(eventListeners.size).toBe(1) })
+    const emit = (ev: unknown) => {
+      ;[...(eventListeners.get("ses-1") ?? [])].forEach((fn) => fn(ev))
+    }
+
+    for (const chunk of ["第一段，", "很长很长的", "回复内容。"]) {
+      emit({
+        type: "session.text.delta",
+        data: { sessionID: "ses-1", assistantMessageID: "m-1", delta: chunk },
+      })
+    }
+    emit({ type: "session.execution.succeeded", data: { sessionID: "ses-1" } })
+    await handlePromise
+
+    const contents = (mockFeishu.updateMessage as any).mock.calls.map((c: any) => String(c[1]))
+    const final = contents[contents.length - 1]
+    expect(final).toContain("第一段，很长很长的回复内容。")
+  })
+
   it("keeps the card open across the steps of a multi-step turn", async () => {
     // Regression: the usage event fires after every step. Closing the card
     // there cut the reply off after the first tool call — the card showed

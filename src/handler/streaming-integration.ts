@@ -70,11 +70,15 @@ export function createStreamingBridge(
   /** In-flight turn per chat, so turns never overlap for the same conversation. */
   const chatTurns = new Map<string, Promise<void>>()
   /**
-   * Assistant message ids already seen. An execution that was still running
-   * when the next message arrived keeps emitting events; its text would
-   * otherwise be appended to the new turn's card (the reply shows up twice).
+   * Assistant message ids whose text was already delivered in some turn. An
+   * execution that was still running when the next message arrived keeps
+   * emitting events; its text would otherwise be appended to the new turn's
+   * card (the reply shows up twice).
+   *
+   * This set holds ids from ALL turns — the per-turn set below decides
+   * whether a delta continues the current turn's text or is a leftover.
    */
-  const seenAssistantMessageIds = new Set<string>()
+  const deliveredAssistantMessageIds = new Set<string>()
   const idleCloseMs = deps.idleCloseMs ?? IDLE_CLOSE_MS
 
   async function runTurn(
@@ -117,6 +121,10 @@ export function createStreamingBridge(
     // The bridge owns this session from now on: the observer must not post a
     // second copy of the answer.
     deps.observer?.claimSession?.(sessionId)
+
+    // Assistant message ids whose text belongs to THIS turn. A delta of one
+    // of them is a continuation, not a leftover from an earlier execution.
+    const turnAssistantMessageIds = new Set<string>()
 
     return new Promise<void>((resolve, reject) => {
       let textBuffer = ""
@@ -203,8 +211,18 @@ export function createStreamingBridge(
               // The bridge owns this turn: tell the observer, so it never
               // forwards the same text as a second (static) card.
               deps.observer?.markOwned(action.assistantMessageId)
-              if (seenAssistantMessageIds.has(action.assistantMessageId)) break
-              seenAssistantMessageIds.add(action.assistantMessageId)
+              // A leftover from an earlier turn (its execution was still
+              // running when this turn started) must be dropped — but the
+              // deltas of the CURRENT turn share one assistant message id,
+              // so only ids from a PREVIOUS turn are leftovers. Without that
+              // distinction every delta but the first one was dropped and
+              // the card showed only the first few characters of each run.
+              const alreadyDelivered = deliveredAssistantMessageIds.has(action.assistantMessageId)
+              if (alreadyDelivered && !turnAssistantMessageIds.has(action.assistantMessageId)) {
+                break
+              }
+              turnAssistantMessageIds.add(action.assistantMessageId)
+              deliveredAssistantMessageIds.add(action.assistantMessageId)
             }
             if (!turnStartedAt) turnStartedAt = Date.now()
             textBuffer += action.text

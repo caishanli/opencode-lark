@@ -124,10 +124,13 @@ const listener = listeners[listeners.length - 1]!
 //   step 1: text → tool call → usage
 //   step 2: more text → usage
 //   end:    session.execution.succeeded
-listener({
-  type: "session.text.delta",
-  data: { sessionID: "ses-selftest", assistantMessageID: "msg-selftest-1", delta: "第一段正文" },
-})
+// every delta of a step shares one assistant message id — all of them count
+for (const chunk of ["第一段", "正文，", "分成三次推送。"]) {
+  listener({
+    type: "session.text.delta",
+    data: { sessionID: "ses-selftest", assistantMessageID: "msg-selftest-1", delta: chunk },
+  })
+}
 listener({
   type: "session.tool.input.started",
   data: { sessionID: "ses-selftest", id: "call_selftest_1", name: "shell" },
@@ -179,7 +182,7 @@ for (const m of fresh) {
 console.log(`API 报错: ${apiErrors.length === 0 ? "无" : apiErrors.join(" | ")}`)
 
 // The whole turn must be in the card — not only the first step.
-const hasStep1 = lastContent.includes("第一段正文")
+const hasStep1 = lastContent.includes("第一段正文，分成三次推送。")
 const hasStep2 = lastContent.includes("第二段正文")
 console.log(`第一段在卡里: ${hasStep1 ? "✅" : "❌"}`)
 console.log(`第二段在卡里: ${hasStep2 ? "✅" : "❌"}`)
