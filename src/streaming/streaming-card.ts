@@ -99,6 +99,9 @@ export class StreamingCardSession {
   private blocks: Block[] = []
   /** Token/rate summary shown in the head line. */
   private usageText = ""
+  /** True once the server reported a real usage — the live estimate must
+   *  never replace it. */
+  private hasRealUsage = false
   /** How many characters of the turn's text have been assigned to a block. */
   private assignedLength = 0
   /** Number of blocks already delivered in a sealed card. */
@@ -180,14 +183,37 @@ export class StreamingCardSession {
   }
 
   /** Show a token/rate summary next to the status line. */
+  /** The real usage the server reported for the last step. */
   async setUsage(text: string): Promise<void> {
+    await this.applyUsage(text, true)
+  }
+
+  /**
+   * The live "≈ N tok/s" estimate. It never replaces a real usage line:
+   * the text of a step can arrive after the usage event of that step, and
+   * the estimate would then wipe the real numbers off the card.
+   */
+  async setEstimate(text: string): Promise<void> {
+    if (this.hasRealUsage) return
+    await this.applyUsage(text, false)
+  }
+
+  private async applyUsage(text: string, real: boolean): Promise<void> {
     if (this.closed) return
     if (text === this.usageText) return
     // Record it even if the card has no message id yet: the usage event can
     // arrive before the card is created, and the line must not be lost.
     this.usageText = text
+    if (real) this.hasRealUsage = true
     if (!this.messageId) return
     await this.sync()
+  }
+
+  /** True while a tool call is still marked as running. */
+  hasRunningTool(): boolean {
+    return this.blocks.some(
+      (b) => b.kind === "tools" && b.calls.some((c) => c.state === "running"),
+    )
   }
 
   async setToolStatus(
@@ -251,8 +277,9 @@ export class StreamingCardSession {
     this.status = status ?? "completed"
     // The live "≈ N tok/s" is only an estimate; when the turn ends without a
     // usage report (interrupted, error) it would be the only number on the
-    // card and it means nothing.
-    if (this.usageText.startsWith("≈")) this.usageText = ""
+    // card and it means nothing. A real usage line is kept — it has the
+    // tokens, the cache hit rate and the context of the last step.
+    if (!this.hasRealUsage) this.usageText = ""
     try {
       await this.sync()
       // Only forget the card once it really carries the final state — if the
@@ -397,7 +424,7 @@ export class StreamingCardSession {
   private statusLine(): string {
     const base =
       this.status === "completed" ? "✅ 已完成"
-      : this.status === "interrupted" ? "⚠️ 已中断（服务重启或连接断开）"
+      : this.status === "interrupted" ? "⚠️ 已中断（服务重启、连接断开或长时间无响应）"
       : this.status === "error" ? "❌ 失败"
       : "⏳ 运行中…"
     return this.usageText ? `${base} · ${this.usageText}` : base

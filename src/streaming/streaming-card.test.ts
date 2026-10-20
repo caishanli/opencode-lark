@@ -54,6 +54,40 @@ describe("StreamingCardSession", () => {
     expect(fc.sendMessage).toHaveBeenCalledTimes(1)
   })
 
+  it("keeps the real usage when a live estimate arrives later", async () => {
+    const { session, feishuClient: fc } = createStartedSession()
+    await session.start()
+    await session.setUsage("耗时 59.4s · 6211 tokens(缓存 99.04%) · 132.4 tok/s · 上下文 131k")
+
+    // a text delta after the usage event would push the live estimate
+    await session.setEstimate("≈ 98.2 tok/s")
+
+    // the card is still running, so the line reads "⏳ 运行中… · <usage>"
+    const status = elements(fc).find((el: any) => el.tag === "markdown" && el.content.includes("tok/s"))
+    expect(status?.content).toContain("6211 tokens")
+    expect(status?.content).not.toContain("≈")
+  })
+
+  it("drops the live estimate when the turn ends without a usage report", async () => {
+    const { session, feishuClient: fc } = createStartedSession()
+    await session.start()
+    await session.setEstimate("≈ 98.2 tok/s")
+    await session.close("done")
+
+    const status = elements(fc).find((el: any) => el.tag === "markdown" && el.content.includes("已完成"))
+    expect(status?.content).toBe("✅ 已完成")
+  })
+
+  it("knows when a tool is still running", async () => {
+    const { session, feishuClient: fc } = createStartedSession()
+    await session.start()
+    expect(session.hasRunningTool()).toBe(false)
+    await session.setToolStatus("question", "running", "ask", "call-1")
+    expect(session.hasRunningTool()).toBe(true)
+    await session.setToolStatus("question", "completed", undefined, "call-1")
+    expect(session.hasRunningTool()).toBe(false)
+  })
+
   it("renders a text block as a markdown element", async () => {
     const { session, feishuClient: fc } = createStartedSession()
     await session.start()

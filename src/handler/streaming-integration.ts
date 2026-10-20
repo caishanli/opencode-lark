@@ -244,7 +244,7 @@ export function createStreamingBridge(
             const elapsed = (Date.now() - turnStartedAt) / 1000
             if (elapsed >= 1) {
               const approx = Math.ceil(textBuffer.length / 4)
-              writeToCard((c) => void c.setUsage(`≈ ${formatRate(approx / elapsed)} tok/s`))
+              writeToCard((c) => void c.setEstimate(`≈ ${formatRate(approx / elapsed)} tok/s`))
             }
             break
           }
@@ -446,8 +446,17 @@ export function createStreamingBridge(
             removeListener(eventListeners, sessionId, myListener)
             const responseText = textBuffer.trim() || "（无回复）"
             const hadCard = card !== null
+            // A tool that is still marked as running means the turn was cut
+            // short (the watchdog gave up, the server went away) — the card
+            // must not claim that it finished.
+            const unfinished = card?.hasRunningTool() ?? false
+            if (unfinished) {
+              logger.warn("Closing the card as interrupted — a tool was still running")
+            }
             const closeCard = card
-              ? (cardStartPromise ?? Promise.resolve()).then(() => card!.close(responseText))
+              ? (cardStartPromise ?? Promise.resolve()).then(() =>
+                  card!.close(responseText, unfinished ? "interrupted" : "completed"),
+                )
               : Promise.resolve()
             closeCard
               .catch((err) => {
