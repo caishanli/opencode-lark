@@ -24,6 +24,23 @@
   // Data directory for SQLite database
   "dataDir": "./data",
 
+  // The opencode server the bridge talks to. The bridge starts it when it is
+  // needed and stops it when it has been idle for a while.
+  "opencode": {
+    "url": "http://127.0.0.1:5096",
+    "username": "opencode",
+    "password": "",
+    // "server": {
+    //   // The executable that starts the server.
+    //   "command": "opencode",
+    //   // Its arguments — derived from the url when omitted.
+    //   "args": ["serve", "--port", "5096", "--hostname", "0.0.0.0"],
+    //   // How long the server may sit idle before it is stopped (ms).
+    //   // 0 disables the idle stop.
+    //   "idleTimeoutMs": 1800000
+    // }
+  },
+
   // Progress card update debounce configuration
   "progress": {
     "debounceMs": 500,
