@@ -176,9 +176,12 @@ export class StreamingCardSession {
 
   /** Show a token/rate summary next to the status line. */
   async setUsage(text: string): Promise<void> {
-    if (!this.messageId || this.closed) return
+    if (this.closed) return
     if (text === this.usageText) return
+    // Record it even if the card has no message id yet: the usage event can
+    // arrive before the card is created, and the line must not be lost.
     this.usageText = text
+    if (!this.messageId) return
     await this.sync()
   }
 

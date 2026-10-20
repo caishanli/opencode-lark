@@ -212,3 +212,25 @@ describe("StreamingCardSession — a failed update must not poison the queue", (
     expect(contents.some((c) => c.includes("done"))).toBe(true)
   })
 })
+
+describe("StreamingCardSession — usage that arrives before the card exists", () => {
+  it("keeps the usage line and shows it once the card is created", async () => {
+    const feishuClient = createMockFeishuClient()
+    ;(feishuClient.sendMessage as ReturnType<typeof vi.fn>).mockResolvedValue({
+      code: 0, msg: "ok", data: { message_id: "msg_456" },
+    })
+    const session = new StreamingCardSession({ feishuClient, chatId: "chat_789" })
+
+    // usage arrives before the card was created
+    await session.setUsage("1.2k tokens · 340 tok/s")
+    await session.start()
+
+    // the first content goes out with the message itself, later ones via update
+    const sent = (feishuClient.sendMessage as ReturnType<typeof vi.fn>).mock.calls
+      .map((c: any) => String(c[1].content))
+    const updated = (feishuClient.updateMessage as ReturnType<typeof vi.fn>).mock.calls
+      .map((c: any) => String(c[1]))
+    const contents = [...sent, ...updated]
+    expect(contents.some((c) => c.includes("1.2k tokens"))).toBe(true)
+  })
+})
