@@ -287,16 +287,15 @@ describe("StreamingCardSession — the open card state file", () => {
 
     const a = await make("chat-a", "msg_a")
     const b = await make("chat-b", "msg_b")
-    expect(JSON.parse(readFileSync(file, "utf-8"))).toEqual({
-      "chat-a": "msg_a",
-      "chat-b": "msg_b",
-    })
+    const state = JSON.parse(readFileSync(file, "utf-8"))
+    expect(state["chat-a"].messageId).toBe("msg_a")
+    expect(state["chat-b"].messageId).toBe("msg_b")
 
     // Closing one chat must not drop the other chat's entry — a late close
     // of a finished turn used to wipe the entry of the running one, which
     // left cards stuck on "running" after a restart.
     await a.close("done", "completed")
-    expect(JSON.parse(readFileSync(file, "utf-8"))).toEqual({ "chat-b": "msg_b" })
+    expect(JSON.parse(readFileSync(file, "utf-8"))["chat-b"].messageId).toBe("msg_b")
 
     await b.close("done", "completed")
     expect(existsSync(file)).toBe(false)
@@ -320,6 +319,41 @@ describe("StreamingCardSession — the state entry survives a failed final updat
 
     await expect(session.close("bye", "interrupted")).rejects.toThrow("feishu is down")
     // The card is still listed: the next process must be able to close it.
-    expect(JSON.parse(readFileSync(file, "utf-8"))).toEqual({ "chat-x": "msg_x" })
+    expect(JSON.parse(readFileSync(file, "utf-8"))["chat-x"].messageId).toBe("msg_x")
+  })
+
+  it("remembers the answer so a restarted process can restore the card", async () => {
+    const file = "/tmp/opencode/state-restore-test.json"
+    rmSync(file, { force: true })
+    const feishuClient = createMockFeishuClient()
+    ;(feishuClient.sendMessage as ReturnType<typeof vi.fn>).mockResolvedValue({
+      code: 0, msg: "ok", data: { message_id: "msg_r" },
+    })
+    ;(feishuClient.updateMessage as ReturnType<typeof vi.fn>).mockResolvedValue({ code: 0, msg: "ok" })
+    const session = new StreamingCardSession({ feishuClient, chatId: "chat-r", stateFile: file })
+    await session.start()
+    await session.setText("the answer so far")
+    session.persistState()
+
+    const remembered = JSON.parse(readFileSync(file, "utf-8"))["chat-r"]
+    expect(remembered.messageId).toBe("msg_r")
+    expect(remembered.blocks[0].text).toBe("the answer so far")
+
+    // A new process picks the card up and closes it as interrupted — the
+    // answer stays on the card.
+    const restored = StreamingCardSession.restore({
+      feishuClient,
+      chatId: "chat-r",
+      stateFile: file,
+      state: remembered,
+    })
+    await restored.close(undefined, "interrupted")
+
+    const card = JSON.parse((feishuClient.updateMessage as any).mock.calls.at(-1)[1])
+    const text = JSON.stringify(card)
+    expect(text).toContain("the answer so far")
+    expect(text).toContain("已中断")
+    // the state file is cleaned up
+    expect(existsSync(file)).toBe(false)
   })
 })

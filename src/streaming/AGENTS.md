@@ -58,5 +58,12 @@ The split between `EventProcessor` (parses events, stateful but passive) and `Se
   card content with `scripts/feishu-card-selftest.ts` (real API, real bridge)
   and `scripts/check-chat-cards.ts` (a card that was never updated is a
   static duplicate).
+- **A card that outlives its process is restored, not wiped.** The open-card
+  state file (`data/open-card.json`) remembers the message id *and* the
+  card's blocks (text runs + tool panels) + the status line, refreshed every
+  two seconds while the turn runs. A process that starts up (or shuts down)
+  with a card still listed rebuilds it with `StreamingCardSession.restore()`
+  and closes it as "interrupted" — the answer stays on the card. Wiping the
+  card to a single "interrupted" line would throw the answer away.
 - `TextDelta` events can arrive very rapidly. Never write to Feishu on every delta. `streaming-card.ts` serializes updates through an async queue.
 - `EventProcessor` does not manage the SSE connection. Reconnection logic lives in `src/index.ts` where the event stream is subscribed.

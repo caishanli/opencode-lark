@@ -60,7 +60,22 @@ interface ToolCall {
   title?: string
 }
 
+/**
+ * What the bridge remembers about a card that is still open, so a restarted
+ * process can restore the answer instead of wiping the card.
+ */
+export interface OpenCardState {
+  messageId: string
+  /** The card's blocks (text runs and tool panels). */
+  blocks?: Block[]
+  /** The status line the card was showing. */
+  usage?: string
+  hasRealUsage?: boolean
+}
+
 const ELEMENT_BUDGET = 180
+/** How often the open-card state file is refreshed while a turn runs. */
+const STATE_WRITE_INTERVAL_MS = 2_000
 
 const TOOL_ICONS: Record<ToolCall["state"], string> = {
   running: "🔄",
@@ -78,12 +93,55 @@ const openCards = new Set<StreamingCardSession>()
  */
 export async function closeAllStreamingCards(
   status: "error" | "interrupted" = "interrupted",
+  /** Used to close cards that are only known through the state file. */
+  fallback?: { feishuClient: FeishuApiClient; stateFile?: string },
 ): Promise<number> {
   const cards = [...openCards]
   const results = await Promise.allSettled(cards.map((c) => c.close(undefined, status)))
   const failed = results.filter((r) => r.status === "rejected").length
   if (failed > 0) logger.warn(`${failed} card(s) could not be closed`)
-  return cards.length
+  let closed = cards.length
+
+  // A card can be missing from the registry (the turn was taken over, the
+  // process was interrupted) while the state file still lists it. Close it
+  // from the state file, with the answer it remembered.
+  if (fallback?.stateFile) {
+    closed += await closeRememberedCards(fallback.feishuClient, fallback.stateFile, status)
+  }
+  return closed
+}
+
+/** Close the cards listed in the state file that are not open in memory. */
+async function closeRememberedCards(
+  feishuClient: FeishuApiClient,
+  stateFile: string,
+  status: "error" | "interrupted",
+): Promise<number> {
+  let open: Record<string, OpenCardState>
+  try {
+    const raw = readFileSync(stateFile, "utf-8").trim()
+    if (!raw) return 0
+    const parsed = JSON.parse(raw) as unknown
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return 0
+    open = parsed as Record<string, OpenCardState>
+  } catch {
+    return 0
+  }
+
+  let closed = 0
+  for (const [chatId, entry] of Object.entries(open)) {
+    const state = typeof entry === "string" ? { messageId: entry } : entry
+    if (!state?.messageId) continue
+    const card = StreamingCardSession.restore({ feishuClient, chatId, stateFile, state })
+    try {
+      await card.close(undefined, status)
+      closed += 1
+      logger.info(`Closed the card left open by a previous process: ${state.messageId}`)
+    } catch (err) {
+      logger.warn(`Could not close the card ${state.messageId}: ${err}`)
+    }
+  }
+  return closed
 }
 
 export class StreamingCardSession {
@@ -95,6 +153,8 @@ export class StreamingCardSession {
   private closed = false
   private queue: Promise<void> = Promise.resolve()
   private lastSentContent = ""
+  /** When the open-card state file was last written. */
+  private lastStateWrite = 0
 
   private blocks: Block[] = []
   /** Token/rate summary shown in the head line. */
@@ -142,6 +202,35 @@ export class StreamingCardSession {
     }
     parts.push(`[status] ${this.statusLine()}`)
     return parts.join("\n")
+  }
+
+  /**
+   * Rebuild a card session from a remembered state, so a card that was left
+   * open by a previous process can be closed with its answer intact.
+   */
+  static restore(options: {
+    feishuClient: FeishuApiClient
+    chatId: string
+    stateFile?: string
+    state: OpenCardState
+  }): StreamingCardSession {
+    const session = new StreamingCardSession({
+      feishuClient: options.feishuClient,
+      chatId: options.chatId,
+      stateFile: options.stateFile,
+    })
+    session.messageId = options.state.messageId
+    session.blocks = (options.state.blocks ?? []).map((b) =>
+      b.kind === "message"
+        ? { kind: "message", start: b.start, text: b.text }
+        : { kind: "tools", calls: b.calls.map((c) => ({ ...c })) },
+    )
+    const last = session.blocks[session.blocks.length - 1]
+    session.assignedLength =
+      last && last.kind === "message" ? last.start + last.text.length : 0
+    session.usageText = options.state.usage ?? ""
+    session.hasRealUsage = options.state.hasRealUsage ?? false
+    return session
   }
 
   async start(): Promise<void> {
@@ -369,7 +458,7 @@ export class StreamingCardSession {
       // entry of the turn that is already running (that is what left cards
       // stuck on "running" after a restart).
       const open = this.readOpenCards()
-      open[this.chatId] = messageId
+      open[this.chatId] = this.stateOf(messageId)
       writeFileSync(this.stateFile, JSON.stringify(open))
     } catch (err) {
       // Not fatal — but a silent failure here means a card left open by a
@@ -385,7 +474,7 @@ export class StreamingCardSession {
     if (!this.stateFile) return
     try {
       const open = this.readOpenCards()
-      if (open[this.chatId] === this.messageId) {
+      if (open[this.chatId]?.messageId === this.messageId) {
         delete open[this.chatId]
       }
       if (Object.keys(open).length === 0) {
@@ -401,17 +490,61 @@ export class StreamingCardSession {
     }
   }
 
+  /** The state to remember for this card: the answer has to survive a
+   *  restart, otherwise the next process can only wipe the card. */
+  private stateOf(messageId: string): OpenCardState {
+    return {
+      messageId,
+      blocks: this.blocks.map((b) =>
+        b.kind === "message"
+          ? { kind: "message", start: b.start, text: b.text }
+          : {
+              kind: "tools",
+              calls: b.calls.map((c) => ({ ...c })),
+            },
+      ),
+      ...(this.usageText ? { usage: this.usageText } : {}),
+      ...(this.hasRealUsage ? { hasRealUsage: true } : {}),
+    }
+  }
+
+  /** Write the remembered state now, so a restart can restore the card. */
+  persistState(): void {
+    if (!this.messageId) return
+    this.lastStateWrite = Date.now()
+    this.rememberOpenCard(this.messageId)
+  }
+
+  /** The state of the open card — used to restore it after a restart. */
+  get state(): OpenCardState | null {
+    if (!this.messageId) return null
+    return this.stateOf(this.messageId)
+  }
+
   /** The cards that are currently open, per chat. */
-  private readOpenCards(): Record<string, string> {
+  private readOpenCards(): Record<string, OpenCardState> {
     if (!this.stateFile) return {}
     try {
       const raw = readFileSync(this.stateFile, "utf-8").trim()
       if (!raw) return {}
       const parsed = JSON.parse(raw) as unknown
       if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-        const out: Record<string, string> = {}
-        for (const [chatId, messageId] of Object.entries(parsed as Record<string, unknown>)) {
-          if (typeof messageId === "string") out[chatId] = messageId
+        const out: Record<string, OpenCardState> = {}
+        for (const [chatId, value] of Object.entries(parsed as Record<string, unknown>)) {
+          // The old format was a plain message id.
+          if (typeof value === "string") {
+            out[chatId] = { messageId: value }
+            continue
+          }
+          if (!value || typeof value !== "object") continue
+          const entry = value as Partial<OpenCardState>
+          if (typeof entry.messageId !== "string") continue
+          out[chatId] = {
+            messageId: entry.messageId,
+            ...(Array.isArray(entry.blocks) ? { blocks: entry.blocks } : {}),
+            ...(typeof entry.usage === "string" ? { usage: entry.usage } : {}),
+            ...(entry.hasRealUsage ? { hasRealUsage: true } : {}),
+          }
         }
         return out
       }
@@ -499,6 +632,13 @@ export class StreamingCardSession {
         if (this.messageId) this.rememberOpenCard(this.messageId)
       }
       this.lastSentContent = content
+      // Keep the remembered state fresh: if the process dies, the next one
+      // can restore the answer instead of wiping the card.
+      const now = Date.now()
+      if (this.messageId && now - this.lastStateWrite > STATE_WRITE_INTERVAL_MS) {
+        this.lastStateWrite = now
+        this.rememberOpenCard(this.messageId)
+      }
     })
   }
 

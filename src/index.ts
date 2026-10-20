@@ -32,7 +32,11 @@ import { EventProcessor } from "./streaming/event-processor.js"
 import { SubAgentTracker } from "./streaming/subagent-tracker.js"
 import { createMessageHandler } from "./handler/message-handler.js"
 import { createStreamingBridge } from "./handler/streaming-integration.js"
-import { closeAllStreamingCards } from "./streaming/streaming-card.js"
+import {
+  closeAllStreamingCards,
+  StreamingCardSession,
+  type OpenCardState,
+} from "./streaming/streaming-card.js"
 import { createCommandHandler } from "./handler/command-handler.js"
 import { createOutboundMediaHandler } from "./handler/outbound-media.js"
 import { createSessionObserver } from "./streaming/session-observer.js"
@@ -202,30 +206,36 @@ async function main(): Promise<void> {
   logger.info(`Open card state file: ${path.resolve(cardStateFile)}`)
 
   // A card left open by a previous process (crash, restart) would stay on
-  // "running" for ever: close it before starting a new one.
+  // "running" for ever: close it before starting a new one. The state file
+  // remembers the answer, so the card keeps its text and only the status
+  // line says that the turn was interrupted.
   try {
     if (existsSync(cardStateFile)) {
       const stale = JSON.parse(readFileSync(cardStateFile, "utf-8")) as unknown
-      const openCards: Record<string, string> = {}
+      const openCards: Record<string, OpenCardState> = {}
       if (stale && typeof stale === "object" && !Array.isArray(stale)) {
-        for (const [chatId, messageId] of Object.entries(stale as Record<string, unknown>)) {
-          if (typeof messageId === "string") openCards[chatId] = messageId
+        for (const [chatId, value] of Object.entries(stale as Record<string, unknown>)) {
+          if (typeof value === "string") {
+            openCards[chatId] = { messageId: value }
+            continue
+          }
+          const entry = value as Partial<OpenCardState> | null
+          if (entry && typeof entry.messageId === "string") {
+            openCards[chatId] = entry as OpenCardState
+          }
         }
       }
-      for (const [chatId, messageId] of Object.entries(openCards)) {
-        await feishuClient.updateMessage(
-          messageId,
-          JSON.stringify({
-            schema: "2.0",
-            config: { wide_screen_mode: true },
-            body: {
-              elements: [
-                { tag: "markdown", content: "⚠️ 已中断（服务在上一轮回复完成前重启）" },
-              ],
-            },
-          }),
+      for (const [chatId, state] of Object.entries(openCards)) {
+        const card = StreamingCardSession.restore({
+          feishuClient,
+          chatId,
+          stateFile: cardStateFile,
+          state,
+        })
+        await card.close(undefined, "interrupted")
+        logger.info(
+          `Closed the card left open by the previous process: ${state.messageId} (chat ${chatId})`,
         )
-        logger.info(`Closed the card left open by the previous process: ${messageId} (chat ${chatId})`)
       }
       rmSync(cardStateFile, { force: true })
     }
@@ -478,7 +488,10 @@ async function main(): Promise<void> {
       // that would be lost if the process disappears right now. (The state
       // file keeps a card listed until its final update landed, so a
       // failed update is picked up by the next process.)
-      const closed = await closeAllStreamingCards("interrupted")
+      const closed = await closeAllStreamingCards("interrupted", {
+        feishuClient,
+        stateFile: cardStateFile,
+      })
       logger.info(`Closed ${closed} open card(s)`)
       abortController.abort()
       sseAbort.abort()
