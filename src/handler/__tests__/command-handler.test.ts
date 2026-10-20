@@ -389,12 +389,11 @@ describe("createCommandHandler", () => {
       expect(result).toBe(false)
     })
 
-    it("/模型 shows the model menu", async () => {
+    it("/模型 shows the providers first", async () => {
       mockFeishuClient.replyMessage = vi.fn().mockResolvedValue({ code: 0, msg: "ok" })
       ;(mockGateway.listModels as ReturnType<typeof vi.fn>).mockResolvedValue([
-        { id: "flash-free", providerID: "opencode", name: "Flash Free", context: 1000000 },
-        { id: "pro", providerID: "opencode", name: "Pro", context: 200000 },
-        { id: "other-free", providerID: "opencode", name: "Other Free", context: 200000 },
+        { id: "flash-free", providerID: "opencode", name: "Flash Free" },
+        { id: "other", providerID: "openrouter", name: "Other" },
       ])
       mockSessionManager.getExisting = vi.fn().mockResolvedValue("ses-1")
       mockGateway.getSession = vi.fn().mockResolvedValue({
@@ -408,14 +407,64 @@ describe("createCommandHandler", () => {
       expect(result).toBe(true)
       const callArgs = (mockFeishuClient.replyMessage as any).mock.calls[0]
       const content = JSON.parse(callArgs?.[1]?.content as string)
-      expect(content.header?.title?.content).toContain("模型菜单")
       const buttons = content.elements
         .filter((el: any) => el.tag === "action")
         .flatMap((el: any) => el.actions)
-      // without a keyword only the free models are offered
+      // one button per provider, not per model
       expect(buttons.length).toBe(2)
-      // the button carries the provider and the model id
-      expect(buttons[0].value.command).toBe("/模型 opencode|flash-free")
+      expect(buttons[0].value.command).toBe("/模型 opencode")
+    })
+
+    it("/模型 <provider> lists that provider's models with paging", async () => {
+      mockFeishuClient.replyMessage = vi.fn().mockResolvedValue({ code: 0, msg: "ok" })
+      ;(mockGateway.listModels as ReturnType<typeof vi.fn>).mockResolvedValue(
+        Array.from({ length: 25 }, (_, i) => ({
+          id: `m${i}`,
+          providerID: "opencode",
+          name: `Model ${i}`,
+        })),
+      )
+      mockSessionManager.getExisting = vi.fn().mockResolvedValue("ses-1")
+      mockGateway.getSession = vi.fn().mockResolvedValue({ id: "ses-1", model: {} })
+
+      const handler = createHandler()
+      await handler("chat-1", "chat-1", "msg-1", "/模型 opencode")
+
+      const callArgs = (mockFeishuClient.replyMessage as any).mock.calls[0]
+      const content = JSON.parse(callArgs?.[1]?.content as string)
+      const buttons = content.elements
+        .filter((el: any) => el.tag === "action")
+        .flatMap((el: any) => el.actions)
+      // 12 models per page + the "next page" button
+      expect(buttons.length).toBe(13)
+      const next = buttons.find((b: any) => b.text.content.includes("下一页"))
+      expect(next.value.command).toBe("/模型 opencode 2")
+    })
+
+    it("/模型 <provider> <page> shows the next page", async () => {
+      mockFeishuClient.replyMessage = vi.fn().mockResolvedValue({ code: 0, msg: "ok" })
+      ;(mockGateway.listModels as ReturnType<typeof vi.fn>).mockResolvedValue(
+        Array.from({ length: 25 }, (_, i) => ({
+          id: `m${i}`,
+          providerID: "opencode",
+          name: `Model ${i}`,
+        })),
+      )
+      mockSessionManager.getExisting = vi.fn().mockResolvedValue("ses-1")
+      mockGateway.getSession = vi.fn().mockResolvedValue({ id: "ses-1", model: {} })
+
+      const handler = createHandler()
+      await handler("chat-1", "chat-1", "msg-1", "/模型 opencode 2")
+
+      const callArgs = (mockFeishuClient.replyMessage as any).mock.calls[0]
+      const content = JSON.parse(callArgs?.[1]?.content as string)
+      const markdown = content.elements.find((el: any) => el.tag === "markdown")
+      expect(markdown.content).toContain("第 2/3 页")
+      const buttons = content.elements
+        .filter((el: any) => el.tag === "action")
+        .flatMap((el: any) => el.actions)
+      const prev = buttons.find((b: any) => b.text.content.includes("上一页"))
+      expect(prev.value.command).toBe("/模型 opencode 1")
     })
 
     it("/模型 <provider|id> switches the model", async () => {

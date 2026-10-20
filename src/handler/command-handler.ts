@@ -194,28 +194,83 @@ function buildOpencodeCommandElements(
   ]
 }
 
-/** The model picker: one button per model. */
-function buildModelCard(
+/**
+ * Level 1 of the model menu: the providers, with how many models each has.
+ */
+function buildProviderCard(
+  providers: string[],
   models: ModelInfo[],
-  current: string,
-  keyword: string,
+  currentProvider?: string,
 ): Record<string, unknown> {
   const elements: Record<string, unknown>[] = [
     {
       tag: "markdown",
-      content: `**当前模型：** ${current}\n${
-        keyword ? `**匹配「${keyword}」的模型：**` : "**可用模型（免费优先）：**"
-      }`,
+      content: "**第 1 步：选择 provider**",
     },
   ]
 
-  // Feishu shows a few buttons per row — five per action element.
-  for (let i = 0; i < models.length; i += 5) {
-    const chunk = models.slice(i, i + 5)
+  for (let i = 0; i < providers.length; i += 3) {
+    const chunk = providers.slice(i, i + 3)
+    elements.push({
+      tag: "action",
+      actions: chunk.map((provider) => {
+        const count = models.filter((m) => m.providerID === provider).length
+        const isCurrent = provider === currentProvider
+        return {
+          tag: "button",
+          text: {
+            tag: "plain_text",
+            content: isCurrent ? `✅ ${provider} (${count})` : `${provider} (${count})`,
+          },
+          type: isCurrent ? "primary" : "default",
+          value: { action: "command_execute", command: `/模型 ${provider}` },
+        }
+      }),
+    })
+  }
+
+  elements.push({
+    tag: "markdown",
+    content: "_点一个 provider 进去看它的模型；也可以 `/模型 <关键词>` 直接搜_",
+  })
+
+  return {
+    config: { wide_screen_mode: true },
+    header: {
+      title: { tag: "plain_text", content: "🧠 模型菜单" },
+      template: "blue",
+    },
+    elements,
+  }
+}
+
+/**
+ * Level 2 of the model menu: the models of one provider, one button each,
+ * with paging when there are more than a page's worth.
+ */
+function buildModelCard(options: {
+  models: ModelInfo[]
+  current: string
+  title: string
+  total: number
+  page: number
+  pages: number
+  provider?: string
+}): Record<string, unknown> {
+  const { models, current, title, total, page, pages, provider } = options
+  const elements: Record<string, unknown>[] = [
+    {
+      tag: "markdown",
+      content: `**第 2 步：${title}**（共 ${total} 个，第 ${page}/${pages} 页）\n**当前模型：** ${current}`,
+    },
+  ]
+
+  for (let i = 0; i < models.length; i += 4) {
+    const chunk = models.slice(i, i + 4)
     elements.push({
       tag: "action",
       actions: chunk.map((m) => {
-        const label = m.name.length > 18 ? `${m.name.slice(0, 17)}…` : m.name
+        const label = m.name.length > 16 ? `${m.name.slice(0, 15)}…` : m.name
         const isCurrent = `${m.providerID}/${m.id}` === current
         return {
           tag: "button",
@@ -230,9 +285,29 @@ function buildModelCard(
     })
   }
 
+  if (pages > 1 && provider) {
+    const actions: Record<string, unknown>[] = []
+    if (page > 1) {
+      actions.push({
+        tag: "button",
+        text: { tag: "plain_text", content: `← 上一页 (${page - 1})` },
+        value: { action: "command_execute", command: `/模型 ${provider} ${page - 1}` },
+      })
+    }
+    if (page < pages) {
+      actions.push({
+        tag: "button",
+        text: { tag: "plain_text", content: `下一页 (${page + 1}) →` },
+        type: "primary",
+        value: { action: "command_execute", command: `/模型 ${provider} ${page + 1}` },
+      })
+    }
+    elements.push({ tag: "action", actions })
+  }
+
   elements.push({
     tag: "markdown",
-    content: "_用 `/模型 <关键词>` 可以搜索更多模型_",
+    content: "_点模型即切换；返回上一层：`/模型`_",
   })
 
   return {
@@ -380,11 +455,13 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
   }
 
   /**
-   * Show the models this project can use and switch to the chosen one.
+   * Two level model menu:
    *
-   *   /模型            → the menu with the free models
-   *   /模型 gemini     → the menu filtered by name
-   *   /模型 <prov|id>  → switch to that model
+   *   /模型                 → the providers
+   *   /模型 <provider>      → the models of that provider
+   *   /模型 <provider> <n>  → page n of that provider
+   *   /模型 <provider>|<id> → switch to that model
+   *   /模型 <keyword>       → search all providers
    */
   async function handleModel(
     feishuKey: string,
@@ -421,33 +498,58 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
       return
     }
 
-    const keyword = argument.trim().toLowerCase()
-    let candidates = models.filter((m) => m.enabled !== false)
-    if (keyword) {
-      candidates = candidates.filter(
-        (m) =>
-          m.id.toLowerCase().includes(keyword) ||
-          m.name.toLowerCase().includes(keyword) ||
-          m.providerID.toLowerCase().includes(keyword),
-      )
-    } else {
-      // Without a keyword the free models are the useful ones.
-      const free = candidates.filter((m) => /free/i.test(m.id))
-      if (free.length > 0) candidates = free
-    }
-    candidates = candidates.slice(0, 20)
-
-    if (candidates.length === 0) {
-      await replyText(chatId, messageId, `没有匹配「${argument}」的模型`)
-      return
-    }
-
     const session = await opencode.getSession(sessionId).catch(() => null)
     const current = session?.model
       ? `${session.model.providerID ?? ""}/${session.model.id ?? ""}`
       : "未知"
+    const currentProvider = session?.model?.providerID
 
-    const card = buildModelCard(candidates, current, keyword)
+    const args = argument.split(/\s+/).filter(Boolean)
+    const provider = args[0]
+    const page = Math.max(1, Number(args[1] ?? 1) || 1)
+
+    const usable = models.filter((m) => m.enabled !== false)
+    const providers = [...new Set(usable.map((m) => m.providerID))].sort()
+
+    // Level 1: the providers
+    if (!provider) {
+      const card = buildProviderCard(providers, usable, currentProvider)
+      await feishuClient.replyMessage(messageId, {
+        msg_type: "interactive",
+        content: JSON.stringify(card),
+      })
+      return
+    }
+
+    // Level 2: the models of that provider (or a search over all of them)
+    const isProvider = providers.includes(provider)
+    const candidates = isProvider
+      ? usable.filter((m) => m.providerID === provider)
+      : usable.filter(
+          (m) =>
+            m.id.toLowerCase().includes(provider.toLowerCase()) ||
+            m.name.toLowerCase().includes(provider.toLowerCase()),
+        )
+
+    if (candidates.length === 0) {
+      await replyText(chatId, messageId, `没有匹配「${provider}」的模型`)
+      return
+    }
+
+    const perPage = 12
+    const pages = Math.max(1, Math.ceil(candidates.length / perPage))
+    const shown = Math.min(page, pages)
+    const slice = candidates.slice((shown - 1) * perPage, shown * perPage)
+
+    const card = buildModelCard({
+      models: slice,
+      current,
+      title: isProvider ? `provider：${provider}` : `搜索「${provider}」`,
+      total: candidates.length,
+      page: shown,
+      pages,
+      provider: isProvider ? provider : undefined,
+    })
     await feishuClient.replyMessage(messageId, {
       msg_type: "interactive",
       content: JSON.stringify(card),
