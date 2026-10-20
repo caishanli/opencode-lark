@@ -39,6 +39,8 @@ export interface FeishuApiClient {
   addReaction(messageId: string, emojiType: string): Promise<FeishuApiResponse>
   deleteReaction(messageId: string, reactionId: string): Promise<FeishuApiResponse>
   getMessage(messageId: string): Promise<FeishuApiResponse>
+  listMessages(chatId: string, pageSize?: number): Promise<FeishuApiResponse>
+  deleteMessage(messageId: string): Promise<FeishuApiResponse>
   downloadResource(messageId: string, fileKey: string, type: "image" | "file"): Promise<{ data: Buffer, filename?: string }>
   getBotInfo(): Promise<{ app_name: string; open_id: string }>
   uploadImage(imageData: Buffer, imageType?: string): Promise<string>
@@ -270,6 +272,20 @@ export function createFeishuApiClient(options: FeishuApiClientOptions): FeishuAp
 
     async deleteReaction(messageId, reactionId) {
       return apiRequest("DELETE", `/im/v1/messages/${messageId}/reactions/${reactionId}`)
+    },
+
+    /** List the messages of a chat (newest first). */
+    async listMessages(chatId, pageSize = 50) {
+      return apiRequest(
+        "GET",
+        `/im/v1/messages?container_id_type=chat&container_id=${encodeURIComponent(chatId)}` +
+          `&page_size=${pageSize}&sort_type=ByCreateTimeDesc`,
+      )
+    },
+
+    /** Delete a message the bot sent. */
+    async deleteMessage(messageId) {
+      return apiRequest("DELETE", `/im/v1/messages/${messageId}`)
     },
 
     async getMessage(messageId) {
