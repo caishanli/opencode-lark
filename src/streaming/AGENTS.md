@@ -32,6 +32,31 @@ The split between `EventProcessor` (parses events, stateful but passive) and `Se
 
 ## Gotchas
 
+- **A turn is a sequence of steps.** Measured on opencode v2.0.32:
+  ```
+  session.step.started → session.text.* → session.step.ended (finish:"tool-calls")
+    → session.usage.updated → session.step.started → … → session.step.ended (finish:"stop")
+    → session.usage.updated → session.execution.succeeded
+  ```
+  - `session.usage.updated` fires **after every step** — it is *not* a turn
+    boundary. Using it to close the card cut replies off after the first tool
+    call (the card showed "✅ 已完成" with a fraction of the answer).
+  - The turn ends with **`session.execution.succeeded`** (it does exist on
+    v2.0.32). `session.idle` is never emitted for a normal turn.
+- **All deltas of one step share a single `assistantMessageID`.** Filtering
+  text by "have I seen this id?" therefore drops every delta but the first.
+  Leftover text from an earlier execution must be detected against a
+  *per-turn* set, not against the ids seen so far.
 - `SessionIdle` fires once per agent turn, not once per session lifetime. Multiple idle events are expected in a long conversation.
+- **The session observer and the streaming bridge see the same events.** The
+  observer forwards text the bridge already delivered as a second, static
+  card (no status line → no tok/s). The bridge therefore *claims* the session
+  and every assistant message id it sees; the observer must stay silent for
+  claimed sessions.
+- The content of an interactive card **cannot be read back** through the
+  Feishu API (it returns a "please upgrade your client" placeholder). Verify
+  card content with `scripts/feishu-card-selftest.ts` (real API, real bridge)
+  and `scripts/check-chat-cards.ts` (a card that was never updated is a
+  static duplicate).
 - `TextDelta` events can arrive very rapidly. Never write to Feishu on every delta. `streaming-card.ts` serializes updates through an async queue.
 - `EventProcessor` does not manage the SSE connection. Reconnection logic lives in `src/index.ts` where the event stream is subscribed.
