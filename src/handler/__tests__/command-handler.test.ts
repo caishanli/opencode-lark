@@ -435,10 +435,12 @@ describe("createCommandHandler", () => {
       const buttons = content.elements
         .filter((el: any) => el.tag === "action")
         .flatMap((el: any) => el.actions)
-      // 12 models per page + the "next page" button
-      expect(buttons.length).toBe(13)
+      // 12 models per page + "back" + "next page"
+      expect(buttons.length).toBe(14)
       const next = buttons.find((b: any) => b.text.content.includes("下一页"))
       expect(next.value.command).toBe("/模型 opencode 2")
+      const back = buttons.find((b: any) => b.text.content.includes("返回"))
+      expect(back.value.command).toBe("/模型")
     })
 
     it("/模型 <provider> <page> shows the next page", async () => {

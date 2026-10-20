@@ -285,8 +285,15 @@ function buildModelCard(options: {
     })
   }
 
+  // Back to the provider list — always available on level 2.
+  const backAction = {
+    tag: "button",
+    text: { tag: "plain_text", content: "← 返回 provider 列表" },
+    value: { action: "command_execute", command: "/模型" },
+  }
+
   if (pages > 1 && provider) {
-    const actions: Record<string, unknown>[] = []
+    const actions: Record<string, unknown>[] = [backAction]
     if (page > 1) {
       actions.push({
         tag: "button",
@@ -303,11 +310,13 @@ function buildModelCard(options: {
       })
     }
     elements.push({ tag: "action", actions })
+  } else {
+    elements.push({ tag: "action", actions: [backAction] })
   }
 
   elements.push({
     tag: "markdown",
-    content: "_点模型即切换；返回上一层：`/模型`_",
+    content: "_点模型即切换_",
   })
 
   return {
