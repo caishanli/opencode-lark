@@ -352,6 +352,10 @@ export function createStreamingBridge(
               ? (cardStartPromise ?? Promise.resolve()).then(() => card!.close(responseText))
               : Promise.resolve()
             closeCard
+              .catch((err) => {
+                // Never lose the answer because the card could not be closed.
+                logger.warn(`card.close() failed: ${err instanceof Error ? err.message : String(err)}`)
+              })
               .then(async () => {
                 if (card) {
                   logger.info(

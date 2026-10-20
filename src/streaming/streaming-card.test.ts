@@ -188,3 +188,27 @@ describe("closeAllStreamingCards", () => {
     expect(status.content).toContain("已中断")
   })
 })
+
+describe("StreamingCardSession — a failed update must not poison the queue", () => {
+  it("keeps working after one failed card update", async () => {
+    const feishuClient = createMockFeishuClient()
+    ;(feishuClient.sendMessage as ReturnType<typeof vi.fn>).mockResolvedValue({
+      code: 0, msg: "ok", data: { message_id: "msg_456" },
+    })
+    const update = feishuClient.updateMessage as ReturnType<typeof vi.fn>
+    update.mockRejectedValueOnce(new Error("boom")).mockResolvedValue({ code: 0, msg: "ok" })
+
+    const session = new StreamingCardSession({ feishuClient, chatId: "chat_789" })
+    await session.start()
+
+    // The failure is reported to the caller...
+    await expect(session.setText("first")).rejects.toThrow("boom")
+    // ...but the queue is still usable, so the card can still be finished.
+    await session.setText("second")
+    await session.close("done")
+
+    const contents = update.mock.calls.map((c: any) => String(c[1]))
+    expect(contents.some((c) => c.includes("second"))).toBe(true)
+    expect(contents.some((c) => c.includes("done"))).toBe(true)
+  })
+})

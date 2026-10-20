@@ -8,6 +8,9 @@ import type { FeishuMessageBody, FeishuApiResponse } from "../types.js"
 
 const logger = createLogger("feishu-api")
 
+/** Per-request timeout for the Feishu REST API. */
+const FEISHU_REQUEST_TIMEOUT_MS = 15_000
+
 const FEISHU_BASE_URL = "https://open.feishu.cn/open-apis"
 
 export const MAX_DOWNLOAD_BYTES = 50 * 1024 * 1024 // 50 MB
@@ -216,6 +219,9 @@ export function createFeishuApiClient(options: FeishuApiClientOptions): FeishuAp
         Authorization: `Bearer ${token}`,
       },
       body: body ? JSON.stringify(body) : undefined,
+      // Without a timeout a stalled request wedges every queued card update
+      // forever, and the card never reaches its final state.
+      signal: AbortSignal.timeout(FEISHU_REQUEST_TIMEOUT_MS),
     })
 
     const data = (await response.json()) as FeishuApiResponse

@@ -23,6 +23,9 @@
 
 import type { FeishuApiClient } from "../feishu/api-client.js"
 import { toFeishuMarkdown } from "../feishu/markdown.js"
+import { createLogger } from "../utils/logger.js"
+
+const logger = createLogger("streaming-card")
 
 export interface StreamingCardOptions {
   feishuClient: FeishuApiClient
@@ -381,7 +384,19 @@ export class StreamingCardSession {
   }
 
   private async enqueue(fn: () => Promise<void>): Promise<void> {
-    this.queue = this.queue.then(fn)
-    await this.queue
+    // A failed update must not poison the queue — otherwise every later
+    // update becomes a silent no-op and the card never reaches its final
+    // state. The failure is still reported to the caller (so start() can
+    // fail loudly) while the chain stays usable for the next write.
+    const next = this.queue.catch(() => {}).then(fn)
+    this.queue = next.catch(() => {})
+    try {
+      await next
+    } catch (err) {
+      logger.warn(
+        `Card update failed: ${err instanceof Error ? err.message : String(err)}`,
+      )
+      throw err
+    }
   }
 }
