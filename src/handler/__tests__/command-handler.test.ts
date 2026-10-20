@@ -377,7 +377,7 @@ describe("createCommandHandler", () => {
       void handler
     })
 
-    it("leaves unknown commands to the message handler", async () => {
+    it("answers an unknown lone command instead of sending it to the model", async () => {
       mockFeishuClient.replyMessage = vi.fn().mockResolvedValue({ code: 0, msg: "ok" })
       ;(mockGateway.commands as ReturnType<typeof vi.fn>).mockResolvedValue([
         { name: "review", description: "review changes" },
@@ -385,6 +385,53 @@ describe("createCommandHandler", () => {
 
       const handler = createHandler()
       const result = await handler("chat-1", "chat-1", "msg-1", "/nonsense")
+
+      // answered here — a typo must not burn a whole turn on the model
+      expect(result).toBe(true)
+      expect(mockFeishuClient.replyMessage).toHaveBeenCalled()
+    })
+
+    it("/models is an alias of /模型", async () => {
+      mockFeishuClient.replyMessage = vi.fn().mockResolvedValue({ code: 0, msg: "ok" })
+      ;(mockGateway.listModels as ReturnType<typeof vi.fn>).mockResolvedValue([
+        { id: "flash-free", providerID: "opencode", name: "Flash Free" },
+      ])
+      mockSessionManager.getExisting = vi.fn().mockResolvedValue("ses-1")
+      mockGateway.getSession = vi.fn().mockResolvedValue({ id: "ses-1", model: {} })
+
+      const handler = createHandler()
+      const result = await handler("chat-1", "chat-1", "msg-1", "/models")
+
+      expect(result).toBe(true)
+      const callArgs = (mockFeishuClient.replyMessage as any).mock.calls[0]
+      const content = JSON.parse(callArgs?.[1]?.content as string)
+      expect(content.header?.title?.content).toContain("模型菜单")
+      // level 1 shows providers, not models
+      const buttons = content.elements
+        .filter((el: any) => el.tag === "action")
+        .flatMap((el: any) => el.actions)
+      expect(buttons[0].value.command).toBe("/模型 opencode")
+    })
+
+    it("an unknown lone slash command gets a hint, not a prompt", async () => {
+      mockFeishuClient.replyMessage = vi.fn().mockResolvedValue({ code: 0, msg: "ok" })
+
+      const handler = createHandler()
+      const result = await handler("chat-1", "chat-1", "msg-1", "/mudel")
+
+      expect(result).toBe(true)
+      // JSON.stringify would swallow the matcher, so parse what was sent
+      const call = (mockFeishuClient.replyMessage as any).mock.calls[0]
+      expect(call?.[0]).toBe("msg-1")
+      expect(call?.[1]?.msg_type).toBe("text")
+      expect(JSON.parse(call?.[1]?.content).text).toContain("/mudel")
+      // nothing was sent to the model
+      expect(mockGateway.sendPrompt).not.toHaveBeenCalled()
+    })
+
+    it("a slash followed by words still goes to the model", async () => {
+      const handler = createHandler()
+      const result = await handler("chat-1", "chat-1", "msg-1", "/fix the file /etc/hosts")
 
       expect(result).toBe(false)
     })
@@ -504,16 +551,17 @@ describe("createCommandHandler", () => {
   })
 
   describe("unknown command", () => {
-    it("returns false for unrecognized command", async () => {
+    it("returns true for an unrecognized command without touching any session", async () => {
+      mockFeishuClient.replyMessage = vi.fn().mockResolvedValue({ code: 0, msg: "ok" })
       const handler = createHandler()
       const result = await handler("chat-1", "chat-1", "msg-1", "/unknown")
 
-      expect(result).toBe(false)
+      expect(result).toBe(true)
       expect(mockGateway.listSessions).not.toHaveBeenCalled()
       expect(mockGateway.getSession).not.toHaveBeenCalled()
       expect(mockGateway.createSession).not.toHaveBeenCalled()
       expect(mockGateway.abort).not.toHaveBeenCalled()
-      expect(mockFeishuClient.replyMessage).not.toHaveBeenCalled()
+      expect(mockFeishuClient.replyMessage).toHaveBeenCalled()
     })
 
     it("returns false for non-slash text", async () => {

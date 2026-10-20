@@ -151,7 +151,16 @@ function buildHelpCard(opencodeCommands: { name: string; description?: string }[
             type: "danger",
             value: { action: "command_execute", command: "/abort" },
           },
+          {
+            tag: "button",
+            text: { tag: "plain_text", content: "🧠 模型菜单" },
+            value: { action: "command_execute", command: "/模型" },
+          },
         ],
+      },
+      {
+        tag: "markdown",
+        content: "_打字命令：`/connect <会话ID>` · `/模型 [provider] [页码]` · `/help`_",
       },
       ...buildOpencodeCommandElements(opencodeCommands),
     ],
@@ -468,7 +477,7 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
   /**
    * Two level model menu:
    *
-   *   /模型                 → the providers
+   *   /模型 | /model | /models → the providers
    *   /模型 <provider>      → the models of that provider
    *   /模型 <provider> <n>  → page n of that provider
    *   /模型 <provider>|<id> → switch to that model
@@ -659,6 +668,7 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
 
         case "/模型":
         case "/model":
+        case "/models":
           await handleModel(feishuKey, chatId, messageId, parts.slice(1).join(" "))
           return true
 
@@ -671,7 +681,20 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
         default: {
           // Not a bridge command — maybe one of opencode's own ("/review").
           const handled = await runOpencodeCommand(feishuKey, chatId, messageId, cmd, parts.slice(1))
-          return handled
+          if (handled) return true
+
+          // A lone unknown word starting with "/" is a typo ("/models"), not
+          // prose — handing it to the model would burn a whole turn on it.
+          // Anything with more words after it is a normal message.
+          if (parts.length === 1) {
+            await replyText(
+              chatId,
+              messageId,
+              `未知命令 ${cmd}\n用 /help 看可用命令；/模型 选模型`,
+            )
+            return true
+          }
+          return false
         }
       }
     } catch (err) {
