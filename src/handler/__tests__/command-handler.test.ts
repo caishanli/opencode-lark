@@ -490,6 +490,60 @@ describe("createCommandHandler", () => {
       expect(back.value.command).toBe("/模型")
     })
 
+    it("sorts the free models of a provider first", async () => {
+      mockFeishuClient.replyMessage = vi.fn().mockResolvedValue({ code: 0, msg: "ok" })
+      // the paid ones come first from the API — that must not be the order
+      // the user sees
+      ;(mockGateway.listModels as ReturnType<typeof vi.fn>).mockResolvedValue([
+        { id: "paid-1", providerID: "openrouter", name: "Paid 1" },
+        { id: "paid-2", providerID: "openrouter", name: "Paid 2" },
+        { id: "model:free", providerID: "openrouter", name: "Free Model" },
+        { id: "another:free", providerID: "openrouter", name: "Another Free" },
+      ])
+      mockSessionManager.getExisting = vi.fn().mockResolvedValue("ses-1")
+      mockGateway.getSession = vi.fn().mockResolvedValue({ id: "ses-1", model: {} })
+
+      const handler = createHandler()
+      await handler("chat-1", "chat-1", "msg-1", "/模型 openrouter")
+
+      const callArgs = (mockFeishuClient.replyMessage as any).mock.calls[0]
+      const content = JSON.parse(callArgs?.[1]?.content as string)
+      const buttons = content.elements
+        .filter((el: any) => el.tag === "action")
+        .flatMap((el: any) => el.actions)
+        .filter((b: any) => b.value.command.includes("|"))
+      expect(buttons.map((b: any) => b.text.content)).toEqual([
+        "Free Model",
+        "Another Free",
+        "Paid 1",
+        "Paid 2",
+      ])
+    })
+
+    it("counts the free models on the provider button", async () => {
+      mockFeishuClient.replyMessage = vi.fn().mockResolvedValue({ code: 0, msg: "ok" })
+      ;(mockGateway.listModels as ReturnType<typeof vi.fn>).mockResolvedValue([
+        { id: "paid-1", providerID: "openrouter", name: "Paid 1" },
+        { id: "model:free", providerID: "openrouter", name: "Free Model" },
+        { id: "only-free", providerID: "opencode", name: "Only Free" },
+      ])
+      mockSessionManager.getExisting = vi.fn().mockResolvedValue("ses-1")
+      mockGateway.getSession = vi.fn().mockResolvedValue({ id: "ses-1", model: {} })
+
+      const handler = createHandler()
+      await handler("chat-1", "chat-1", "msg-1", "/模型")
+
+      const callArgs = (mockFeishuClient.replyMessage as any).mock.calls[0]
+      const content = JSON.parse(callArgs?.[1]?.content as string)
+      const labels = content.elements
+        .filter((el: any) => el.tag === "action")
+        .flatMap((el: any) => el.actions)
+        .map((b: any) => b.text.content)
+      expect(labels).toContain("openrouter (2, 免费 1)")
+      // all free → no clutter
+      expect(labels).toContain("opencode (1)")
+    })
+
     it("/模型 <provider> <page> shows the next page", async () => {
       mockFeishuClient.replyMessage = vi.fn().mockResolvedValue({ code: 0, msg: "ok" })
       ;(mockGateway.listModels as ReturnType<typeof vi.fn>).mockResolvedValue(

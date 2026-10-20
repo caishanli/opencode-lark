@@ -204,6 +204,14 @@ function buildOpencodeCommandElements(
 }
 
 /**
+ * Free models carry "free" in their id — ":free" on OpenRouter, "-free" on
+ * the opencode provider.
+ */
+function isFreeModel(model: ModelInfo): boolean {
+  return /free/i.test(model.id)
+}
+
+/**
  * Level 1 of the model menu: the providers, with how many models each has.
  */
 function buildProviderCard(
@@ -223,7 +231,9 @@ function buildProviderCard(
     elements.push({
       tag: "action",
       actions: chunk.map((provider) => {
-        const count = models.filter((m) => m.providerID === provider).length
+        const own = models.filter((m) => m.providerID === provider)
+        const free = own.filter(isFreeModel).length
+        const count = free > 0 && free < own.length ? `${own.length}, 免费 ${free}` : String(own.length)
         const isCurrent = provider === currentProvider
         return {
           tag: "button",
@@ -556,16 +566,21 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
       return
     }
 
+    // Free models first — a provider can list hundreds, and the paid ones are
+    // useless without credits. Stable sort keeps the rest in API order.
+    const rank = (m: ModelInfo) => (isFreeModel(m) ? 0 : 1)
+    const sorted = [...candidates].sort((a, b) => rank(a) - rank(b))
+
     const perPage = 12
-    const pages = Math.max(1, Math.ceil(candidates.length / perPage))
+    const pages = Math.max(1, Math.ceil(sorted.length / perPage))
     const shown = Math.min(page, pages)
-    const slice = candidates.slice((shown - 1) * perPage, shown * perPage)
+    const slice = sorted.slice((shown - 1) * perPage, shown * perPage)
 
     const card = buildModelCard({
       models: slice,
       current,
       title: isProvider ? `provider：${provider}` : `搜索「${provider}」`,
-      total: candidates.length,
+      total: sorted.length,
       page: shown,
       pages,
       provider: isProvider ? provider : undefined,
