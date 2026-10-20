@@ -789,10 +789,11 @@ describe("createStreamingBridge", () => {
     expect(content).toContain("tok/s")
   })
 
-  it("closes the turn on session.usage.updated (the real per-turn end marker)", async () => {
-    // opencode only emits session.execution.succeeded when the whole session
-    // goes idle. While another prompt is queued that never happens, so the
-    // usage event is what actually ends a turn.
+  it("closes the turn on session.execution.succeeded", async () => {
+    // Measured on opencode v2.0.32: a turn ends with
+    //   session.step.ended (finish:"stop") → session.usage.updated →
+    //   session.execution.succeeded
+    // The usage event fires after EVERY step, so it must not end the turn.
     const mockFeishu = {
       ...createMockFeishuClient(),
       sendMessage: vi.fn().mockResolvedValue({ code: 0, data: { message_id: "msg_456" } }),
@@ -814,11 +815,67 @@ describe("createStreamingBridge", () => {
       type: "session.usage.updated",
       data: { sessionID: "ses-1", tokens: { input: 10, output: 20, reasoning: 0, cache: { read: 0, write: 0 } } },
     })
+    emit({ type: "session.execution.succeeded", data: { sessionID: "ses-1" } })
     await handlePromise
 
     const contents = (mockFeishu.updateMessage as any).mock.calls.map((c: any) => String(c[1]))
     expect(contents.some((c) => c.includes("已完成"))).toBe(true)
     expect(contents.some((c) => c.includes("the answer"))).toBe(true)
+  })
+
+  it("keeps the card open across the steps of a multi-step turn", async () => {
+    // Regression: the usage event fires after every step. Closing the card
+    // there cut the reply off after the first tool call — the card showed
+    // "✅ 已完成" with a fraction of the answer.
+    const mockFeishu = {
+      ...createMockFeishuClient(),
+      sendMessage: vi.fn().mockResolvedValue({ code: 0, data: { message_id: "msg_456" } }),
+      replyMessage: vi.fn().mockResolvedValue({ code: 0 }),
+    }
+    const deps = makeDeps({ feishuClient: mockFeishu })
+    const bridge = createStreamingBridge(deps)
+
+    const handlePromise = bridge.handleMessage(
+      "chat-1", "ses-1", eventListeners, eventProcessor, mockSendMessage, vi.fn(), "msg_original", null,
+    )
+    await waitFor(() => { expect(eventListeners.size).toBe(1) })
+    const emit = (ev: unknown) => {
+      ;[...(eventListeners.get("ses-1") ?? [])].forEach((fn) => fn(ev))
+    }
+
+    // step 1: some text, a tool call, usage
+    emit({ type: "session.text.delta", data: { sessionID: "ses-1", assistantMessageID: "m-1", delta: "第一步" } })
+    emit({
+      type: "session.tool.input.started",
+      data: { sessionID: "ses-1", id: "call_1", name: "shell" },
+    })
+    emit({
+      type: "session.tool.called",
+      data: { sessionID: "ses-1", id: "call_1", name: "shell" },
+    })
+    emit({
+      type: "session.usage.updated",
+      data: { sessionID: "ses-1", tokens: { input: 10, output: 20, reasoning: 0, cache: { read: 0, write: 0 } } },
+    })
+
+    // the card must still be open: no "已完成" yet
+    const midTurn = (mockFeishu.updateMessage as any).mock.calls.map((c: any) => String(c[1]))
+    expect(midTurn.some((c) => c.includes("已完成"))).toBe(false)
+
+    // step 2: the rest of the answer, then the turn ends
+    emit({ type: "session.text.delta", data: { sessionID: "ses-1", assistantMessageID: "m-2", delta: "第二步" } })
+    emit({
+      type: "session.usage.updated",
+      data: { sessionID: "ses-1", tokens: { input: 20, output: 40, reasoning: 0, cache: { read: 0, write: 0 } } },
+    })
+    emit({ type: "session.execution.succeeded", data: { sessionID: "ses-1" } })
+    await handlePromise
+
+    const contents = (mockFeishu.updateMessage as any).mock.calls.map((c: any) => String(c[1]))
+    const final = contents[contents.length - 1]
+    expect(final).toContain("第一步")
+    expect(final).toContain("第二步")
+    expect(final).toContain("已完成")
   })
 
   it("ignores text from an execution that already ran in a previous turn", async () => {

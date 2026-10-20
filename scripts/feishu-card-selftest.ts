@@ -120,10 +120,13 @@ await waitFor(() => eventListeners.get("ses-selftest")!.size >= 2)
 const listeners = [...eventListeners.get("ses-selftest")!]
 const listener = listeners[listeners.length - 1]!
 
-// a turn: text → tool → more text → usage → idle
+// A multi-step turn, exactly like opencode runs one:
+//   step 1: text → tool call → usage
+//   step 2: more text → usage
+//   end:    session.execution.succeeded
 listener({
   type: "session.text.delta",
-  data: { sessionID: "ses-selftest", assistantMessageID: "msg-selftest-1", delta: "自测正文" },
+  data: { sessionID: "ses-selftest", assistantMessageID: "msg-selftest-1", delta: "第一段正文" },
 })
 listener({
   type: "session.tool.input.started",
@@ -138,14 +141,21 @@ listener({
   data: { sessionID: "ses-selftest", id: "call_selftest_1", name: "shell" },
 })
 listener({
+  type: "session.usage.updated",
+  data: {
+    sessionID: "ses-selftest",
+    tokens: { input: 1200, output: 400, reasoning: 0, cache: { read: 5000, write: 0 } },
+  },
+})
+listener({
   type: "session.text.delta",
-  data: { sessionID: "ses-selftest", assistantMessageID: "msg-selftest-1", delta: "（结束）" },
+  data: { sessionID: "ses-selftest", assistantMessageID: "msg-selftest-2", delta: "第二段正文" },
 })
 listener({
   type: "session.usage.updated",
   data: {
     sessionID: "ses-selftest",
-    tokens: { input: 1200, output: 800, reasoning: 0, cache: { read: 5000, write: 0 } },
+    tokens: { input: 1400, output: 900, reasoning: 0, cache: { read: 5200, write: 0 } },
   },
 })
 listener({ type: "session.execution.succeeded", data: { sessionID: "ses-selftest" } })
@@ -168,6 +178,12 @@ for (const m of fresh) {
 }
 console.log(`API 报错: ${apiErrors.length === 0 ? "无" : apiErrors.join(" | ")}`)
 
+// The whole turn must be in the card — not only the first step.
+const hasStep1 = lastContent.includes("第一段正文")
+const hasStep2 = lastContent.includes("第二段正文")
+console.log(`第一段在卡里: ${hasStep1 ? "✅" : "❌"}`)
+console.log(`第二段在卡里: ${hasStep2 ? "✅" : "❌"}`)
+
 const statusLine = lastContent.includes("tok/s")
 console.log(`状态行含 tok/s: ${statusLine ? "✅" : "❌"}`)
 if (statusLine) {
@@ -181,6 +197,9 @@ if (fresh.length !== 1) {
   failed = true
 } else if (!statusLine) {
   console.error("\n❌ 失败：卡片内容里没有 tok/s")
+  failed = true
+} else if (!hasStep1 || !hasStep2) {
+  console.error("\n❌ 失败：卡片内容缺少多步轮次里的正文")
   failed = true
 } else if (apiErrors.length > 0) {
   console.error("\n❌ 失败：飞书 API 报错")
