@@ -257,6 +257,16 @@ export function createStreamingBridge(
                 `${formatTokens(generated)} tokens · ${formatRate(rate)} tok/s${timePart}${contextPart}${cachePart}${cost}`,
               ),
             )
+            // `session.usage.updated` is opencode's per-turn end marker.
+            // `session.execution.succeeded` only fires when the whole session
+            // goes idle, which never happens while another prompt is queued —
+            // so the card would never be closed. Synthesise the idle event.
+            if (textBuffer.trim()) {
+              myListener({
+                type: "session.execution.succeeded",
+                data: { sessionID: sessionId },
+              })
+            }
             break
           }
 

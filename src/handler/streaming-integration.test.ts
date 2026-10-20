@@ -671,7 +671,8 @@ describe("createStreamingBridge", () => {
     })
 
     const emit = (ev: unknown) => {
-      ;[...eventListeners.get("ses-1")!].forEach((fn) => fn(ev))
+      // the listener set is gone once the turn has been closed
+      ;[...(eventListeners.get("ses-1") ?? [])].forEach((fn) => fn(ev))
     }
 
     emit({ type: "session.text.delta", data: { sessionID: "ses-1", assistantMessageID: "m-1", delta: "hello" } })
@@ -718,7 +719,8 @@ describe("createStreamingBridge", () => {
     })
 
     const emit = (ev: unknown) => {
-      ;[...eventListeners.get("ses-1")!].forEach((fn) => fn(ev))
+      // the listener set is gone once the turn has been closed
+      ;[...(eventListeners.get("ses-1") ?? [])].forEach((fn) => fn(ev))
     }
 
     emit({ type: "session.text.delta", data: { sessionID: "ses-1", assistantMessageID: "m-1", delta: "hello" } })
@@ -761,7 +763,8 @@ describe("createStreamingBridge", () => {
     })
 
     const emit = (ev: unknown) => {
-      ;[...eventListeners.get("ses-1")!].forEach((fn) => fn(ev))
+      // the listener set is gone once the turn has been closed
+      ;[...(eventListeners.get("ses-1") ?? [])].forEach((fn) => fn(ev))
     }
 
     emit({ type: "session.text.delta", data: { sessionID: "ses-1", assistantMessageID: "m-1", delta: "hello" } })
@@ -784,6 +787,38 @@ describe("createStreamingBridge", () => {
     expect(content).toMatch(/LLM [\d.]+s/)
     expect(content).toContain("100 tokens")
     expect(content).toContain("tok/s")
+  })
+
+  it("closes the turn on session.usage.updated (the real per-turn end marker)", async () => {
+    // opencode only emits session.execution.succeeded when the whole session
+    // goes idle. While another prompt is queued that never happens, so the
+    // usage event is what actually ends a turn.
+    const mockFeishu = {
+      ...createMockFeishuClient(),
+      sendMessage: vi.fn().mockResolvedValue({ code: 0, data: { message_id: "msg_456" } }),
+      replyMessage: vi.fn().mockResolvedValue({ code: 0 }),
+    }
+    const deps = makeDeps({ feishuClient: mockFeishu })
+    const bridge = createStreamingBridge(deps)
+
+    const handlePromise = bridge.handleMessage(
+      "chat-1", "ses-1", eventListeners, eventProcessor, mockSendMessage, vi.fn(), "msg_original", null,
+    )
+    await waitFor(() => { expect(eventListeners.size).toBe(1) })
+    const emit = (ev: unknown) => {
+      ;[...(eventListeners.get("ses-1") ?? [])].forEach((fn) => fn(ev))
+    }
+
+    emit({ type: "session.text.delta", data: { sessionID: "ses-1", assistantMessageID: "m-1", delta: "the answer" } })
+    emit({
+      type: "session.usage.updated",
+      data: { sessionID: "ses-1", tokens: { input: 10, output: 20, reasoning: 0, cache: { read: 0, write: 0 } } },
+    })
+    await handlePromise
+
+    const contents = (mockFeishu.updateMessage as any).mock.calls.map((c: any) => String(c[1]))
+    expect(contents.some((c) => c.includes("已完成"))).toBe(true)
+    expect(contents.some((c) => c.includes("the answer"))).toBe(true)
   })
 
   it("ignores text from an execution that already ran in a previous turn", async () => {
