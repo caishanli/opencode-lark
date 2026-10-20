@@ -14,9 +14,13 @@ Core inbound pipeline. Receives normalized messages from `FeishuPlugin`, then:
 6. Kicks off `StreamingBridge` to listen for the response
 7. Calls `sendDetectedFiles` via `outbound-media.ts` once the session goes idle
 ### `command-handler.ts`
-Handles slash commands typed in Feishu: `/new`, `/sessions`, `/connect`, `/compact`, `/share`, `/abort`, `/help`.
+Handles slash commands typed in Feishu: `/new`, `/sessions`, `/connect`, `/compact`, `/share`, `/abort`, `/help`, `/模型` (`/model`, `/models`).
 
 Key detail: the currently connected session is pinned at the top of the `/sessions` list regardless of API ordering. Sessions are displayed as interactive cards with clickable buttons to connect.
+
+The model menu is a **two level, self-updating card**: level 1 lists the providers, level 2 the models of one provider (12 per page, free models first). Every button carries the menu id (`action: "model_menu"`), and the menu cards are tracked in memory so that navigating — level 2, paging, back, switching — **patches the card in place** (`updateMessage`) instead of sending a new message. Only the first `/模型` sends a card. The reply API returns the card's own message id, which is what gets patched.
+
+A lone unknown slash word (`/models` before the alias existed) is answered with a hint instead of being handed to the model as a prompt — that burns a whole turn on a typo. A slash followed by words is still prose and goes to the model.
 
 ### `outbound-media.ts`
 Detects file paths in agent response text using regex, then uploads matching files back to Feishu as images or attachments.
