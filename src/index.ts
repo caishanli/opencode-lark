@@ -32,6 +32,7 @@ import { EventProcessor } from "./streaming/event-processor.js"
 import { SubAgentTracker } from "./streaming/subagent-tracker.js"
 import { createMessageHandler } from "./handler/message-handler.js"
 import { createStreamingBridge } from "./handler/streaming-integration.js"
+import { createServerSupervisor } from "./opencode/server-supervisor.js"
 import {
   closeAllStreamingCards,
   StreamingCardSession,
@@ -112,29 +113,47 @@ async function main(): Promise<void> {
     logger,
   })
 
-  async function waitForServer(maxRetries = 10): Promise<void> {
-    let delay = 250
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
-      try {
-        await gateway.ping()
-        return
-      } catch (err) {
-        if (attempt === maxRetries) {
-          throw new Error(
-            `Opencode server not reachable after ${maxRetries} attempts: ${err}`,
-          )
-        }
-        logger.info(
-          `Waiting for opencode server (attempt ${attempt}/${maxRetries})...`,
-        )
-        await new Promise((r) => setTimeout(r, delay))
-        delay = Math.min(delay * 2, 5000)
-      }
+  // The bridge owns the server process: it starts it when it is needed and
+  // stops it when it has been idle for a while.
+  const serverPort = (() => {
+    try {
+      return new URL(serverUrl).port || "4096"
+    } catch {
+      return "4096"
+    }
+  })()
+  const supervisor = createServerSupervisor({
+    command: config.opencode?.server?.command ?? "opencode",
+    args:
+      config.opencode?.server?.args ?? ["serve", "--port", serverPort, "--hostname", "0.0.0.0"],
+    pidFile: path.join(config.dataDir, "opencode-server.pid"),
+    idleTimeoutMs: config.opencode?.server?.idleTimeoutMs ?? 30 * 60 * 1000,
+    opencode: gateway,
+    logger,
+  })
+
+  /**
+   * Makes sure the opencode server is running. The server is stopped while
+   * it is idle, so every path that talks to it has to wake it up first.
+   */
+  const ensureServer = async (): Promise<void> => {
+    if (await supervisor.isRunning()) return
+    logger.info("The opencode server is down — starting it")
+    const up = await supervisor.ensureRunning()
+    if (!up) {
+      logger.warn("The opencode server could not be started")
     }
   }
 
-  await waitForServer()
-  logger.info("Opencode server ready")
+  // The server may be down (it was stopped while idle) — start it instead of
+  // giving up. A failure here is not fatal: the supervisor retries when the
+  // first message arrives.
+  const serverReady = await supervisor.ensureRunning()
+  if (serverReady) {
+    logger.info("Opencode server ready")
+  } else {
+    logger.warn("The opencode server is not answering — it will be started on demand")
+  }
   // Warm the model limits, so the first card of the first turn already knows
   // the context window of the model.
   void gateway.warmModelLimits().catch(() => {})
@@ -279,6 +298,7 @@ async function main(): Promise<void> {
     streamingBridge,
     eventListeners,
     eventProcessor,
+    ensureServer,
   })
 
   const { handleMessage, dispose: disposeDebouncer } = createMessageHandler({
@@ -297,6 +317,7 @@ async function main(): Promise<void> {
     botOpenId,
     outboundMedia,
     debounceMs: config.messageDebounceMs,
+    ensureServer,
   })
 
   // Create card action handlers
@@ -360,6 +381,10 @@ async function main(): Promise<void> {
     logger.warn(`Unknown card action type: ${actionType}`)
   }
 
+  // Stop the server when it has been idle for a while — it holds several
+  // hundred megabytes and the sessions live in the database.
+  supervisor.startIdleWatch()
+
   // ═══════════════════════════════════════════
   // Phase 5: Subscribe to Opencode Events (SSE)
   // ═══════════════════════════════════════════
@@ -367,48 +392,58 @@ async function main(): Promise<void> {
 
   const sseAbort = new AbortController()
   ;(async () => {
-    try {
-      logger.info("SSE event stream connected")
-      for await (const event of gateway.subscribeEvents(sseAbort.signal)) {
-        const eventType = event?.type
-        const payload = eventPayload(event)
-        const sessionID =
-          (typeof payload?.sessionID === "string" ? payload.sessionID : undefined) ??
-          (payload?.part && typeof payload.part === "object"
-            ? (payload.part as Record<string, unknown>).sessionID
-            : undefined)
-        if (eventType) {
-          logger.debug(`SSE: ${eventType} session=${sessionID ?? "n/a"}`)
-        }
+    // The server can be stopped while it is idle and started again on
+    // demand, so the subscription has to survive a disconnect: without a
+    // reconnect the bridge would never see another event.
+    while (!sseAbort.signal.aborted) {
+      try {
+        logger.info("SSE event stream connected")
+        for await (const event of gateway.subscribeEvents(sseAbort.signal)) {
+          const eventType = event?.type
+          const payload = eventPayload(event)
+          const sessionID =
+            (typeof payload?.sessionID === "string" ? payload.sessionID : undefined) ??
+            (payload?.part && typeof payload.part === "object"
+              ? (payload.part as Record<string, unknown>).sessionID
+              : undefined)
+          if (eventType) {
+            logger.debug(`SSE: ${eventType} session=${sessionID ?? "n/a"}`)
+          }
 
-        // Targeted dispatch: send only to matching session's listeners
-        if (sessionID && typeof sessionID === "string") {
-          const listeners = eventListeners.get(sessionID)
-          if (listeners) {
-            for (const listener of listeners) {
-              try {
-                listener(event)
-              } catch (err) {
-                logger.warn(`Event listener for ${sessionID} threw: ${err}`)
+          // Targeted dispatch: send only to matching session's listeners
+          if (sessionID && typeof sessionID === "string") {
+            const listeners = eventListeners.get(sessionID)
+            if (listeners) {
+              for (const listener of listeners) {
+                try {
+                  listener(event)
+                } catch (err) {
+                  logger.warn(`Event listener for ${sessionID} threw: ${err}`)
+                }
               }
             }
-          }
-        } else {
-          // No sessionID — broadcast to all (fallback for non-session events)
-          for (const [key, listeners] of eventListeners.entries()) {
-            for (const listener of listeners) {
-              try {
-                listener(event)
-              } catch (err) {
-                logger.warn(`Event listener for ${key} threw: ${err}`)
+          } else {
+            // No sessionID — broadcast to all (fallback for non-session events)
+            for (const [key, listeners] of eventListeners.entries()) {
+              for (const listener of listeners) {
+                try {
+                  listener(event)
+                } catch (err) {
+                  logger.warn(`Event listener for ${key} threw: ${err}`)
+                }
               }
             }
           }
         }
+        logger.warn("SSE event stream ended")
+      } catch (err) {
+        logger.warn(`SSE subscription failed: ${err instanceof Error ? err.message : String(err)}`)
       }
-      logger.warn("SSE event stream ended")
-    } catch (err) {
-      logger.error(`SSE subscription failed: ${err}`)
+      if (sseAbort.signal.aborted) break
+      // Wait for the server to be back — it may have been stopped while it
+      // was idle, and it is started again when a message arrives.
+      await supervisor.whenRunning().catch(() => {})
+      await new Promise((r) => setTimeout(r, 250))
     }
   })()
 
@@ -462,6 +497,7 @@ async function main(): Promise<void> {
       feishuClient,
       opencode: gateway,
       logger,
+      ensureServer,
     })
     cronService.start()
   }
@@ -474,6 +510,8 @@ async function main(): Promise<void> {
       feishuClient,
       statusChatId: config.heartbeat.statusChatId,
       logger,
+      // A server that was stopped for being idle is not a failure.
+      isServerExpectedDown: () => supervisor.isStoppedOnPurpose(),
     })
     heartbeatService.start()
   }
@@ -493,6 +531,19 @@ async function main(): Promise<void> {
         stateFile: cardStateFile,
       })
       logger.info(`Closed ${closed} open card(s)`)
+      supervisor.stopIdleWatch()
+      // The idle watch dies with the process, so the server is stopped here
+      // when nothing is running — unless a session is still in flight.
+      try {
+        const active = await gateway.activeStatuses()
+        if (Object.keys(active).length === 0) {
+          await supervisor.stop()
+        } else {
+          logger.info("Leaving the opencode server running — a session is still active")
+        }
+      } catch (err) {
+        logger.warn(`Could not check whether the server is idle: ${err}`)
+      }
       abortController.abort()
       sseAbort.abort()
       await channelManager.stopAll()

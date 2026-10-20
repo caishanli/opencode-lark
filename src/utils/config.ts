@@ -37,11 +37,22 @@ const HeartbeatConfigSchema = z.object({
   statusChatId: z.string().optional(),
 })
 
+const OpencodeServerSchema = z.object({
+  /** The executable that starts the opencode server. */
+  command: z.string().default("opencode"),
+  /** Its arguments — derived from the url when omitted. */
+  args: z.array(z.string()).optional(),
+  /** How long the server may sit idle before it is stopped (ms). 0 = never. */
+  idleTimeoutMs: z.number().int().min(0).default(30 * 60 * 1000),
+})
+
 const OpencodeConfigSchema = z.object({
   url: z.string().default("http://127.0.0.1:4096"),
   username: z.string().default("opencode"),
   password: z.string().default(""),
   cwd: z.string().default(""),
+  /** The server process the bridge starts and stops. */
+  server: OpencodeServerSchema.optional(),
 })
 
 const AppConfigSchema = z.object({

@@ -83,6 +83,11 @@ export interface HandlerDeps {
   botOpenId?: string
   outboundMedia?: OutboundMediaHandler
   debounceMs?: number
+  /**
+   * Makes sure the opencode server is running before a prompt is sent — it
+   * may have been stopped while it was idle.
+   */
+  ensureServer?: () => Promise<void>
 }
 
 // ── Constants ──
@@ -716,6 +721,7 @@ export function createMessageHandler(
           await opencode.sendCommand(currentSessionId, command)
           return ""
         }
+        await deps.ensureServer?.()
         await opencode.sendPrompt(currentSessionId, { text: textParts, files: fileParts.length ? fileParts : undefined })
         return ""
       } catch (err) {
@@ -990,6 +996,7 @@ export function createMessageHandler(
           await opencode.sendCommand(currentSessionId, command)
           return ""
         }
+        await deps.ensureServer?.()
         await opencode.sendPrompt(currentSessionId, { text: textParts, files: fileParts.length ? fileParts : undefined })
         return ""
       } catch (err) {

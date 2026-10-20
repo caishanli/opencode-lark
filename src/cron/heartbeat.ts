@@ -8,6 +8,11 @@ export interface HeartbeatOptions {
   feishuClient?: FeishuApiClient
   statusChatId?: string
   logger: Logger
+  /**
+   * True when the server is expected to be down (it was stopped because it
+   * was idle) — that is not a failure and must not raise an alert.
+   */
+  isServerExpectedDown?: () => boolean
 }
 
 /**
@@ -58,8 +63,14 @@ export class HeartbeatService {
       this.successCount++
       logger.info("Server healthy")
     } catch (err) {
-      this.failCount++
       const message = err instanceof Error ? err.message : String(err)
+      if (this.options.isServerExpectedDown?.()) {
+        // The server was stopped for being idle — that is the normal state.
+        this.successCount++
+        logger.info("The opencode server is stopped (idle) — nothing to check")
+        return
+      }
+      this.failCount++
       logger.error(`Server health check failed: ${message}`)
 
       if (feishuClient && statusChatId) {

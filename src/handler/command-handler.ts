@@ -25,6 +25,9 @@ export interface CommandHandlerDeps {
   streamingBridge?: StreamingBridge
   eventListeners?: EventListenerMap
   eventProcessor?: EventProcessor
+  /** Makes sure the opencode server is running — it may have been stopped
+   *  while it was idle. */
+  ensureServer?: () => Promise<void>
 }
 
 // ── Types ──
@@ -863,6 +866,9 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
     if (!cmd || !cmd.startsWith("/")) return false
 
     logger.info(`Slash command: ${cmd} from ${feishuKey}`)
+
+    // The server may have been stopped while it was idle.
+    await deps.ensureServer?.().catch(() => {})
 
     try {
       switch (cmd) {

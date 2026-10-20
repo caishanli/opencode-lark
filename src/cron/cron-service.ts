@@ -10,6 +10,9 @@ export interface CronServiceOptions {
   feishuClient: FeishuApiClient
   opencode: OpencodeGateway
   logger: Logger
+  /** Makes sure the opencode server is running — a job may fire while the
+   *  server was stopped for being idle. */
+  ensureServer?: () => Promise<void>
 }
 
 interface ParsedSchedule {
@@ -128,6 +131,8 @@ export class CronService {
 
       const sessionId = await sessionManager.getOrCreate(cronKey)
 
+      // The server may have been stopped while it was idle.
+      await this.options.ensureServer?.()
       await opencode.sendPrompt(sessionId, { text: job.prompt })
 
       const result = await this.waitForResponse(sessionId)
