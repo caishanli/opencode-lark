@@ -223,6 +223,19 @@ async function main(): Promise<void> {
     logger.warn(`Failed to close a stale card: ${err}`)
   }
 
+  const observer = createSessionObserver({
+    feishuClient,
+    eventProcessor,
+    addListener: (sessionId, fn) => addListener(eventListeners, sessionId, fn),
+    removeListener: (sessionId, fn) => removeListener(eventListeners, sessionId, fn),
+    logger,
+    seenInteractiveIds,
+    interactiveCardRegistry,
+  })
+
+  // The bridge tells the observer which turns it delivers itself, so the same
+  // answer is never posted twice (once as the live card, once as a static
+  // copy without the status line).
   const streamingBridge = createStreamingBridge({
     opencode: gateway,
     cardStateFile,
@@ -232,16 +245,7 @@ async function main(): Promise<void> {
     seenInteractiveIds,
     interactiveCardRegistry,
     outboundMedia,
-  })
-
-  const observer = createSessionObserver({
-    feishuClient,
-    eventProcessor,
-    addListener: (sessionId, fn) => addListener(eventListeners, sessionId, fn),
-    removeListener: (sessionId, fn) => removeListener(eventListeners, sessionId, fn),
-    logger,
-    seenInteractiveIds,
-    interactiveCardRegistry,
+    observer,
   })
 
 

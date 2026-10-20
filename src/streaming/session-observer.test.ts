@@ -372,6 +372,58 @@ describe("SessionObserver", () => {
     expect(card.elements?.[0]?.content).toBe("Forwarded")
   })
 
+  it("does not forward a turn the streaming bridge already delivered", () => {
+    // Regression: the bridge delivers the answer as a live card. The observer
+    // used to forward the same text a second time as a static card — without
+    // the status line, so the tok/s numbers were missing from the message the
+    // user actually looked at.
+    const deps = makeDeps()
+    const observer = createSessionObserver(deps)
+    observer.observe("ses-1", "chat-1")
+
+    const listener = deps.capturedListeners.get("ses-1")!
+
+    // The observer sees the text first (its listener is registered first) …
+    listener(textDeltaEvent("ses-1", "msg-owned", "Hello from the bridge"))
+
+    // … then the bridge claims that turn.
+    observer.markOwned("msg-owned")
+
+    listener(sessionIdleEvent("ses-1"))
+
+    expect(deps.feishuClient.sendMessage).not.toHaveBeenCalled()
+  })
+
+  it("does not forward text buffered before the bridge claimed the turn", () => {
+    const deps = makeDeps()
+    const observer = createSessionObserver(deps)
+    observer.observe("ses-1", "chat-1")
+
+    const listener = deps.capturedListeners.get("ses-1")!
+    listener(textDeltaEvent("ses-1", "msg-late", "Already streamed"))
+    // The bridge claims the turn only after the text arrived.
+    observer.markOwned("msg-late")
+    listener(sessionIdleEvent("ses-1"))
+
+    expect(deps.feishuClient.sendMessage).not.toHaveBeenCalled()
+  })
+
+  it("never forwards a session the streaming bridge has claimed", () => {
+    // A turn that keeps running after the bridge finished (a re-delivered
+    // prompt makes opencode execute it twice) must not turn into a second
+    // card either.
+    const deps = makeDeps()
+    const observer = createSessionObserver(deps)
+    observer.observe("ses-1", "chat-1")
+    observer.claimSession("ses-1")
+
+    const listener = deps.capturedListeners.get("ses-1")!
+    listener(textDeltaEvent("ses-1", "msg-claimed", "Late text"))
+    listener(sessionIdleEvent("ses-1"))
+
+    expect(deps.feishuClient.sendMessage).not.toHaveBeenCalled()
+  })
+
   it("markSessionBusy does not affect other sessions", () => {
     const deps = makeDeps()
     const observer = createSessionObserver(deps)

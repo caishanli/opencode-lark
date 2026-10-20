@@ -35,6 +35,10 @@ export interface SessionObserver {
   markOwned(messageId: string): void
   markSessionBusy(sessionId: string): void
   markSessionFree(sessionId: string): void
+  /** The streaming bridge takes over this session: the observer must never
+   *  forward anything for it again, not even the leftovers of a turn that
+   *  finishes after the bridge is done. */
+  claimSession(sessionId: string): void
   getChatForSession(sessionId: string): string | undefined
   stop(): void
 }
@@ -62,8 +66,16 @@ export function createSessionObserver(
   const knownMessageIds = new Set<string>()
   // Sessions with an active streaming bridge — skip TextDelta/SessionIdle
   const busySessions = new Set<string>()
+  // Sessions owned by the streaming bridge — the bridge posts the card, so
+  // the observer must never forward these (it would post a second, static
+  // copy of the same answer without the status line).
+  const claimedSessions = new Set<string>()
+
   // Per-messageId text accumulation with TTL tracking
-  const textBuffers = new Map<string, { text: string; lastUpdated: number }>()
+  const textBuffers = new Map<
+    string,
+    { text: string; lastUpdated: number; sessionId: string }
+  >()
   // Periodic cleanup of stale text buffers (every 5 minutes, evict buffers older than 30 minutes)
   const BUFFER_TTL_MS = 30 * 60 * 1000
   const bufferCleanupTimer = setInterval(() => {
@@ -83,6 +95,13 @@ export function createSessionObserver(
 
   function flushBuffers(chatId: string): void {
     for (const [messageId, entry] of textBuffers) {
+      // The streaming bridge already delivered this turn as a card — sending
+      // it again here would post a second, static copy without the status
+      // line (no tok/s, no token count).
+      if (knownMessageIds.has(messageId)) {
+        textBuffers.delete(messageId)
+        continue
+      }
       if (entry.text.trim().length === 0) continue
       const card = buildFinalResponseCard(entry.text)
       feishuClient
@@ -111,6 +130,10 @@ export function createSessionObserver(
 
         // Skip all TextDelta/SessionIdle for sessions handled by streaming bridge
         if (busySessions.has(action.sessionId)) return
+        // …and for every session the bridge has taken over: a turn that runs
+        // on after the bridge finished (a re-delivered prompt makes opencode
+        // execute it twice) must not become a second card either.
+        if (claimedSessions.has(action.sessionId)) return
 
         const messageId = extractMessageId(rawEvent)
 
@@ -124,7 +147,11 @@ export function createSessionObserver(
             if (!messageId) break
             const current = textBuffers.get(messageId)
             const text = (current?.text ?? "") + action.text
-            textBuffers.set(messageId, { text, lastUpdated: Date.now() })
+            textBuffers.set(messageId, {
+              text,
+              lastUpdated: Date.now(),
+              sessionId: action.sessionId,
+            })
             break
           }
           case "SessionIdle": {
@@ -218,6 +245,14 @@ export function createSessionObserver(
       busySessions.add(sessionId)
     },
 
+    claimSession(sessionId: string): void {
+      claimedSessions.add(sessionId)
+      // Drop whatever was buffered for this session before the claim.
+      for (const [messageId, entry] of textBuffers) {
+        if (entry.sessionId === sessionId) textBuffers.delete(messageId)
+      }
+    },
+
     markSessionFree(sessionId: string): void {
       busySessions.delete(sessionId)
       // Drop any text that may have been buffered before busy was set
@@ -237,6 +272,7 @@ export function createSessionObserver(
       textBuffers.clear()
       knownMessageIds.clear()
       busySessions.clear()
+    claimedSessions.clear()
       logger.info("Session observer stopped")
     },
   }

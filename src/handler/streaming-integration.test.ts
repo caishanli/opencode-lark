@@ -855,6 +855,39 @@ describe("createStreamingBridge", () => {
     expect(contents.some((c) => c.includes("LEFTOVER"))).toBe(false)
   })
 
+  it("claims every assistant message id, so the observer does not forward it", async () => {
+    // The session observer watches the same events. If it is not told that
+    // the bridge delivers this turn, it posts a second, static copy of the
+    // answer — without the status line, so no tok/s.
+    const markOwned = vi.fn()
+    const claimSession = vi.fn()
+    const mockFeishu = {
+      ...createMockFeishuClient(),
+      sendMessage: vi.fn().mockResolvedValue({ code: 0, data: { message_id: "msg_456" } }),
+      replyMessage: vi.fn().mockResolvedValue({ code: 0 }),
+    }
+    const deps = makeDeps({
+      feishuClient: mockFeishu,
+      observer: { markOwned, claimSession },
+    })
+    const bridge = createStreamingBridge(deps)
+
+    const p = bridge.handleMessage(
+      "chat-1", "ses-1", eventListeners, eventProcessor, mockSendMessage, vi.fn(), "msg_original", null,
+    )
+    await waitFor(() => { expect(eventListeners.size).toBe(1) })
+    const listener = [...eventListeners.get("ses-1")!][0]!
+    listener({
+      type: "session.text.delta",
+      data: { sessionID: "ses-1", assistantMessageID: "msg-a", delta: "hello" },
+    })
+    listener({ type: "session.execution.succeeded", data: { sessionID: "ses-1" } })
+    await p
+
+    expect(markOwned).toHaveBeenCalledWith("msg-a")
+    expect(claimSession).toHaveBeenCalledWith("ses-1")
+  })
+
   it("closes the card when the turn-end event never arrives", async () => {
     const mockFeishu = {
       ...createMockFeishuClient(),

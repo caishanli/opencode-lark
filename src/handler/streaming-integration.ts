@@ -28,6 +28,12 @@ export interface StreamingBridgeDeps {
   idleCloseMs?: number
   /** Where the open card is remembered, so a restarted process can close it. */
   cardStateFile?: string
+  /** The session observer — told which turns the bridge delivers itself, so
+   *  it does not forward the same answer a second time as a static card. */
+  observer?: {
+    markOwned(messageId: string): void
+    claimSession?(sessionId: string): void
+  }
   feishuClient: FeishuApiClient
   subAgentTracker: SubAgentTracker
   logger: Logger
@@ -107,6 +113,10 @@ export function createStreamingBridge(
         )
       })
     }
+
+    // The bridge owns this session from now on: the observer must not post a
+    // second copy of the answer.
+    deps.observer?.claimSession?.(sessionId)
 
     return new Promise<void>((resolve, reject) => {
       let textBuffer = ""
@@ -190,6 +200,9 @@ export function createStreamingBridge(
             // Skip text belonging to an execution that already ran (leftover
             // from a turn that was still running when this one started).
             if (action.assistantMessageId) {
+              // The bridge owns this turn: tell the observer, so it never
+              // forwards the same text as a second (static) card.
+              deps.observer?.markOwned(action.assistantMessageId)
               if (seenAssistantMessageIds.has(action.assistantMessageId)) break
               seenAssistantMessageIds.add(action.assistantMessageId)
             }
