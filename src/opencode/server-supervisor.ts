@@ -24,6 +24,8 @@ export interface ServerSupervisorOptions {
   args: string[]
   /** Where the pid of the running server is remembered. */
   pidFile?: string
+  /** Where the "stop the server when it is idle" switch is remembered. */
+  stateFile?: string
   /** How long the server may sit idle before it is stopped (ms). 0 = never. */
   idleTimeoutMs: number
   /** How often the idle state is checked (ms). */
@@ -57,6 +59,10 @@ export interface ServerSupervisor {
   /** Start watching for an idle server. */
   startIdleWatch(): void
   stopIdleWatch(): void
+  /** True while the server is stopped automatically when it goes idle. */
+  isIdleWatchEnabled(): boolean
+  /** Turn the automatic stop on or off (remembered across restarts). */
+  setIdleWatchEnabled(enabled: boolean): void
 }
 
 const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
@@ -67,12 +73,34 @@ export function createServerSupervisor(options: ServerSupervisorOptions): Server
   const readyTimeoutMs = options.readyTimeoutMs ?? 20_000
 
   let child: ChildProcess | null = null
+  /** Whether the server is stopped automatically when it goes idle. */
+  let idleWatchEnabled = readIdleWatchEnabled()
   let starting: Promise<boolean> | null = null
   let stoppedOnPurpose = false
   /** When the server was last seen without any work in flight. */
   let idleSince: number | null = null
   let timer: ReturnType<typeof setInterval> | null = null
   const waiters: Array<() => void> = []
+
+  /** The switch is remembered, so it survives a restart of the bridge. */
+  function readIdleWatchEnabled(): boolean {
+    if (!options.stateFile || !existsSync(options.stateFile)) return true
+    try {
+      const parsed = JSON.parse(readFileSync(options.stateFile, "utf-8")) as { enabled?: unknown }
+      return parsed?.enabled !== false
+    } catch {
+      return true
+    }
+  }
+
+  function writeIdleWatchEnabled(): void {
+    if (!options.stateFile) return
+    try {
+      writeFileSync(options.stateFile, JSON.stringify({ enabled: idleWatchEnabled }, null, 2))
+    } catch (err) {
+      logger.warn(`Could not remember the idle stop switch: ${err}`)
+    }
+  }
 
   const resolveWaiters = (): void => {
     const pending = waiters.splice(0)
@@ -318,6 +346,27 @@ export function createServerSupervisor(options: ServerSupervisorOptions): Server
     }
   }
 
+  const startIdleWatch = (): void => {
+    if (!idleWatchEnabled) {
+      logger.info("The idle watch is off — the server stays up")
+      return
+    }
+    if (timer) return
+    timer = setInterval(() => {
+      void tick().catch((err) => logger.warn(`The idle watch failed: ${err}`))
+    }, checkIntervalMs)
+    logger.info(
+      `Idle watch started (check every ${Math.round(checkIntervalMs / 1000)}s, stop after ${Math.round(options.idleTimeoutMs / 60_000)} minutes of inactivity)`,
+    )
+  }
+
+  const stopIdleWatch = (): void => {
+    if (timer !== null) {
+      clearInterval(timer)
+      timer = null
+    }
+  }
+
   return {
     ensureRunning,
     stop,
@@ -327,19 +376,19 @@ export function createServerSupervisor(options: ServerSupervisorOptions): Server
       await new Promise<void>((resolve) => waiters.push(resolve))
     },
     isStoppedOnPurpose: () => stoppedOnPurpose,
-    startIdleWatch() {
-      if (timer) return
-      timer = setInterval(() => {
-        void tick().catch((err) => logger.warn(`The idle watch failed: ${err}`))
-      }, checkIntervalMs)
-      logger.info(
-        `Idle watch started (check every ${Math.round(checkIntervalMs / 1000)}s, stop after ${Math.round(options.idleTimeoutMs / 60_000)} minutes of inactivity)`,
-      )
-    },
-    stopIdleWatch() {
-      if (timer !== null) {
-        clearInterval(timer)
-        timer = null
+    startIdleWatch,
+    stopIdleWatch,
+    isIdleWatchEnabled: () => idleWatchEnabled,
+    setIdleWatchEnabled(enabled: boolean) {
+      if (idleWatchEnabled === enabled) return
+      idleWatchEnabled = enabled
+      writeIdleWatchEnabled()
+      if (enabled) {
+        logger.info("The idle stop is on — the server is stopped when it goes idle")
+        startIdleWatch()
+      } else {
+        logger.info("The idle stop is off — the server stays up")
+        stopIdleWatch()
       }
     },
   }

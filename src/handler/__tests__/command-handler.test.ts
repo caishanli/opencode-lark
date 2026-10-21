@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest"
-import { createCommandHandler } from "../command-handler.js"
+import { createCommandHandler, type CommandHandlerDeps } from "../command-handler.js"
 import { createMockLogger, createMockFeishuClient } from "../../__tests__/setup.js"
 import { createMockGateway } from "../../__tests__/setup.js"
 import type { SessionManager } from "../../session/session-manager.js"
@@ -42,12 +42,17 @@ describe("createCommandHandler", () => {
     vi.clearAllMocks()
   })
 
-  function createHandler(sm?: SessionManager, gateway = mockGateway) {
+  function createHandler(
+    sm?: SessionManager,
+    gateway = mockGateway,
+    overrides: Partial<CommandHandlerDeps> = {},
+  ) {
     return createCommandHandler({
       opencode: gateway,
       sessionManager: sm ?? mockSessionManager,
       feishuClient: mockFeishuClient,
       logger: mockLogger,
+      ...overrides,
     })
   }
 
@@ -389,6 +394,43 @@ describe("createCommandHandler", () => {
       // answered here — a typo must not burn a whole turn on the model
       expect(result).toBe(true)
       expect(mockFeishuClient.replyMessage).toHaveBeenCalled()
+    })
+
+    it("/自动关闭 toggles the automatic stop of the server", async () => {
+      mockFeishuClient.replyMessage = vi.fn().mockResolvedValue({ code: 0, msg: "ok" })
+      let enabled = true
+      const supervisor = {
+        isIdleWatchEnabled: vi.fn(() => enabled),
+        setIdleWatchEnabled: vi.fn((v: boolean) => {
+          enabled = v
+        }),
+      }
+      const handler = createHandler(undefined, mockGateway, { supervisor } as any)
+
+      const result = await handler("chat-1", "chat-1", "msg-1", "/自动关闭")
+
+      expect(result).toBe(true)
+      expect(supervisor.setIdleWatchEnabled).toHaveBeenCalledWith(false)
+      const call = (mockFeishuClient.replyMessage as any).mock.calls[0]
+      expect(JSON.parse(call[1].content).text).toContain("已关闭")
+    })
+
+    it("/自动关闭 on turns the automatic stop on", async () => {
+      mockFeishuClient.replyMessage = vi.fn().mockResolvedValue({ code: 0, msg: "ok" })
+      let enabled = false
+      const supervisor = {
+        isIdleWatchEnabled: vi.fn(() => enabled),
+        setIdleWatchEnabled: vi.fn((v: boolean) => {
+          enabled = v
+        }),
+      }
+      const handler = createHandler(undefined, mockGateway, { supervisor } as any)
+
+      await handler("chat-1", "chat-1", "msg-1", "/自动关闭 on")
+
+      expect(supervisor.setIdleWatchEnabled).toHaveBeenCalledWith(true)
+      const call = (mockFeishuClient.replyMessage as any).mock.calls[0]
+      expect(JSON.parse(call[1].content).text).toContain("已开启")
     })
 
     it("/models is an alias of /模型", async () => {

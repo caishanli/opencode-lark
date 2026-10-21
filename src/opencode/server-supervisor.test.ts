@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest"
-import { rmSync, readFileSync, existsSync } from "node:fs"
+import { rmSync, readFileSync, existsSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { homedir } from "node:os"
 import { createServerSupervisor } from "./server-supervisor.js"
@@ -15,6 +15,7 @@ function makeSupervisor(
     active?: Record<string, { type: string }>
     idleTimeoutMs?: number
     checkIntervalMs?: number
+    stateFile?: string
   } = {},
 ) {
   const gateway = createMockGateway()
@@ -33,6 +34,7 @@ function makeSupervisor(
     command: "opencode",
     args: ["serve", "--port", "5096"],
     pidFile: PID_FILE,
+    stateFile: overrides.stateFile,
     idleTimeoutMs: overrides.idleTimeoutMs ?? 30 * 60_000,
     checkIntervalMs: overrides.checkIntervalMs ?? 50,
     opencode: gateway,
@@ -147,6 +149,45 @@ describe("server supervisor", () => {
       ...(logger.error as any).mock.calls.map((c: any[]) => String(c[0])),
     ]
     expect(messages.join(" ")).toContain("definitely-not-a-real-binary-xyz")
+  })
+
+  it("remembers that the idle stop was switched off", async () => {
+    const stateFile = "/tmp/opencode/supervisor-state-test.json"
+    rmSync(stateFile, { force: true })
+    const { supervisor: sup } = makeSupervisor({ stateFile })
+    expect(sup.isIdleWatchEnabled()).toBe(true)
+    sup.setIdleWatchEnabled(false)
+    expect(sup.isIdleWatchEnabled()).toBe(false)
+    expect(JSON.parse(readFileSync(stateFile, "utf-8")).enabled).toBe(false)
+
+    // a new process reads the switch back
+    const next = createServerSupervisor({
+      command: "opencode",
+      args: [],
+      pidFile: PID_FILE,
+      stateFile,
+      idleTimeoutMs: 1000,
+      opencode: createMockGateway(),
+      logger: createMockLogger(),
+    })
+    expect(next.isIdleWatchEnabled()).toBe(false)
+  })
+
+  it("does not start the idle watch when it is switched off", async () => {
+    const stateFile = "/tmp/opencode/supervisor-state-test2.json"
+    rmSync(stateFile, { force: true })
+    writeFileSync(stateFile, JSON.stringify({ enabled: false }))
+    const { supervisor: sup } = makeSupervisor({
+      stateFile,
+      idleTimeoutMs: 100,
+      checkIntervalMs: 20,
+    })
+    await sup.ensureRunning()
+    sup.startIdleWatch()
+    await new Promise((r) => setTimeout(r, 300))
+    // the watch never ran, so the server was not stopped
+    expect(sup.isStoppedOnPurpose()).toBe(false)
+    expect(existsSync(PID_FILE)).toBe(true)
   })
 
   it("waits for the server to be up", async () => {

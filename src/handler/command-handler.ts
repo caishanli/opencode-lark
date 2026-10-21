@@ -28,6 +28,11 @@ export interface CommandHandlerDeps {
   /** Makes sure the opencode server is running — it may have been stopped
    *  while it was idle. */
   ensureServer?: () => Promise<void>
+  /** The server supervisor — its idle stop can be switched on and off. */
+  supervisor?: {
+    isIdleWatchEnabled(): boolean
+    setIdleWatchEnabled(enabled: boolean): void
+  }
 }
 
 // ── Types ──
@@ -172,7 +177,7 @@ function buildHelpCard(opencodeCommands: { name: string; description?: string }[
       },
       {
         tag: "markdown",
-        content: "_打字命令：`/connect <会话ID>` · `/模型 [provider] [页码]` · `/help`_",
+        content: "_打字命令：`/connect <会话ID>` · `/模型 [provider] [页码]` · `/自动关闭 [on|off]` · `/help`_",
       },
       ...buildOpencodeCommandElements(opencodeCommands),
     ],
@@ -575,6 +580,51 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
   }
 
   /**
+   * Switch the automatic stop of the opencode server on and off.
+   *
+   *   /自动关闭          → toggle
+   *   /自动关闭 on|off   → set it
+   */
+  async function handleIdleStop(
+    chatId: string,
+    messageId: string,
+    argument: string,
+  ): Promise<void> {
+    const supervisor = deps.supervisor
+    if (!supervisor) {
+      await replyText(chatId, messageId, "这个命令不可用：桥没有管理 opencode 进程")
+      return
+    }
+
+    const value = argument.trim().toLowerCase()
+    const enabled = supervisor.isIdleWatchEnabled()
+
+    if (!value) {
+      supervisor.setIdleWatchEnabled(!enabled)
+      await replyText(
+        chatId,
+        messageId,
+        supervisor.isIdleWatchEnabled()
+          ? "已开启：opencode 空闲 30 分钟会被自动关掉（有消息时自动拉起）"
+          : "已关闭：opencode 会一直开着",
+      )
+      return
+    }
+
+    if (["on", "开", "开启", "启用", "true", "1"].includes(value)) {
+      supervisor.setIdleWatchEnabled(true)
+      await replyText(chatId, messageId, "已开启：opencode 空闲 30 分钟会被自动关掉")
+      return
+    }
+    if (["off", "关", "关闭", "停用", "false", "0"].includes(value)) {
+      supervisor.setIdleWatchEnabled(false)
+      await replyText(chatId, messageId, "已关闭：opencode 会一直开着")
+      return
+    }
+    await replyText(chatId, messageId, "用法：/自动关闭 [on|off]（不带参数就是切换）")
+  }
+
+  /**
    * Two level model menu:
    *
    *   /模型 | /model | /models → the providers
@@ -893,6 +943,11 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
           await handleConnect(feishuKey, chatId, messageId, targetSessionId)
           return true
         }
+
+        case "/自动关闭":
+        case "/autostop":
+          await handleIdleStop(chatId, messageId, parts.slice(1).join(" "))
+          return true
 
         case "/模型":
         case "/model":

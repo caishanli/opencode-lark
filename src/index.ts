@@ -127,6 +127,7 @@ async function main(): Promise<void> {
     args:
       config.opencode?.server?.args ?? ["serve", "--port", serverPort, "--hostname", "0.0.0.0"],
     pidFile: path.join(config.dataDir, "opencode-server.pid"),
+    stateFile: path.join(config.dataDir, "autostop.json"),
     idleTimeoutMs: config.opencode?.server?.idleTimeoutMs ?? 30 * 60 * 1000,
     opencode: gateway,
     logger,
@@ -299,6 +300,7 @@ async function main(): Promise<void> {
     eventListeners,
     eventProcessor,
     ensureServer,
+    supervisor,
   })
 
   const { handleMessage, dispose: disposeDebouncer } = createMessageHandler({
@@ -382,7 +384,8 @@ async function main(): Promise<void> {
   }
 
   // Stop the server when it has been idle for a while — it holds several
-  // hundred megabytes and the sessions live in the database.
+  // hundred megabytes and the sessions live in the database. The switch
+  // (/自动关闭) can turn this off.
   supervisor.startIdleWatch()
 
   // ═══════════════════════════════════════════
