@@ -12,6 +12,8 @@
 
 import { spawn, type ChildProcess } from "node:child_process"
 import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { homedir } from "node:os"
+import { join } from "node:path"
 import type { Logger } from "../utils/logger.js"
 import type { OpencodeGateway } from "./gateway.js"
 
@@ -146,13 +148,50 @@ export function createServerSupervisor(options: ServerSupervisorOptions): Server
     }
   }
 
+  /**
+   * Where to look for the server binary. A systemd service does not have the
+   * login shell's PATH, so `opencode` (which lives in ~/.opencode/bin) is
+   * not found there.
+   */
+  const resolveCommand = (command: string): string | null => {
+    if (command.includes("/")) {
+      return existsSync(command) ? command : null
+    }
+    const dirs = [
+      ...(process.env.PATH ?? "").split(":").filter(Boolean),
+      join(homedir(), ".opencode", "bin"),
+      join(homedir(), ".bun", "bin"),
+      join(homedir(), ".local", "bin"),
+      "/usr/local/bin",
+      "/usr/bin",
+    ]
+    for (const dir of dirs) {
+      const candidate = join(dir, command)
+      if (existsSync(candidate)) return candidate
+    }
+    return null
+  }
+
   const startServer = async (): Promise<boolean> => {
-    logger.info(`Starting the opencode server: ${options.command} ${options.args.join(" ")}`)
+    // A test may inject its own spawn — then the binary does not have to
+    // exist, but it is still resolved when it does.
+    const resolved = resolveCommand(options.command)
+    const binary = resolved ?? (options.spawnProcess ? options.command : null)
+    if (!binary) {
+      logger.error(
+        `Could not find "${options.command}" — it is not in PATH and not in ` +
+          `~/.opencode/bin, ~/.bun/bin or ~/.local/bin. Set the full path in ` +
+          `opencode.server.command.`,
+      )
+      return false
+    }
+    logger.info(`Starting the opencode server: ${binary} ${options.args.join(" ")}`)
     let proc: SpawnedProcess
+    let spawnError: unknown = null
     try {
       proc = options.spawnProcess
-        ? options.spawnProcess(options.command, options.args)
-        : spawn(options.command, options.args, {
+        ? options.spawnProcess(binary, options.args)
+        : spawn(binary, options.args, {
             // Its own process group: the server outlives the bridge.
             detached: true,
             stdio: "ignore",
@@ -162,6 +201,7 @@ export function createServerSupervisor(options: ServerSupervisorOptions): Server
       return false
     }
     proc.on?.("error", (err) => {
+      spawnError = err
       logger.error(`The opencode server could not be started: ${err}`)
     })
     proc.unref?.()
@@ -171,6 +211,8 @@ export function createServerSupervisor(options: ServerSupervisorOptions): Server
     const deadline = Date.now() + readyTimeoutMs
     while (Date.now() < deadline) {
       await delay(200)
+      // A failed spawn must not wait for the whole timeout.
+      if (spawnError) return false
       if (await ping()) {
         logger.info("The opencode server is up")
         idleSince = Date.now()

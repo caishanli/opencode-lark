@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest"
 import { rmSync, readFileSync, existsSync } from "node:fs"
+import { join } from "node:path"
+import { homedir } from "node:os"
 import { createServerSupervisor } from "./server-supervisor.js"
 import { createMockGateway, createMockLogger } from "../__tests__/setup.js"
 
@@ -62,7 +64,8 @@ describe("server supervisor", () => {
 
     expect(await supervisor.ensureRunning()).toBe(true)
     expect(spawned).toHaveLength(1)
-    expect(spawned[0].command).toBe("opencode")
+    // the binary is resolved to a full path (the service PATH has no opencode)
+    expect(spawned[0].command.endsWith("opencode")).toBe(true)
     expect(Number(readFileSync(PID_FILE, "utf-8"))).toBe(FAKE_PID)
   })
 
@@ -112,6 +115,38 @@ describe("server supervisor", () => {
     expect(supervisor.isStoppedOnPurpose()).toBe(false)
     await supervisor.stop()
     expect(supervisor.isStoppedOnPurpose()).toBe(true)
+  })
+
+  it("finds the binary in a directory that is not on the PATH", async () => {
+    // The bridge runs as a systemd service: ~/.opencode/bin is not on its
+    // PATH, but that is where opencode lives.
+    const binary = join(homedir(), ".opencode", "bin", "opencode")
+    if (!existsSync(binary)) return // nothing to test against here
+    const { supervisor, spawned } = makeSupervisor()
+    await supervisor.ensureRunning()
+    expect(spawned[0].command).toBe(binary)
+  })
+
+  it("says where it looked when the binary is missing", async () => {
+    const { logger } = makeSupervisor()
+    const downGateway = createMockGateway()
+    ;(downGateway.ping as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error("connection refused"),
+    )
+    const broken = createServerSupervisor({
+      command: "definitely-not-a-real-binary-xyz",
+      args: [],
+      pidFile: PID_FILE,
+      idleTimeoutMs: 1000,
+      opencode: downGateway,
+      logger,
+    })
+    expect(await broken.ensureRunning()).toBe(false)
+    const messages = [
+      ...(logger.warn as any).mock.calls.map((c: any[]) => String(c[0])),
+      ...(logger.error as any).mock.calls.map((c: any[]) => String(c[0])),
+    ]
+    expect(messages.join(" ")).toContain("definitely-not-a-real-binary-xyz")
   })
 
   it("waits for the server to be up", async () => {
