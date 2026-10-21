@@ -131,7 +131,7 @@ describe("createCommandHandler", () => {
       const now = new Date("2026-03-14T12:00:00.000Z")
       vi.setSystemTime(now)
 
-      mockGateway.listSessions.mockResolvedValueOnce([
+      mockGateway.listAllSessions.mockResolvedValueOnce([
         {
           id: "ses-1",
           title: "Analysis report SSE timeout error",
@@ -155,9 +155,8 @@ describe("createCommandHandler", () => {
       const result = await handler("chat-1", "chat-1", "msg-1", "/sessions")
 
       expect(result).toBe(true)
-      expect(mockGateway.listSessions).toHaveBeenCalledWith({
-        directory: process.env.OPENCODE_CWD || process.cwd(),
-      })
+      // every session of every project — not just this directory's
+      expect(mockGateway.listAllSessions).toHaveBeenCalledWith(50)
       expect(mockFeishuClient.replyMessage).toHaveBeenCalledWith("msg-1", {
         msg_type: "interactive",
         content: expect.any(String),
@@ -192,7 +191,7 @@ describe("createCommandHandler", () => {
       const now = new Date("2026-03-14T12:00:00.000Z")
       vi.setSystemTime(now)
 
-      mockGateway.listSessions.mockResolvedValueOnce([
+      mockGateway.listAllSessions.mockResolvedValueOnce([
         { id: "ses-1", title: "First", time: { created: now.getTime(), updated: now.getTime() } },
         { id: "ses-123", title: "Current", time: { created: now.getTime(), updated: now.getTime() } },
         { id: "ses-2", title: "Second", time: { created: now.getTime(), updated: now.getTime() } },
@@ -218,7 +217,7 @@ describe("createCommandHandler", () => {
     })
 
     it("replies with text when no sessions exist", async () => {
-      mockGateway.listSessions.mockResolvedValueOnce([])
+      mockGateway.listAllSessions.mockResolvedValueOnce([])
       mockFeishuClient.replyMessage = vi.fn().mockResolvedValue({ code: 0, msg: "ok" })
 
       const handler = createHandler()
@@ -471,7 +470,7 @@ describe("createCommandHandler", () => {
         data: { message_id: "card-sessions" },
       })
       mockFeishuClient.updateMessage = vi.fn().mockResolvedValue({ code: 0, msg: "ok" })
-      mockGateway.listSessions = vi.fn().mockResolvedValue([
+      mockGateway.listAllSessions = vi.fn().mockResolvedValue([
         { id: "ses-a", title: "A", time: { created: 1, updated: Date.now() } },
         { id: "ses-b", title: "B", time: { created: 1, updated: Date.now() } },
       ])

@@ -85,6 +85,8 @@ export type OpencodeEvent = {
 
 export interface OpencodeGateway {
   listSessions(query?: { directory?: string; parentID?: string; limit?: number; search?: string }): Promise<SessionRef[]>
+  /** Every session of every project — no directory filter. */
+  listAllSessions(limit?: number): Promise<SessionRef[]>
   getSession(sessionID: string): Promise<SessionRef | null>
   createSession(body?: { title?: string; parentID?: string; agent?: string; directory?: string; model?: { providerID: string; id: string; variant?: string } }): Promise<SessionRef>
   children(parentSessionID: string): Promise<SessionRef[]>
@@ -180,6 +182,11 @@ export function createOpencodeGateway(options: OpencodeGatewayOptions): Opencode
         search: query.search,
         $query_parentID: query.parentID,
       })
+      const data = unwrap(res)
+      return Array.isArray(data) ? (data as SessionRef[]) : []
+    },
+    async listAllSessions(limit) {
+      const res = await client.v2.session.list({ limit })
       const data = unwrap(res)
       return Array.isArray(data) ? (data as SessionRef[]) : []
     },

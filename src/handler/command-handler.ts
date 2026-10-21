@@ -62,6 +62,9 @@ interface Session {
   title?: string
   time?: { created: number; updated: number }
   summary?: { additions: number; deletions: number; files: number }
+  /** The project the session belongs to — sessions are per directory. */
+  directory?: string
+  location?: { directory?: string }
 }
 
 // ── Card builders ──
@@ -94,7 +97,7 @@ function buildSessionsCard(
   menuId = "",
   notice?: string,
 ): Record<string, unknown> {
-  const recentSessions = sessions.slice(0, 10)
+  const recentSessions = sessions.slice(0, 20)
   return {
     config: { wide_screen_mode: true },
     header: {
@@ -119,8 +122,14 @@ function buildSessionsCard(
           : "未知时间"
         const filesSegment =
           typeof s.summary?.files === "number" ? `${s.summary.files}文件` : null
+        // Sessions belong to a project directory — say which one, otherwise
+        // the list is a jumble of unrelated conversations.
+        const projectDir = s.location?.directory ?? s.directory
+        const projectSegment = projectDir
+          ? `📁 ${truncateTitle(projectDir.split("/").filter(Boolean).at(-1) ?? projectDir)}`
+          : undefined
 
-        const segments = [title, relative, filesSegment].filter(
+        const segments = [title, relative, filesSegment, projectSegment].filter(
           (v): v is string => typeof v === "string" && v.length > 0,
         )
         const label = `${isCurrentSession ? "▶ " : ""}${segments.join(" · ")}`
@@ -604,7 +613,9 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
     messageId: string,
     menuId?: string,
   ): Promise<void> {
-    const sessions = (await opencode.listSessions({ directory: process.env.OPENCODE_CWD || process.cwd() })) as Session[]
+    // Every session of every project — the list is for picking one by hand,
+    // so it must not be limited to the directory this bridge runs in.
+    const sessions = (await opencode.listAllSessions(50)) as Session[]
     if (sessions.length === 0) {
       await replyText(chatId, messageId, "暂无会话。")
       return
