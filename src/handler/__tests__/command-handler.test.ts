@@ -131,7 +131,7 @@ describe("createCommandHandler", () => {
       const now = new Date("2026-03-14T12:00:00.000Z")
       vi.setSystemTime(now)
 
-      mockGateway.listAllSessions.mockResolvedValueOnce([
+      mockGateway.listAllSessions.mockResolvedValue([
         {
           id: "ses-1",
           title: "Analysis report SSE timeout error",
@@ -140,6 +140,7 @@ describe("createCommandHandler", () => {
             updated: now.getTime() - 3 * 60 * 60 * 1000,
           },
           summary: { additions: 1, deletions: 2, files: 363 },
+          location: { directory: "/home/caisl/opencode-lark" },
         },
         {
           id: "ses-2",
@@ -147,16 +148,19 @@ describe("createCommandHandler", () => {
             created: now.getTime() - 20_000,
             updated: now.getTime() - 2 * 60 * 1000,
           },
+          location: { directory: "/home/caisl/opencode-lark" },
         },
       ])
-      mockFeishuClient.replyMessage = vi.fn().mockResolvedValue({ code: 0, msg: "ok" })
+      mockFeishuClient.replyMessage = vi.fn().mockResolvedValue({
+        code: 0, msg: "ok", data: { message_id: "card-s" },
+      })
 
       const handler = createHandler()
       const result = await handler("chat-1", "chat-1", "msg-1", "/sessions")
 
       expect(result).toBe(true)
       // every session of every project — not just this directory's
-      expect(mockGateway.listAllSessions).toHaveBeenCalledWith(50)
+      expect(mockGateway.listAllSessions).toHaveBeenCalledWith(100)
       expect(mockFeishuClient.replyMessage).toHaveBeenCalledWith("msg-1", {
         msg_type: "interactive",
         content: expect.any(String),
@@ -167,19 +171,28 @@ describe("createCommandHandler", () => {
       expect(content).toHaveProperty("config")
       expect(content).toHaveProperty("header")
       expect(content).toHaveProperty("elements")
-      expect(content.header?.title?.content).toContain("选择会话")
-      // Verify buttons are created for each session
+      // level 1: the projects
+      expect(content.header?.title?.content).toContain("选择项目")
       const actionElements = content.elements?.filter((e: any) => e.tag === "action")
-      // 2 from API + 1 current session (ses-123) not in API list → prepended
-      // + the "back to the command menu" button
-      expect(actionElements).toHaveLength(4)
-
+      // one button per project
+      expect(actionElements).toHaveLength(1)
       const buttonTexts = actionElements.map((el: any) => el.actions?.[0]?.text?.content)
-      expect(buttonTexts[0]).toBe("▶ 当前会话 · 刚刚")
-      expect(buttonTexts[1]).toBe("Analysis report SSE timeout... · 3小时前 · 363文件")
-      expect(buttonTexts[2]).toBe("未命名会话 · 2分钟前")
+      expect(buttonTexts[0]).toContain("(2)")
 
-      for (const t of buttonTexts) {
+      // level 2: the sessions of that project — patched into the same card
+      mockFeishuClient.updateMessage = vi.fn().mockResolvedValue({ code: 0, msg: "ok" })
+      await handler("chat-1", "chat-1", "msg-1", "/sessions /home/caisl/opencode-lark")
+      const level2 = JSON.parse((mockFeishuClient.updateMessage as any).mock.calls[0][1])
+      expect(level2.header?.title?.content).toContain("选择会话")
+      const sessionButtons = level2.elements?.filter((e: any) => e.tag === "action")
+      // 2 sessions + the "back to the project list" button
+      expect(sessionButtons).toHaveLength(3)
+
+      const sessionTexts = sessionButtons.map((el: any) => el.actions?.[0]?.text?.content)
+      expect(sessionTexts[0]).toBe("Analysis report SSE timeout... · 3小时前 · 363文件")
+      expect(sessionTexts[1]).toBe("未命名会话 · 2分钟前")
+
+      for (const t of sessionTexts) {
         expect(t).not.toContain("ses-")
       }
 
@@ -191,21 +204,23 @@ describe("createCommandHandler", () => {
       const now = new Date("2026-03-14T12:00:00.000Z")
       vi.setSystemTime(now)
 
-      mockGateway.listAllSessions.mockResolvedValueOnce([
-        { id: "ses-1", title: "First", time: { created: now.getTime(), updated: now.getTime() } },
-        { id: "ses-123", title: "Current", time: { created: now.getTime(), updated: now.getTime() } },
-        { id: "ses-2", title: "Second", time: { created: now.getTime(), updated: now.getTime() } },
+      mockGateway.listAllSessions.mockResolvedValue([
+        { id: "ses-1", title: "First", time: { created: now.getTime(), updated: now.getTime() }, location: { directory: "/p" } },
+        { id: "ses-123", title: "Current", time: { created: now.getTime(), updated: now.getTime() }, location: { directory: "/p" } },
+        { id: "ses-2", title: "Second", time: { created: now.getTime(), updated: now.getTime() }, location: { directory: "/p" } },
       ])
-      mockFeishuClient.replyMessage = vi.fn().mockResolvedValue({ code: 0, msg: "ok" })
+      mockFeishuClient.replyMessage = vi.fn().mockResolvedValue({
+        code: 0, msg: "ok", data: { message_id: "card-s" },
+      })
 
       const handler = createHandler()
-      const result = await handler("chat-1", "chat-1", "msg-1", "/sessions")
+      mockFeishuClient.updateMessage = vi.fn().mockResolvedValue({ code: 0, msg: "ok" })
+      const result = await handler("chat-1", "chat-1", "msg-1", "/sessions /p")
 
       expect(result).toBe(true)
-      const callArgs = (mockFeishuClient.replyMessage as any).mock.calls[0]
-      const content = JSON.parse(callArgs?.[1]?.content as string)
+      const content = JSON.parse((mockFeishuClient.replyMessage as any).mock.calls[0][1].content)
       const actionElements = content.elements?.filter((e: any) => e.tag === "action")
-      // 3 sessions + the "back to the command menu" button
+      // 3 sessions + the "back to the project list" button
       expect(actionElements).toHaveLength(4)
       const buttonTexts = actionElements.map((el: any) => el.actions?.[0]?.text?.content)
       // Current session moved to the top and marked with ▶ (existing entry, not duplicated)
@@ -471,31 +486,41 @@ describe("createCommandHandler", () => {
       })
       mockFeishuClient.updateMessage = vi.fn().mockResolvedValue({ code: 0, msg: "ok" })
       mockGateway.listAllSessions = vi.fn().mockResolvedValue([
-        { id: "ses-a", title: "A", time: { created: 1, updated: Date.now() } },
-        { id: "ses-b", title: "B", time: { created: 1, updated: Date.now() } },
+        { id: "ses-a", title: "A", time: { created: 1, updated: Date.now() }, location: { directory: "/p" } },
+        { id: "ses-b", title: "B", time: { created: 1, updated: Date.now() }, location: { directory: "/p" } },
       ])
       mockGateway.getSession = vi.fn().mockResolvedValue({ id: "ses-b", title: "B" })
       mockSessionManager.getExisting = vi.fn().mockResolvedValue(null)
 
       const handler = createHandler()
+      // level 1: the projects
       await handler("chat-1", "chat-1", "msg-1", "/sessions")
-
-      // the card is sent once
       expect(mockFeishuClient.replyMessage).toHaveBeenCalledTimes(1)
-      const card = JSON.parse((mockFeishuClient.replyMessage as any).mock.calls[0][1].content)
+      const projects = JSON.parse((mockFeishuClient.replyMessage as any).mock.calls[0][1].content)
+      const projectButton = projects.elements
+        .filter((el: any) => el.tag === "action")
+        .flatMap((el: any) => el.actions)[0]
+      expect(projectButton.value.command).toBe("/sessions /p")
+      const menuId = projectButton.value.menu
+
+      // level 2: the sessions of that project — the same card
+      await handler("chat-1", "chat-1", "msg-1", "/sessions /p", { menuId })
+      expect(mockFeishuClient.replyMessage).toHaveBeenCalledTimes(1)
+      expect(mockFeishuClient.updateMessage).toHaveBeenCalledTimes(1)
+      const card = JSON.parse((mockFeishuClient.updateMessage as any).mock.calls[0][1])
       const button = card.elements
         .filter((el: any) => el.tag === "action")
         .flatMap((el: any) => el.actions)
         .find((b: any) => b.value.command.includes("ses-b"))
       expect(button.value.action).toBe("session_connect")
-      const menuId = button.value.menu
 
       // the user clicks the session — the same card is patched
       await handler("chat-1", "chat-1", "msg-1", "/connect ses-b", { menuId })
 
       expect(mockFeishuClient.replyMessage).toHaveBeenCalledTimes(1)
-      expect(mockFeishuClient.updateMessage).toHaveBeenCalledTimes(1)
-      const patched = JSON.parse((mockFeishuClient.updateMessage as any).mock.calls[0][1])
+      // the level 2 update and the connection result
+      expect(mockFeishuClient.updateMessage).toHaveBeenCalledTimes(2)
+      const patched = JSON.parse((mockFeishuClient.updateMessage as any).mock.calls.at(-1)[1])
       expect(patched.elements[0].content).toContain("已连接到")
     })
 

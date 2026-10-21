@@ -91,13 +91,79 @@ function truncateTitle(title: string, maxChars = 30): string {
   return trimmed.slice(0, maxChars - 3) + "..."
 }
 
+/**
+ * Level 1 of the session menu: the projects, with how many sessions each
+ * one has.
+ */
+function buildProjectsCard(
+  sessions: Session[],
+  menuId = "",
+  feishuKey = "",
+  notice?: string,
+): Record<string, unknown> {
+  const byProject = new Map<string, Session[]>()
+  for (const session of sessions) {
+    // A session without a directory (the server does not always report one)
+    // still has to show up somewhere.
+    const dir = session.location?.directory ?? session.directory ?? "（未知项目）"
+    const list = byProject.get(dir) ?? []
+    list.push(session)
+    byProject.set(dir, list)
+  }
+
+  const projects = [...byProject.entries()].sort((a, b) => b[1].length - a[1].length)
+  const total = sessions.length
+  const head = notice
+    ? `${notice}\n**第 1 步：选择项目**（共 ${total} 个会话，${projects.length} 个项目）`
+    : `**第 1 步：选择项目**（共 ${total} 个会话，${projects.length} 个项目）`
+
+  return {
+    config: { wide_screen_mode: true },
+    header: {
+      title: { tag: "plain_text", content: "📂 选择项目" },
+      template: "blue",
+    },
+    elements: [
+      { tag: "markdown", content: head },
+      ...projects.map(([dir, own]) => {
+        const name = dir.startsWith("（") ? dir : (dir.split("/").filter(Boolean).at(-1) ?? dir)
+        return {
+          tag: "action",
+          actions: [
+            {
+              tag: "button",
+              text: { tag: "plain_text", content: `📁 ${truncateTitle(name)} (${own.length})` },
+              value: {
+                action: "session_connect",
+                menu: menuId,
+                command: `/sessions ${dir}`,
+              },
+            },
+          ],
+        }
+      }),
+      {
+        tag: "markdown",
+        content: "_点一个项目，再选它的会话_",
+      },
+    ],
+  }
+}
+
 function buildSessionsCard(
   sessions: Session[],
   currentSessionId?: string,
   menuId = "",
   notice?: string,
+  directory?: string,
 ): Record<string, unknown> {
   const recentSessions = sessions.slice(0, 20)
+  const projectName = directory
+    ? (directory.split("/").filter(Boolean).at(-1) ?? directory)
+    : undefined
+  const head = projectName
+    ? `**第 2 步：${truncateTitle(projectName)} 的会话**（共 ${sessions.length} 个）`
+    : "**点击连接到对应会话：**"
   return {
     config: { wide_screen_mode: true },
     header: {
@@ -110,9 +176,7 @@ function buildSessionsCard(
     elements: [
       {
         tag: "markdown",
-        content: notice
-          ? `${notice}\n**点击连接到对应会话：**`
-          : "**点击连接到对应会话：**",
+        content: notice ? `${notice}\n${head}` : head,
       },
       ...recentSessions.map((s) => {
         const isCurrentSession = s.id === currentSessionId
@@ -122,14 +186,7 @@ function buildSessionsCard(
           : "未知时间"
         const filesSegment =
           typeof s.summary?.files === "number" ? `${s.summary.files}文件` : null
-        // Sessions belong to a project directory — say which one, otherwise
-        // the list is a jumble of unrelated conversations.
-        const projectDir = s.location?.directory ?? s.directory
-        const projectSegment = projectDir
-          ? `📁 ${truncateTitle(projectDir.split("/").filter(Boolean).at(-1) ?? projectDir)}`
-          : undefined
-
-        const segments = [title, relative, filesSegment, projectSegment].filter(
+        const segments = [title, relative, filesSegment].filter(
           (v): v is string => typeof v === "string" && v.length > 0,
         )
         const label = `${isCurrentSession ? "▶ " : ""}${segments.join(" · ")}`
@@ -156,11 +213,11 @@ function buildSessionsCard(
         actions: [
           {
             tag: "button",
-            text: { tag: "plain_text", content: "← 返回命令菜单" },
+            text: { tag: "plain_text", content: "← 返回项目列表" },
             value: {
-              action: "command_execute",
+              action: "session_connect",
               menu: menuId,
-              command: "/help",
+              command: "/sessions",
             },
           },
         ],
@@ -502,6 +559,16 @@ interface SessionMenuEntry {
   createdAt: number
   /** The title of the bound session — shown after a connection. */
   title?: string
+  /** Which view the card is showing. */
+  view?: SessionMenuView
+}
+
+/** The session menu has two levels: the projects, then their sessions. */
+interface SessionMenuView {
+  level: 1 | 2
+  /** The project directory (level 2). */
+  directory?: string
+  page: number
 }
 
 /** The idle stop option card, so it can be updated in place. */
@@ -612,32 +679,14 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
     chatId: string,
     messageId: string,
     menuId?: string,
+    directory?: string,
   ): Promise<void> {
     // Every session of every project — the list is for picking one by hand,
     // so it must not be limited to the directory this bridge runs in.
-    const sessions = (await opencode.listAllSessions(50)) as Session[]
+    const sessions = (await opencode.listAllSessions(100)) as Session[]
     if (sessions.length === 0) {
       await replyText(chatId, messageId, "暂无会话。")
       return
-    }
-
-    // Get current bound session for this chat
-    const currentSessionId = await sessionManager.getExisting(feishuKey)
-
-    if (currentSessionId) {
-      // Check if it's already in the list
-      const existingIndex = sessions.findIndex((s) => s.id === currentSessionId)
-      if (existingIndex >= 0) {
-        // Move it to top
-        const current = sessions.splice(existingIndex, 1)[0]
-        if (current) {
-          sessions.unshift(current)
-        }
-      } else {
-        // Not in API response at all — add it manually at top
-        const now = Date.now()
-        sessions.unshift({ id: currentSessionId, title: "当前会话", time: { created: now, updated: now } })
-      }
     }
 
     // The card of this chat is refreshed instead of piling up new ones.
@@ -649,8 +698,35 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
         ? sessionMenus.get(latest)
         : undefined
     const id = existing?.id ?? menuId ?? newMenuId()
-    const card = buildSessionsCard(sessions, currentSessionId, id)
-    await publishSessionCard(chatId, messageId, existing, card, id)
+
+    // Level 1: the projects. Level 2: the sessions of one project.
+    if (!directory) {
+      const card = buildProjectsCard(sessions, id, feishuKey)
+      await publishSessionCard(chatId, messageId, existing, card, id, { level: 1, page: 1 })
+      return
+    }
+
+    const currentSessionId = await sessionManager.getExisting(feishuKey)
+    const own = sessions.filter((s) => (s.location?.directory ?? s.directory) === directory)
+    if (own.length === 0) {
+      await replyText(chatId, messageId, `项目 ${directory} 下没有会话。`)
+      return
+    }
+
+    if (currentSessionId) {
+      const existingIndex = own.findIndex((s) => s.id === currentSessionId)
+      if (existingIndex >= 0) {
+        const current = own.splice(existingIndex, 1)[0]
+        if (current) own.unshift(current)
+      }
+    }
+
+    const card = buildSessionsCard(own, currentSessionId, id, undefined, directory)
+    await publishSessionCard(chatId, messageId, existing, card, id, {
+      level: 2,
+      directory,
+      page: 1,
+    })
   }
 
   /** Put the session list on the chat — updating the one that is there. */
@@ -660,13 +736,17 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
     existing: SessionMenuEntry | undefined,
     card: Record<string, unknown>,
     menuId: string,
+    view?: SessionMenuView,
   ): Promise<void> {
     if (existing) {
       const res = await feishuClient.updateMessage(
         existing.messageId,
         JSON.stringify(card),
       )
-      if (res.code === 0) return
+      if (res.code === 0) {
+        if (view) existing.view = view
+        return
+      }
       logger.warn(`Could not update the session card: ${res.code} ${res.msg}`)
     }
     const res = await feishuClient.replyMessage(messageId, {
@@ -683,6 +763,7 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
       messageId: cardMessageId,
       chatId,
       createdAt: Date.now(),
+      ...(view ? { view } : {}),
     })
     latestSessionMenuByChat.set(chatId, menuId)
     // The command menu card and the session list are the same card.
@@ -1335,7 +1416,13 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
           return true
 
         case "/sessions":
-          await handleSessions(feishuKey, chatId, messageId, options?.menuId)
+          await handleSessions(
+            feishuKey,
+            chatId,
+            messageId,
+            options?.menuId,
+            parts.slice(1).join(" ") || undefined,
+          )
           return true
 
         case "/connect": {
