@@ -690,11 +690,11 @@ describe("createStreamingBridge", () => {
 
     const content = cardContent(mockFeishu)
     // "tokens" = what the model generated (output + reasoning), not the context
-    expect(content).toContain("100 tokens")
+    expect(content).toContain("100 toks")
     expect(content).toContain("tok/s")
     expect(content).toContain("上下文 4.0k")
     // the hit rate sits next to the token count, and the total follows it
-    expect(content).toContain("tokens(缓存 75%，总 4.1k tokens)")
+    expect(content).toContain("toks(缓存 75%，总 4.1k toks)")
   })
 
   it("shows how much of the context window is in use", async () => {
@@ -790,9 +790,9 @@ describe("createStreamingBridge", () => {
 
     const content = cardContent(mockFeishu)
     // delta = input 100 + output 10 + cache.read 100
-    expect(content).toContain("10 tokens")      // generated only
+    expect(content).toContain("10 toks")      // generated only
     expect(content).toContain("上下文 200")      // input + cache read
-    expect(content).toContain("tokens(缓存 50%，总 210 tokens)")
+    expect(content).toContain("toks(缓存 50%，总 210 toks)")
     // the cumulative numbers must not show up
     expect(content).not.toContain("4.1k")
     expect(content).not.toContain("4.0k")
@@ -839,7 +839,7 @@ describe("createStreamingBridge", () => {
     const content = cardContent(mockFeishu)
     // the card shows the TOTAL turn duration …
     expect(content).toMatch(/耗时 [\d.]+s/)
-    expect(content).toContain("100 tokens")
+    expect(content).toContain("100 toks")
     // … but the rate is timed against the model time only: it must match
     // 100 tokens / model time (not 100 tokens / whole turn).
     const match = /([\d.]+)(k?) tok\/s/.exec(content)

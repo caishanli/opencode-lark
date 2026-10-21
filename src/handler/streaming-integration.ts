@@ -132,7 +132,7 @@ export function createStreamingBridge(
     const usageLine = (): string | null => {
       if (!lastUsage) return null
       const { generated, context, total, rate, hit, cost, turnMs } = lastUsage
-      const totalPart = total > 0 ? `，总 ${formatTokens(total)} tokens` : ""
+      const totalPart = total > 0 ? `，总 ${formatTokens(total)} toks` : ""
       const hitPart = context > 0 ? `(缓存 ${hit}%${totalPart})` : ""
       const timePart = turnMs > 0 ? `耗时 ${(turnMs / 1000).toFixed(1)}s · ` : ""
       const limit = turnContextLimit
@@ -140,7 +140,7 @@ export function createStreamingBridge(
         limit && limit > 0 && context > 0 ? ` (${formatPercent(context / limit)}%)` : ""
       const contextPart = context > 0 ? ` · 上下文 ${formatTokens(context)}${used}` : ""
       return (
-        `${timePart}${formatTokens(generated)} tokens${hitPart} · ` +
+        `${timePart}${formatTokens(generated)} toks${hitPart} · ` +
         `${formatRate(rate)} tok/s${contextPart}${cost}`
       )
     }
