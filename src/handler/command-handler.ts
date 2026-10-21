@@ -426,6 +426,16 @@ function buildProviderCard(
   }
 
   elements.push({
+    tag: "action",
+    actions: [
+      {
+        tag: "button",
+        text: { tag: "plain_text", content: "← 返回命令菜单" },
+        value: { action: "command_execute", menu: menuId, command: "/help" },
+      },
+    ],
+  })
+  elements.push({
     tag: "markdown",
     content: "_点一个 provider 进去看它的模型；也可以 `/模型 <关键词>` 直接搜_",
   })
@@ -612,6 +622,41 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
   const menuCards = new Map<string, MenuCardEntry>()
   const latestMenuCardByChat = new Map<string, string>()
 
+  /**
+   * Answer on the menu card the user clicked, instead of sending a new
+   * message. Falls back to a text reply when the card is unknown.
+   */
+  async function replyOnMenuCard(
+    chatId: string,
+    messageId: string,
+    menuId: string | undefined,
+    text: string,
+    notice: string,
+  ): Promise<void> {
+    const card = findMenuCard(menuId)
+    if (!card) {
+      await replyText(chatId, messageId, text)
+      return
+    }
+    const updated = buildHelpCard([], card.id, notice)
+    await publishMenuCard(chatId, messageId, card, updated, card.id)
+  }
+
+  /**
+   * The card a menu button belongs to. Every menu shares one registry — a
+   * button in the command menu opens its menu *in that card*, so the model
+   * picker and the idle stop options have to find the command menu's card.
+   */
+  const findMenuCard = (menuId?: string): MenuCardEntry | undefined => {
+    if (!menuId) return undefined
+    return (
+      menuCards.get(menuId) ??
+      sessionMenus.get(menuId) ??
+      modelMenus.get(menuId) ??
+      idleStopMenus.get(menuId)
+    )
+  }
+
   const purgeModelMenus = (now = Date.now()): void => {
     for (const [id, entry] of modelMenus) {
       if (now - entry.createdAt > MODEL_MENU_TTL_MS) {
@@ -639,6 +684,7 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
     feishuKey: string,
     chatId: string,
     messageId: string,
+    menuId?: string,
   ): Promise<void> {
     const data = await opencode.createSession({
       title: `Feishu chat ${feishuKey}`,
@@ -648,13 +694,20 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
     sessionManager.deleteMapping(feishuKey)
     sessionManager.setMapping(feishuKey, data.id)
     logger.info(`/new: created session ${data.id}, bound ${feishuKey}`)
-    await replyText(chatId, messageId, `已创建并切换到新会话: ${data.id}`)
+    await replyOnMenuCard(
+      chatId,
+      messageId,
+      menuId,
+      `已创建并切换到新会话: ${data.id}`,
+      `✅ 已创建并切换到新会话 ${data.id}`,
+    )
   }
 
   async function handleAbort(
     feishuKey: string,
     chatId: string,
     messageId: string,
+    menuId?: string,
   ): Promise<void> {
     const mapping = sessionManager.getSession(feishuKey)
     if (!mapping) {
@@ -669,10 +722,12 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
     }
 
     logger.info(`/abort: aborted session ${mapping.session_id}`)
-    await replyText(
+    await replyOnMenuCard(
       chatId,
       messageId,
+      menuId,
       `已打断当前这一轮（会话 ${mapping.session_id} 保留，可以接着聊）`,
+      `⏹ 已打断当前这一轮（会话 ${mapping.session_id} 保留，可以接着聊）`,
     )
   }
 
@@ -695,7 +750,7 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
     // A click in the command menu turns THAT card into the session list.
     const latest = latestSessionMenuByChat.get(chatId)
     const existing = menuId
-      ? (sessionMenus.get(menuId) ?? menuCards.get(menuId))
+      ? ((sessionMenus.get(menuId) ?? findMenuCard(menuId)) as SessionMenuEntry | undefined)
       : latest
         ? sessionMenus.get(latest)
         : undefined
@@ -803,7 +858,7 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
 
     // The card stays where it is — it shows the session that is now bound.
     const menu = menuId
-      ? (sessionMenus.get(menuId) ?? menuCards.get(menuId))
+      ? ((sessionMenus.get(menuId) ?? findMenuCard(menuId)) as SessionMenuEntry | undefined)
       : undefined
     if (menu) {
       const sessions = (await opencode
@@ -892,6 +947,7 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
     feishuKey: string,
     chatId: string,
     messageId: string,
+    menuId?: string,
   ): Promise<void> {
     const mapping = sessionManager.getSession(feishuKey)
     const sessionId = mapping?.session_id ?? (await sessionManager.getExisting(feishuKey))
@@ -908,10 +964,12 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
       return
     }
     logger.info(`/compact: compacted session ${sessionId}`)
-    await replyText(
+    await replyOnMenuCard(
       chatId,
       messageId,
+      menuId,
       `✅ 已压缩会话 ${sessionId}，上下文已缩减（对话历史保留在会话里）`,
+      `🗜 已压缩会话 ${sessionId}，上下文已缩减`,
     )
   }
 
@@ -1157,7 +1215,9 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
 
     // A card click keeps the key the menu was created with: in a group chat
     // the message key is "chat:root" while the callback only knows the chat.
-    const fromCard = menuId ? modelMenus.get(menuId) : undefined
+    const fromCard = menuId
+      ? ((modelMenus.get(menuId) ?? findMenuCard(menuId)) as ModelMenuEntry | undefined)
+      : undefined
     const existing = fromCard ?? modelMenus.get(latestMenuByChat.get(chatId) ?? "")
     const key = existing?.feishuKey ?? feishuKey
     const activeId = existing?.id ?? newMenuId()
@@ -1426,11 +1486,11 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
     try {
       switch (cmd) {
         case "/new":
-          await handleNew(feishuKey, chatId, messageId)
+          await handleNew(feishuKey, chatId, messageId, options?.menuId)
           return true
 
         case "/abort":
-          await handleAbort(feishuKey, chatId, messageId)
+          await handleAbort(feishuKey, chatId, messageId, options?.menuId)
           return true
 
         case "/sessions":
@@ -1455,7 +1515,7 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
 
         case "/compact":
         case "/压缩":
-          await handleCompact(feishuKey, chatId, messageId)
+          await handleCompact(feishuKey, chatId, messageId, options?.menuId)
           return true
 
         case "/更新":

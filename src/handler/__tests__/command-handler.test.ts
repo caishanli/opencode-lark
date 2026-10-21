@@ -525,6 +525,34 @@ describe("createCommandHandler", () => {
       expect(patched.elements[0].content).toContain("已连接到")
     })
 
+    it("a menu opened from the command menu stays in that card", async () => {
+      mockFeishuClient.replyMessage = vi.fn().mockResolvedValue({
+        code: 0, msg: "ok", data: { message_id: "card-menu" },
+      })
+      mockFeishuClient.updateMessage = vi.fn().mockResolvedValue({ code: 0, msg: "ok" })
+      ;(mockGateway.listModels as ReturnType<typeof vi.fn>).mockResolvedValue([
+        { id: "flash-free", providerID: "opencode", name: "Flash Free" },
+      ])
+      mockSessionManager.getExisting = vi.fn().mockResolvedValue("ses-1")
+      mockGateway.getSession = vi.fn().mockResolvedValue({ id: "ses-1", model: {} })
+
+      const handler = createHandler()
+      // the command menu is sent
+      await handler("chat-1", "chat-1", "msg-1", "/help")
+      const help = JSON.parse((mockFeishuClient.replyMessage as any).mock.calls[0][1].content)
+      const menuId = help.elements
+        .filter((el: any) => el.tag === "action")
+        .flatMap((el: any) => el.actions)[0].value.menu
+
+      // the model menu button patches that card, it does not send a new one
+      await handler("chat-1", "chat-1", "msg-1", "/模型", { menuId })
+
+      expect(mockFeishuClient.replyMessage).toHaveBeenCalledTimes(1)
+      expect(mockFeishuClient.updateMessage).toHaveBeenCalledTimes(1)
+      const patched = JSON.parse((mockFeishuClient.updateMessage as any).mock.calls[0][1])
+      expect(patched.header?.title?.content).toContain("模型菜单")
+    })
+
     it("/自动关闭 shows the options", async () => {
       mockFeishuClient.replyMessage = vi.fn().mockResolvedValue({
         code: 0,
@@ -656,8 +684,8 @@ describe("createCommandHandler", () => {
       const buttons = content.elements
         .filter((el: any) => el.tag === "action")
         .flatMap((el: any) => el.actions)
-      // one button per provider, not per model
-      expect(buttons.length).toBe(2)
+      // one button per provider, not per model (+ the back button)
+      expect(buttons.length).toBe(3)
       expect(buttons[0].value.command).toBe("/模型 opencode")
     })
 
