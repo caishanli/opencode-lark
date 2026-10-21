@@ -790,6 +790,8 @@ describe("createStreamingBridge", () => {
     const content = cardContent(mockFeishu)
     expect(content).toContain("1 轮 1 步")
     expect(content).not.toContain("0 轮")
+    expect(content).not.toContain("0 步")
+    expect(content).not.toContain("0 步")
   })
 
   it("reports the turn's usage delta, not the session's cumulative total", async () => {
