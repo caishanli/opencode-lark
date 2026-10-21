@@ -175,6 +175,11 @@ function buildHelpCard(opencodeCommands: { name: string; description?: string }[
             text: { tag: "plain_text", content: "🧠 模型菜单" },
             value: { action: "command_execute", command: "/模型" },
           },
+          {
+            tag: "button",
+            text: { tag: "plain_text", content: "🛌 定时关闭" },
+            value: { action: "command_execute", command: "/自动关闭" },
+          },
         ],
       },
       {
