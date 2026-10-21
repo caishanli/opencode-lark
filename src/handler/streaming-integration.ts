@@ -395,8 +395,9 @@ export function createStreamingBridge(
               hit,
               cost,
               turnMs,
-              // Every text run of the agent is a round.
-              rounds: turnAssistantMessageIds.size,
+              // Every text run of the agent is a round — the turn itself
+              // always counts as one, even when the text never arrived.
+              rounds: Math.max(1, turnAssistantMessageIds.size),
               steps: stepCount,
             }
             const line = usageLine()

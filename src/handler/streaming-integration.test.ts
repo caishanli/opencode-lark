@@ -748,6 +748,49 @@ describe("createStreamingBridge", () => {
     expect(modelContextLimit).toHaveBeenCalledWith("p1", "m1")
   })
 
+  it("counts at least one round, even without any text", async () => {
+    const mockFeishu = {
+      ...createMockFeishuClient(),
+      sendMessage: vi.fn().mockResolvedValue({ code: 0, data: { message_id: "msg_456" } }),
+      replyMessage: vi.fn().mockResolvedValue({ code: 0 }),
+    }
+    const deps = makeDeps({ feishuClient: mockFeishu })
+    const bridge = createStreamingBridge(deps)
+
+    const handlePromise = bridge.handleMessage(
+      "chat-1", "ses-1", eventListeners, eventProcessor, mockSendMessage, vi.fn(), "msg_original", null,
+    )
+    await waitFor(() => {
+      expect(eventListeners.size).toBe(1)
+    })
+
+    const emit = (ev: unknown) => {
+      ;[...(eventListeners.get("ses-1") ?? [])].forEach((fn) => fn(ev))
+    }
+
+    // a step, a tool call and a usage report, but no text at all
+    emit({ type: "session.step.started", data: { sessionID: "ses-1" } })
+    emit({
+      type: "session.tool.called",
+      data: { sessionID: "ses-1", id: "c1", name: "shell" },
+    })
+    emit({
+      type: "session.usage.updated",
+      data: {
+        sessionID: "ses-1",
+        cost: 0,
+        tokens: { input: 1000, output: 100, reasoning: 0, cache: { read: 0, write: 0 } },
+      },
+    })
+    emit({ type: "session.execution.succeeded", data: { sessionID: "ses-1" } })
+
+    await handlePromise
+
+    const content = cardContent(mockFeishu)
+    expect(content).toContain("1 轮 1 步")
+    expect(content).not.toContain("0 轮")
+  })
+
   it("reports the turn's usage delta, not the session's cumulative total", async () => {
     const mockFeishu = {
       ...createMockFeishuClient(),
