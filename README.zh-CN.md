@@ -41,6 +41,7 @@
 | `/sessions` | 列出本项目的 opencode 会话并连接 |
 | `/connect <session_id>` | 按 id 连接某个会话 |
 | `/abort` | 打断当前这一轮。会话和历史都保留，下一条消息接着聊 |
+| `/compact`、`/压缩` | 压缩对话：opencode 把旧的几轮总结成一段，上下文窗口就腾出来了。历史仍留在会话里 |
 | `/更新`、`/update` | 升级 opencode。升级后会把 server 停掉，下次消息就用新版本启动 |
 
 ---

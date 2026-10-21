@@ -98,6 +98,8 @@ export interface OpencodeGateway {
   modelContextLimit(providerID: string, modelID: string): Promise<number | undefined>
   /** Upgrade the opencode installation. Returns the new version. */
   upgradeOpencode(target?: string): Promise<{ success: boolean; version?: string; error?: string }>
+  /** Compact the conversation of a session (drops the old turns). */
+  compactSession(sessionID: string): Promise<void>
   /** Fetch the context windows of all models, so the first lookup is instant. */
   warmModelLimits(): Promise<void>
   /** Change the model of a session. */
@@ -239,6 +241,10 @@ export function createOpencodeGateway(options: OpencodeGatewayOptions): Opencode
         context: typeof m.limit?.context === "number" ? m.limit.context : undefined,
         enabled: m.enabled !== false,
       })) as ModelInfo[]
+    },
+    async compactSession(sessionID) {
+      const res = await client.v2.session.compact({ sessionID })
+      throwIfError(res, "compact")
     },
     async upgradeOpencode(target) {
       const res = await client.v2.global.upgrade(

@@ -213,6 +213,11 @@ function buildHelpCard(
           },
           {
             tag: "button",
+            text: { tag: "plain_text", content: "🗜 压缩上下文" },
+            value: { action: "command_execute", menu: menuId, command: "/compact" },
+          },
+          {
+            tag: "button",
             text: { tag: "plain_text", content: "🔄 更新 opencode" },
             value: { action: "command_execute", menu: menuId, command: "/更新" },
           },
@@ -786,6 +791,37 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
   }
 
   /**
+   * Compact the conversation: opencode summarizes the old turns and starts
+   * the session over with the summary. The context window shrinks.
+   */
+  async function handleCompact(
+    feishuKey: string,
+    chatId: string,
+    messageId: string,
+  ): Promise<void> {
+    const mapping = sessionManager.getSession(feishuKey)
+    const sessionId = mapping?.session_id ?? (await sessionManager.getExisting(feishuKey))
+    if (!sessionId) {
+      await replyText(chatId, messageId, "当前没有绑定的会话。")
+      return
+    }
+
+    try {
+      await opencode.compactSession(sessionId)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      await replyText(chatId, messageId, `压缩失败：${message}`)
+      return
+    }
+    logger.info(`/compact: compacted session ${sessionId}`)
+    await replyText(
+      chatId,
+      messageId,
+      `✅ 已压缩会话 ${sessionId}，上下文已缩减（对话历史保留在会话里）`,
+    )
+  }
+
+  /**
    * Upgrade the opencode installation.
    *
    *   /更新          → upgrade to the latest version
@@ -1300,6 +1336,11 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
           await handleConnect(feishuKey, chatId, messageId, targetSessionId, options?.menuId)
           return true
         }
+
+        case "/compact":
+        case "/压缩":
+          await handleCompact(feishuKey, chatId, messageId)
+          return true
 
         case "/更新":
         case "/update":

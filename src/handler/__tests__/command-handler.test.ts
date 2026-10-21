@@ -315,6 +315,21 @@ describe("createCommandHandler", () => {
       expect(commands).toContain("/模型")
       expect(commands).toContain("/自动关闭")
       expect(commands).toContain("/更新")
+      expect(commands).toContain("/compact")
+    })
+
+    it("/compact compresses the session", async () => {
+      mockFeishuClient.replyMessage = vi.fn().mockResolvedValue({ code: 0, msg: "ok" })
+      mockSessionManager.getExisting = vi.fn().mockResolvedValue("ses-123")
+      mockSessionManager.getSession = vi.fn().mockReturnValue({ session_id: "ses-123" })
+
+      const handler = createHandler()
+      const result = await handler("chat-1", "chat-1", "msg-1", "/compact")
+
+      expect(result).toBe(true)
+      expect(mockGateway.compactSession).toHaveBeenCalledWith("ses-123")
+      const call = (mockFeishuClient.replyMessage as any).mock.calls[0]
+      expect(JSON.parse(call[1].content).text).toContain("已压缩")
     })
 
     it("/更新 upgrades opencode and reports it on the card", async () => {
