@@ -103,7 +103,9 @@ describe("createCommandHandler", () => {
       expect(mockGateway.abort).toHaveBeenCalledWith("ses-123")
       expect(mockFeishuClient.replyMessage).toHaveBeenCalledWith("msg-1", {
         msg_type: "text",
-        content: JSON.stringify({ text: "已中止会话: ses-123" }),
+        content: JSON.stringify({
+          text: "已打断当前这一轮（会话 ses-123 保留，可以接着聊）",
+        }),
       })
     })
 

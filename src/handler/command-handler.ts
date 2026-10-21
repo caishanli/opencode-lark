@@ -166,7 +166,7 @@ function buildHelpCard(opencodeCommands: { name: string; description?: string }[
           },
           {
             tag: "button",
-            text: { tag: "plain_text", content: "🛑 中止任务" },
+            text: { tag: "plain_text", content: "⏹ 打断当前任务" },
             type: "danger",
             value: { action: "command_execute", command: "/abort" },
           },
@@ -526,7 +526,11 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
     }
 
     logger.info(`/abort: aborted session ${mapping.session_id}`)
-    await replyText(chatId, messageId, `已中止会话: ${mapping.session_id}`)
+    await replyText(
+      chatId,
+      messageId,
+      `已打断当前这一轮（会话 ${mapping.session_id} 保留，可以接着聊）`,
+    )
   }
 
   async function handleSessions(
