@@ -137,20 +137,23 @@ export function createStreamingBridge(
     const usageLine = (): string | null => {
       if (!lastUsage) return null
       const { context, total, sessionTotal, rate, hit, cost, turnMs, rounds, steps } = lastUsage
-      const hitPart = context > 0 ? `(缓存 ${hit}%)` : ""
       const timePart = turnMs > 0 ? `耗时 ${(turnMs / 1000).toFixed(1)}s · ` : ""
       const limit = turnContextLimit
       const used =
         limit && limit > 0 && context > 0 ? ` (${formatPercent(context / limit)}%)` : ""
       const contextPart = context > 0 ? ` · 上下文 ${formatTokens(context)}${used}` : ""
       // What the whole session has consumed so far — the turn's own total
-      // above is only a part of it.
-      const sessionPart = sessionTotal > 0 ? ` · 会话累计 ${formatTokens(sessionTotal)}` : ""
+      // above is only a part of it. The cache hit rate belongs to it: it is
+      // the ratio of the counters the server reports.
+      const sessionPart =
+        sessionTotal > 0
+          ? ` · 会话累计 ${formatTokens(sessionTotal)} (缓存 ${hit}%)`
+          : ""
       // How much work the agent did: the rounds it wrote in and the model
       // calls it took.
       const workPart = steps > 0 ? `${rounds} 轮 ${steps} 步 · ` : ""
       return (
-        `${timePart}${workPart}${formatTokens(total)} toks${hitPart} · ` +
+        `${timePart}${workPart}${formatTokens(total)} toks · ` +
         `${formatRate(rate)} tok/s${contextPart}${sessionPart}${cost}`
       )
     }
@@ -364,7 +367,11 @@ export function createStreamingBridge(
             // (older server), fall back to the whole turn.
             const modelMs = llmMs > 0 ? llmMs : turnMs
             const rate = modelMs > 0 ? generated / (modelMs / 1000) : 0
-            const hit = formatPercent(cacheHitRate(stepDelta))
+            // The hit rate comes from the counters the server reports — not
+            // from the difference between two reports. The difference is the
+            // LAST step, and every step re-reads (almost) the whole context,
+            // so it always looks like a 99% hit.
+            const hit = formatPercent(cacheHitRate(now))
             const cost = action.cost !== undefined && action.cost > 0 ? ` · $${action.cost.toFixed(4)}` : ""
             logger.info(
               `Turn usage: generated=${generated} context=${context} cacheHit=${hit}% ` +

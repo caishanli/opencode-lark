@@ -14,7 +14,7 @@
 
 - **Real-time bridging** — Messages sent in Feishu arrive in your opencode TUI instantly, and agent replies stream back as live-updating cards.
 - **One card per turn** — The reply card is patched in place (`PATCH`), never replaced by a new message. The body is a chronological list of text runs and tool panels, like the opencode web UI.
-- **A status line that says what happened** — `✅ Done · 12.4s · 3 rounds 5 steps · 341.0k toks (cache 99.98%) · 51.7 tok/s · context 339.8k (33.98%) · session total 663.9M`.
+- **A status line that says what happened** — `✅ Done · 12.4s · 3 rounds 5 steps · 341.0k toks · 51.7 tok/s · context 339.8k (33.98%) · session total 663.9M (cache 97.42%)`. The cache hit rate is the ratio of the counters the server reports.
 - **Interactive cards** — Agent questions and permission requests appear as clickable Feishu cards. Answer or approve directly from the chat — no need to switch to the TUI.
 - **Slash commands in the chat** — `/help` lists every command (the bridge's and the project's opencode commands) as buttons; `/模型` opens a two level model picker (provider → model, paged, free models first); `/自动关闭` chooses when the opencode server is stopped while it is idle.
 - **WebSocket connection** — Uses Feishu's long-lived WebSocket mode. No webhook polling, no public IP required.
