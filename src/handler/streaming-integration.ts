@@ -117,6 +117,8 @@ export function createStreamingBridge(
     let lastUsage: {
       generated: number
       context: number
+      /** Every token the turn consumed: input + cache + output + reasoning. */
+      total: number
       rate: number
       hit: string
       cost: string
@@ -129,8 +131,9 @@ export function createStreamingBridge(
      */
     const usageLine = (): string | null => {
       if (!lastUsage) return null
-      const { generated, context, rate, hit, cost, turnMs } = lastUsage
-      const hitPart = context > 0 ? `(缓存 ${hit}%)` : ""
+      const { generated, context, total, rate, hit, cost, turnMs } = lastUsage
+      const totalPart = total > 0 ? `，总 ${formatTokens(total)} tokens` : ""
+      const hitPart = context > 0 ? `(缓存 ${hit}%${totalPart})` : ""
       const timePart = turnMs > 0 ? `耗时 ${(turnMs / 1000).toFixed(1)}s · ` : ""
       const limit = turnContextLimit
       const used =
@@ -356,7 +359,15 @@ export function createStreamingBridge(
               `turn=${turnMs > 0 ? `${(turnMs / 1000).toFixed(1)}s` : "n/a"} ` +
               `(last step: input=${stepDelta.input} cacheRead=${stepDelta.cache.read})`,
             )
-            lastUsage = { generated, context, rate, hit, cost, turnMs }
+            // Everything the turn consumed: the context it read (fresh +
+            // cached) and what it generated.
+            const total =
+              delta.input +
+              delta.output +
+              delta.reasoning +
+              delta.cache.read +
+              delta.cache.write
+            lastUsage = { generated, context, total, rate, hit, cost, turnMs }
             const line = usageLine()
             if (line) writeToCard((c) => void c.setUsage(line))
             // `session.usage.updated` fires after EVERY step, not once per
