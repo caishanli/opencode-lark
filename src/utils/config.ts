@@ -65,6 +65,12 @@ const AppConfigSchema = z.object({
   heartbeat: HeartbeatConfigSchema.optional(),
   messageDebounceMs: z.number().int().min(0).optional().default(10000),
   opencode: OpencodeConfigSchema.optional(),
+  /**
+   * Append a "[Lark] …" signature to every message that is forwarded to
+   * opencode, so the agent knows the message came from Feishu (and where to
+   * put the files it creates). Off by default — turn it on while developing.
+   */
+  larkSignature: z.boolean().optional().default(false),
 })
 
 export type AppConfig = z.infer<typeof AppConfigSchema>

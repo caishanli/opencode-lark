@@ -88,6 +88,11 @@ export interface HandlerDeps {
    * may have been stopped while it was idle.
    */
   ensureServer?: () => Promise<void>
+  /**
+   * Append the "[Lark] …" signature to the forwarded messages. Off by
+   * default — it is only useful while developing.
+   */
+  larkSignature?: boolean
 }
 
 // ── Constants ──
@@ -682,7 +687,7 @@ export function createMessageHandler(
     }
 
     // ── 7c. Add Lark context signature (full context on first message, lightweight tag on subsequent messages) ──
-    if (parts[0]) {
+    if (parts[0] && deps.larkSignature) {
       if (!signedSessions.has(sessionId)) {
         // Prevent unbounded growth — re-signing is harmless
         if (signedSessions.size > 1000) signedSessions.clear()
@@ -956,7 +961,7 @@ export function createMessageHandler(
     }
 
     // Add Lark context signature
-    if (parts[0]) {
+    if (parts[0] && deps.larkSignature) {
       if (!signedSessions.has(sessionId)) {
         if (signedSessions.size > 1000) signedSessions.clear()
         signedSessions.add(sessionId)

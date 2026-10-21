@@ -374,7 +374,11 @@ Navigate to **Development Config → Event Subscriptions → Callback Subscripti
     //   "idleTimeoutMs": 1800000
     // }
   },
-  "messageDebounceMs": 10000  // Debounce timer for batching rapid multi-message inputs (text=immediate, media=buffer)
+  "messageDebounceMs": 10000,  // Debounce timer for batching rapid multi-message inputs (text=immediate, media=buffer)
+  // Append a "[Lark] …" signature to the messages forwarded to opencode, so
+  // the agent knows the message came from Feishu and where to put its files.
+  // Off by default — turn it on while developing.
+  // "larkSignature": true
 }
 ```
 

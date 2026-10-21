@@ -322,6 +322,7 @@ async function main(): Promise<void> {
     outboundMedia,
     debounceMs: config.messageDebounceMs,
     ensureServer,
+    larkSignature: config.larkSignature,
   })
 
   // Create card action handlers

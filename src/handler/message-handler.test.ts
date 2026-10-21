@@ -791,8 +791,32 @@ describe("createMessageHandler", () => {
     expect(deps.sessionManager.getOrCreate).not.toHaveBeenCalled()
   })
 
-  it("includes Lark context with chat and sender info on first message", async () => {
+  it("does not add the Lark signature by default", async () => {
     const deps = makeDeps()
+    const { handleMessage: handler } = createMessageHandler(deps)
+
+    const handlerPromise = handler(makeEvent())
+
+    await waitFor(() => {
+      expect(deps.eventListeners.size).toBe(1)
+    })
+
+    ;[...deps.eventListeners.get("ses-1")!].forEach((fn) => {
+      fn({
+        type: "session.status",
+        properties: { sessionID: "ses-1", status: { type: "idle" } },
+      })
+    })
+
+    await handlerPromise
+
+    const promptText = sentPrompt(deps.opencode).text
+    expect(promptText).not.toContain("[Lark context]")
+    expect(promptText).not.toContain("[Lark] from:")
+  })
+
+  it("includes Lark context with chat and sender info on first message", async () => {
+    const deps = { ...makeDeps(), larkSignature: true }
     const { handleMessage: handler } = createMessageHandler(deps)
 
     const handlerPromise = handler(makeEvent())
@@ -818,7 +842,7 @@ describe("createMessageHandler", () => {
   })
 
   it("includes lightweight Lark tag with sender on subsequent messages", async () => {
-    const deps = makeDeps()
+    const deps = { ...makeDeps(), larkSignature: true }
     const { handleMessage: handler } = createMessageHandler(deps)
 
     // First message
@@ -859,6 +883,7 @@ describe("createMessageHandler", () => {
     })
     const deps = makeDeps({
       feishuClient,
+      larkSignature: true,
       botOpenId: "bot-1",
       progressTracker: {
         sendThinking: vi.fn().mockResolvedValue(null),
@@ -895,7 +920,7 @@ describe("createMessageHandler", () => {
   })
 
   it("does not send bind notification on any message", async () => {
-    const deps = makeDeps()
+    const deps = { ...makeDeps(), larkSignature: true }
     const { handleMessage: handler } = createMessageHandler(deps)
 
     const handlerPromise = handler(makeEvent())

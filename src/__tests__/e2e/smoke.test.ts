@@ -157,6 +157,7 @@ describe("E2E Smoke Tests", () => {
     })
 
     const { handleMessage } = createMessageHandler({
+      larkSignature: true,
       opencode,
       sessionManager,
       dedup: { isDuplicate: vi.fn().mockReturnValue(false), isDuplicateMessage: vi.fn().mockReturnValue(false), close: vi.fn() } as any,
@@ -255,6 +256,7 @@ describe("E2E Smoke Tests", () => {
     })
 
     const { handleMessage } = createMessageHandler({
+      larkSignature: true,
       opencode,
       sessionManager: createMockSessionManager(sessionId),
       dedup: { isDuplicate: vi.fn().mockReturnValue(false), isDuplicateMessage: vi.fn().mockReturnValue(false), close: vi.fn() } as any,
@@ -349,6 +351,7 @@ describe("E2E Smoke Tests", () => {
     const eventProcessor = new EventProcessor({ ownedSessions })
 
     const { handleMessage } = createMessageHandler({
+      larkSignature: true,
       opencode,
       sessionManager: createMockSessionManager(sessionId),
       dedup: { isDuplicate: vi.fn().mockReturnValue(false), isDuplicateMessage: vi.fn().mockReturnValue(false), close: vi.fn() } as any,
@@ -438,6 +441,7 @@ describe("session sharing", () => {
     })
 
     const { handleMessage } = createMessageHandler({
+      larkSignature: true,
       opencode,
       sessionManager: createMockSessionManager(sessionId),
       dedup: { isDuplicate: vi.fn().mockReturnValue(false), isDuplicateMessage: vi.fn().mockReturnValue(false), close: vi.fn() } as any,
@@ -522,6 +526,7 @@ describe("session sharing", () => {
     })
 
     const { handleMessage } = createMessageHandler({
+      larkSignature: true,
       opencode,
       sessionManager: createMockSessionManager(sessionId),
       dedup: { isDuplicate: vi.fn().mockReturnValue(false), isDuplicateMessage: vi.fn().mockReturnValue(false), close: vi.fn() } as any,
@@ -608,6 +613,7 @@ describe("session sharing", () => {
     })
 
     const { handleMessage } = createMessageHandler({
+      larkSignature: true,
       opencode,
       sessionManager: createMockSessionManager(sessionId),
       dedup: { isDuplicate: vi.fn().mockReturnValue(false), isDuplicateMessage: vi.fn().mockReturnValue(false), close: vi.fn() } as any,
@@ -707,6 +713,7 @@ describe("session sharing", () => {
     })
 
     const { handleMessage } = createMessageHandler({
+      larkSignature: true,
       opencode,
       sessionManager: createMockSessionManager(sessionId),
       dedup: { isDuplicate: vi.fn().mockReturnValue(false), isDuplicateMessage: vi.fn().mockReturnValue(false), close: vi.fn() } as any,

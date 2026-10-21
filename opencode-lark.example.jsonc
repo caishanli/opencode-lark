@@ -24,6 +24,11 @@
   // Data directory for SQLite database
   "dataDir": "./data",
 
+  // Append a "[Lark] …" signature to every message forwarded to opencode, so
+  // the agent knows the message came from Feishu (and where to put the files
+  // it creates). Off by default — turn it on while developing.
+  // "larkSignature": true,
+
   // The opencode server the bridge talks to. The bridge starts it when it is
   // needed and stops it when it has been idle for a while.
   "opencode": {

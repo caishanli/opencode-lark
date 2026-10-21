@@ -357,6 +357,9 @@ systemctl --user restart opencode-lark
     "debounceMs": 500,
     "maxDebounceMs": 3000
   },
+  // 给转发给 opencode 的消息加上 "[Lark] …" 标记，让 agent 知道消息来自飞书、
+  // 以及生成的文件该存到哪。默认关闭，开发时打开。
+  // "larkSignature": true,
   // 桥对话的 opencode server。需要时由桥拉起，空闲久了可以关掉。
   "opencode": {
     "url": "http://127.0.0.1:5096",
