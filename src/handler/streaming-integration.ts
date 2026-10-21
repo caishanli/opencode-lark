@@ -119,6 +119,8 @@ export function createStreamingBridge(
       context: number
       /** Every token the turn consumed: input + cache + output + reasoning. */
       total: number
+      /** Every token the session consumed since it was created. */
+      sessionTotal: number
       rate: number
       hit: string
       cost: string
@@ -131,7 +133,7 @@ export function createStreamingBridge(
      */
     const usageLine = (): string | null => {
       if (!lastUsage) return null
-      const { generated, context, total, rate, hit, cost, turnMs } = lastUsage
+      const { generated, context, total, sessionTotal, rate, hit, cost, turnMs } = lastUsage
       const totalPart = total > 0 ? `，总 ${formatTokens(total)} toks` : ""
       const hitPart = context > 0 ? `(缓存 ${hit}%${totalPart})` : ""
       const timePart = turnMs > 0 ? `耗时 ${(turnMs / 1000).toFixed(1)}s · ` : ""
@@ -139,9 +141,12 @@ export function createStreamingBridge(
       const used =
         limit && limit > 0 && context > 0 ? ` (${formatPercent(context / limit)}%)` : ""
       const contextPart = context > 0 ? ` · 上下文 ${formatTokens(context)}${used}` : ""
+      // What the whole session has consumed so far — the turn's own total
+      // above is only a part of it.
+      const sessionPart = sessionTotal > 0 ? ` · 会话累计 ${formatTokens(sessionTotal)}` : ""
       return (
         `${timePart}${formatTokens(generated)} toks${hitPart} · ` +
-        `${formatRate(rate)} tok/s${contextPart}${cost}`
+        `${formatRate(rate)} tok/s${contextPart}${sessionPart}${cost}`
       )
     }
     let stepStartedAt = 0
@@ -367,7 +372,14 @@ export function createStreamingBridge(
               delta.reasoning +
               delta.cache.read +
               delta.cache.write
-            lastUsage = { generated, context, total, rate, hit, cost, turnMs }
+            // The usage report itself is cumulative for the whole session.
+            const sessionTotal =
+              (now.input ?? 0) +
+              (now.output ?? 0) +
+              (now.reasoning ?? 0) +
+              (now.cache?.read ?? 0) +
+              (now.cache?.write ?? 0)
+            lastUsage = { generated, context, total, sessionTotal, rate, hit, cost, turnMs }
             const line = usageLine()
             if (line) writeToCard((c) => void c.setUsage(line))
             // `session.usage.updated` fires after EVERY step, not once per

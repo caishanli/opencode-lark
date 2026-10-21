@@ -793,9 +793,10 @@ describe("createStreamingBridge", () => {
     expect(content).toContain("10 toks")      // generated only
     expect(content).toContain("上下文 200")      // input + cache read
     expect(content).toContain("toks(缓存 50%，总 210 toks)")
-    // the cumulative numbers must not show up
-    expect(content).not.toContain("4.1k")
-    expect(content).not.toContain("4.0k")
+    // the cumulative numbers must not show up as the turn's own numbers —
+    // they are only reported as the session total, clearly labelled
+    expect(content).toContain("会话累计 4.1k")
+    expect(content).not.toContain("上下文 4.0k")
   })
 
   it("times the rate against model time (step span), not the whole turn", async () => {
