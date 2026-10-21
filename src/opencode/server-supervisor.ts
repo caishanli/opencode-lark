@@ -26,7 +26,8 @@ export interface ServerSupervisorOptions {
   pidFile?: string
   /** Where the "stop the server when it is idle" switch is remembered. */
   stateFile?: string
-  /** How long the server may sit idle before it is stopped (ms). 0 = never. */
+  /** How long the server may sit idle before it is stopped (ms). 0 = never.
+   *  The default is 0 — the server stays up until /自动关闭 says otherwise. */
   idleTimeoutMs: number
   /** How often the idle state is checked (ms). */
   checkIntervalMs?: number

@@ -128,7 +128,9 @@ async function main(): Promise<void> {
       config.opencode?.server?.args ?? ["serve", "--port", serverPort, "--hostname", "0.0.0.0"],
     pidFile: path.join(config.dataDir, "opencode-server.pid"),
     stateFile: path.join(config.dataDir, "autostop.json"),
-    idleTimeoutMs: config.opencode?.server?.idleTimeoutMs ?? 30 * 60 * 1000,
+    // The server is not stopped automatically unless it is asked for
+    // (/自动关闭 15 | 30 | 60).
+    idleTimeoutMs: config.opencode?.server?.idleTimeoutMs ?? 0,
     opencode: gateway,
     logger,
   })

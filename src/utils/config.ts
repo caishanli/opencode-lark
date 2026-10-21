@@ -42,8 +42,9 @@ const OpencodeServerSchema = z.object({
   command: z.string().default("opencode"),
   /** Its arguments — derived from the url when omitted. */
   args: z.array(z.string()).optional(),
-  /** How long the server may sit idle before it is stopped (ms). 0 = never. */
-  idleTimeoutMs: z.number().int().min(0).default(30 * 60 * 1000),
+  /** How long the server may sit idle before it is stopped (ms). 0 = never.
+   *  The default is 0: the server is not stopped unless you ask for it. */
+  idleTimeoutMs: z.number().int().min(0).default(0),
 })
 
 const OpencodeConfigSchema = z.object({

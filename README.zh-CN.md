@@ -13,14 +13,34 @@
 ## 功能特性
 
 - **实时桥接** — 飞书消息即时出现在 opencode TUI，agent 回复以动态卡片形式推送回飞书。
+- **一轮一卡，原地更新** — 回复卡只用 `PATCH` 原地刷新，不会变成一堆新消息。卡片内容按时间顺序排列文字块和工具面板，和 opencode 网页版一致。
+- **说清楚这一轮发生了什么的状态行** — `✅ 已完成 · 12.4s · 3 轮 5 步 · 341.0k toks(缓存 99.98%) · 51.7 tok/s · 上下文 339.8k (33.98%) · 会话累计 663.9M`。
 - **交互式卡片** — agent 的提问和权限请求以可点击的飞书卡片呈现，直接在聊天中回答或审批，无需切换到 TUI。
+- **聊天里的斜杠命令** — `/帮助` 列出全部命令（桥的和项目里的 opencode 命令）并做成按钮；`/模型` 是两级模型菜单（先选 provider 再选模型，分页、免费模型优先）；`/自动关闭` 决定 opencode server 空闲多久后被关掉。
 - **WebSocket 长连接** — 采用飞书 WebSocket 长连接模式，无需公网 IP，无需轮询。
-- **SSE 流式输出** — 订阅 opencode SSE 事件流，防抖处理卡片更新，避免触发频率限制。
+- **SSE 流式输出** — 订阅 opencode SSE 事件流，防抖处理卡片更新，避免触发频率限制。订阅断了会自动重连，opencode server 重启后桥不会失聪。
 - **对话记忆** — SQLite 存储每个会话的对话历史，每次消息自动携带上下文。
 - **Session 自动发现** — 自动发现并绑定当前目录的最新 TUI session，重启后映射关系持久保存。
-- **优雅重连** — 启动时指数退避重连 opencode server，最多重试 10 次，无需手动等待 server 就绪。
+- **桥自己管 opencode 进程** — 需要时把 server 拉起来（0.4 秒），空闲久了可以关掉，不白占几百 MB 内存。
+- **优雅重连** — 启动时指数退避重连 opencode server，最多重试 10 次，无需手动等待 server 就绪。进程意外挂掉时留下的卡片会连正文一起还原，只标「已中断」。
 - **可扩展渠道层** — `ChannelPlugin` 接口设计，可扩展接入 Slack、Discord 等其他平台，无需修改核心逻辑。
 - **文件与图片支持** — 支持飞书图片和文件消息（不限于文字）。附件下载保存至 `${OPENCODE_CWD}/.opencode-lark/attachments/`，并将本地路径传给 opencode 供其读取分析。支持流式下载，50 MB 大小限制，文件名安全处理。
+
+---
+
+## 命令
+
+直接在聊天里输入，或者从 `/帮助` 卡片上点。
+
+| 命令 | 作用 |
+|---|---|
+| `/help`、`/`、`/帮助` | 命令菜单：桥的全部命令 + 项目里的 opencode 命令（`/init`、`/review` …），都是按钮 |
+| `/模型`、`/model`、`/models` | 模型菜单 —— 先选 provider，再选它下面的模型（每页 12 个，免费模型优先），选中即切换 |
+| `/自动关闭`、`/autostop` | opencode server 空闲多久后被关掉：不关闭 / 15 / 30 / 60 分钟，重启后仍然有效 |
+| `/new` | 新建 opencode 会话并绑定到当前聊天 |
+| `/sessions` | 列出本项目的 opencode 会话并连接 |
+| `/connect <session_id>` | 按 id 连接某个会话 |
+| `/abort` | 打断当前这一轮。会话和历史都保留，下一条消息接着聊 |
 
 ---
 
@@ -334,6 +354,19 @@ systemctl --user restart opencode-lark
   "progress": {
     "debounceMs": 500,
     "maxDebounceMs": 3000
+  },
+  // 桥对话的 opencode server。需要时由桥拉起，空闲久了可以关掉。
+  "opencode": {
+    "url": "http://127.0.0.1:5096",
+    "username": "opencode",
+    "password": "",
+    // "server": {
+    //   "command": "opencode",
+    //   "args": ["serve", "--port", "5096", "--hostname", "0.0.0.0"],
+    //   // 空闲多久后关掉 server（毫秒）。0 = 永不（默认）。
+    //   // 运行中可以用 /自动关闭 改。
+    //   "idleTimeoutMs": 1800000
+    // }
   }
 }
 ```

@@ -13,14 +13,34 @@
 ## Features
 
 - **Real-time bridging** — Messages sent in Feishu arrive in your opencode TUI instantly, and agent replies stream back as live-updating cards.
+- **One card per turn** — The reply card is patched in place (`PATCH`), never replaced by a new message. The body is a chronological list of text runs and tool panels, like the opencode web UI.
+- **A status line that says what happened** — `✅ Done · 12.4s · 3 rounds 5 steps · 341.0k toks (cache 99.98%) · 51.7 tok/s · context 339.8k (33.98%) · session total 663.9M`.
 - **Interactive cards** — Agent questions and permission requests appear as clickable Feishu cards. Answer or approve directly from the chat — no need to switch to the TUI.
+- **Slash commands in the chat** — `/help` lists every command (the bridge's and the project's opencode commands) as buttons; `/模型` opens a two level model picker (provider → model, paged, free models first); `/自动关闭` chooses when the opencode server is stopped while it is idle.
 - **WebSocket connection** — Uses Feishu's long-lived WebSocket mode. No webhook polling, no public IP required.
-- **SSE streaming** — Consumes the opencode SSE event stream and debounces card updates to stay within rate limits.
+- **SSE streaming** — Consumes the opencode SSE event stream and debounces card updates to stay within rate limits. The subscription reconnects on its own, so a restarted opencode server does not leave the bridge deaf.
 - **Conversation memory** — SQLite-backed per-thread history is prepended to each message, giving the agent context across turns.
 - **Session auto-discovery** — Finds and binds to the latest opencode TUI session for a working directory. Survives restarts.
-- **Graceful recovery** — Reconnects to the opencode server with exponential backoff (up to 10 attempts) on startup.
+- **The bridge owns the opencode process** — It starts the server when a message needs it (0.4 s) and can stop it when it has been idle for a while, so it does not hold hundreds of megabytes for nothing.
+- **Graceful recovery** — Reconnects to the opencode server with exponential backoff (up to 10 attempts) on startup. A card left open by a dead process is restored with its answer and marked as interrupted.
 - **Extensible channel layer** — `ChannelPlugin` interface lets you add Slack, Discord, or any other platform without touching core logic.
 - **File and image support** — Handles image and file messages from Feishu (not just text). Downloads attachments to `${OPENCODE_CWD}/.opencode-lark/attachments/` and forwards the local path to opencode for analysis. 50 MB size limit, streaming download, filename sanitization included.
+
+---
+
+## Commands
+
+Type them in the chat, or pick them from the `/help` card.
+
+| Command | What it does |
+|---|---|
+| `/help`, `/`, `/帮助` | The command menu: every command as a button, plus the project's opencode commands (`/init`, `/review`, …) |
+| `/模型`, `/model`, `/models` | Model picker — first the provider, then its models (12 per page, free models first). Picking one switches the session to it |
+| `/自动关闭`, `/autostop` | When the opencode server is stopped while it is idle: never, 15, 30 or 60 minutes. Remembered across restarts |
+| `/new` | Start a new opencode session and bind the chat to it |
+| `/sessions` | List the opencode sessions of this project and connect to one |
+| `/connect <session_id>` | Connect the chat to a session by id |
+| `/abort` | Interrupt the current turn. The session and its history stay — the next message continues in the same conversation |
 
 ---
 
@@ -337,6 +357,20 @@ Navigate to **Development Config → Event Subscriptions → Callback Subscripti
   "progress": {
     "debounceMs": 500,
     "maxDebounceMs": 3000
+  },
+  // The opencode server the bridge talks to. The bridge starts it when it is
+  // needed and can stop it when it has been idle for a while.
+  "opencode": {
+    "url": "http://127.0.0.1:5096",
+    "username": "opencode",
+    "password": "",
+    // "server": {
+    //   "command": "opencode",
+    //   "args": ["serve", "--port", "5096", "--hostname", "0.0.0.0"],
+    //   // How long the server may sit idle before it is stopped (ms).
+    //   // 0 = never (the default). /自动关闭 changes it at runtime.
+    //   "idleTimeoutMs": 1800000
+    // }
   },
   "messageDebounceMs": 10000  // Debounce timer for batching rapid multi-message inputs (text=immediate, media=buffer)
 }

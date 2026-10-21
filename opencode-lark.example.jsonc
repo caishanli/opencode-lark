@@ -36,7 +36,7 @@
     //   // Its arguments — derived from the url when omitted.
     //   "args": ["serve", "--port", "5096", "--hostname", "0.0.0.0"],
     //   // How long the server may sit idle before it is stopped (ms).
-    //   // 0 disables the idle stop.
+    //   // 0 = never (the default). /自动关闭 changes it at runtime.
     //   "idleTimeoutMs": 1800000
     // }
   },
