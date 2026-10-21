@@ -300,6 +300,16 @@ describe("createCommandHandler", () => {
       expect(content).toHaveProperty("header")
       expect(content).toHaveProperty("elements")
       expect(content.header?.title?.content).toContain("命令菜单")
+      // every bridge command has a button
+      const commands = content.elements
+        .filter((el: any) => el.tag === "action")
+        .flatMap((el: any) => el.actions)
+        .map((b: any) => b.value.command)
+      expect(commands).toContain("/new")
+      expect(commands).toContain("/sessions")
+      expect(commands).toContain("/abort")
+      expect(commands).toContain("/模型")
+      expect(commands).toContain("/自动关闭")
     })
 
     it("/help lists the commands opencode offers in this project", async () => {
