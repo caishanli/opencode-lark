@@ -57,6 +57,7 @@ export function createMockGateway(overrides: Record<string, unknown> = {}): any 
     commands: vi.fn().mockResolvedValue([]),
     sendCommand: vi.fn().mockResolvedValue(undefined),
     listModels: vi.fn().mockResolvedValue([]),
+    upgradeOpencode: vi.fn().mockResolvedValue({ success: true, version: "2.0.33" }),
     switchModel: vi.fn().mockResolvedValue(undefined),
     subscribeEvents: vi.fn(),
     ping: vi.fn().mockResolvedValue(undefined),

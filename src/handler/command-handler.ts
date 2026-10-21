@@ -34,6 +34,8 @@ export interface CommandHandlerDeps {
     setIdleWatchEnabled(enabled: boolean): void
     idleTimeoutMinutes(): number
     setIdleTimeoutMinutes(minutes: number): void
+    /** Stop the server (it is started again on demand). */
+    stop?(): Promise<void>
   }
 }
 
@@ -163,6 +165,7 @@ function buildSessionsCard(
 function buildHelpCard(
   opencodeCommands: { name: string; description?: string }[] = [],
   menuId = "",
+  notice?: string,
 ): Record<string, unknown> {
   return {
     config: { wide_screen_mode: true },
@@ -176,7 +179,7 @@ function buildHelpCard(
     elements: [
       {
         tag: "markdown",
-        content: "**选择要执行的命令：**",
+        content: notice ? `${notice}\n**选择要执行的命令：**` : "**选择要执行的命令：**",
       },
       {
         tag: "action",
@@ -207,6 +210,11 @@ function buildHelpCard(
             tag: "button",
             text: { tag: "plain_text", content: "🛌 定时关闭" },
             value: { action: "command_execute", menu: menuId, command: "/自动关闭" },
+          },
+          {
+            tag: "button",
+            text: { tag: "plain_text", content: "🔄 更新 opencode" },
+            value: { action: "command_execute", menu: menuId, command: "/更新" },
           },
         ],
       },
@@ -778,6 +786,59 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
   }
 
   /**
+   * Upgrade the opencode installation.
+   *
+   *   /更新          → upgrade to the latest version
+   *   /更新 <版本>   → upgrade to that version
+   */
+  async function handleUpdate(
+    chatId: string,
+    messageId: string,
+    menuId?: string,
+    target?: string,
+  ): Promise<void> {
+    const existing = menuId ? menuCards.get(menuId) : undefined
+
+    // The card shows the progress while the server downloads the new version.
+    if (existing) {
+      const card = buildHelpCard([], existing.id, "🔄 正在更新 opencode…")
+      await publishMenuCard(chatId, messageId, existing, card, existing.id)
+    }
+
+    let result: { success: boolean; version?: string; error?: string }
+    try {
+      result = await opencode.upgradeOpencode(target || undefined)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      await replyText(chatId, messageId, `更新失败：${message}`)
+      return
+    }
+
+    if (!result.success) {
+      const message = `更新失败：${result.error ?? "未知错误"}`
+      if (existing) {
+        const card = buildHelpCard([], existing.id, `❌ ${message}`)
+        await publishMenuCard(chatId, messageId, existing, card, existing.id)
+        return
+      }
+      await replyText(chatId, messageId, message)
+      return
+    }
+
+    // The running server still uses the old binary — stop it, so the next
+    // message starts the new version.
+    await deps.supervisor?.stop?.().catch(() => {})
+
+    const text = `✅ 已更新到 ${result.version ?? "最新版本"}，opencode 会在下次使用时重启`
+    if (existing) {
+      const card = buildHelpCard([], existing.id, `✅ 已更新到 ${result.version ?? "最新版本"}（下次使用时生效）`)
+      await publishMenuCard(chatId, messageId, existing, card, existing.id)
+      return
+    }
+    await replyText(chatId, messageId, text)
+  }
+
+  /**
    * Switch the automatic stop of the opencode server on and off.
    *
    *   /自动关闭          → toggle
@@ -1239,6 +1300,11 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
           await handleConnect(feishuKey, chatId, messageId, targetSessionId, options?.menuId)
           return true
         }
+
+        case "/更新":
+        case "/update":
+          await handleUpdate(chatId, messageId, options?.menuId, parts.slice(1).join(" "))
+          return true
 
         case "/自动关闭":
         case "/autostop":

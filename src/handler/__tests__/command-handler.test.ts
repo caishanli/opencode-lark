@@ -314,6 +314,45 @@ describe("createCommandHandler", () => {
       expect(commands).toContain("/abort")
       expect(commands).toContain("/模型")
       expect(commands).toContain("/自动关闭")
+      expect(commands).toContain("/更新")
+    })
+
+    it("/更新 upgrades opencode and reports it on the card", async () => {
+      mockFeishuClient.replyMessage = vi.fn().mockResolvedValue({
+        code: 0,
+        msg: "ok",
+        data: { message_id: "card-menu" },
+      })
+      mockFeishuClient.updateMessage = vi.fn().mockResolvedValue({ code: 0, msg: "ok" })
+      mockGateway.upgradeOpencode = vi.fn().mockResolvedValue({
+        success: true,
+        version: "2.0.33",
+      })
+      const supervisor = {
+        isIdleWatchEnabled: vi.fn(() => true),
+        setIdleWatchEnabled: vi.fn(),
+        idleTimeoutMinutes: vi.fn(() => 30),
+        setIdleTimeoutMinutes: vi.fn(),
+        stop: vi.fn().mockResolvedValue(undefined),
+      }
+      const handler = createHandler(undefined, mockGateway, { supervisor } as any)
+
+      // the menu card is sent first
+      await handler("chat-1", "chat-1", "msg-1", "/help")
+      const card = JSON.parse((mockFeishuClient.replyMessage as any).mock.calls[0][1].content)
+      const menuId = card.elements
+        .filter((el: any) => el.tag === "action")
+        .flatMap((el: any) => el.actions)[0].value.menu
+
+      // the user clicks the update button
+      await handler("chat-1", "chat-1", "msg-1", "/更新", { menuId })
+
+      expect(mockGateway.upgradeOpencode).toHaveBeenCalledWith(undefined)
+      // the server is stopped so the next message starts the new version
+      expect(supervisor.stop).toHaveBeenCalled()
+      // the result is shown on the menu card
+      const patched = JSON.parse((mockFeishuClient.updateMessage as any).mock.calls.at(-1)[1])
+      expect(patched.elements[0].content).toContain("2.0.33")
     })
 
     it("/help lists the commands opencode offers in this project", async () => {

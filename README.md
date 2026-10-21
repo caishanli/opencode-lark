@@ -41,6 +41,7 @@ Type them in the chat, or pick them from the `/help` card.
 | `/sessions` | List the opencode sessions of this project and connect to one |
 | `/connect <session_id>` | Connect the chat to a session by id |
 | `/abort` | Interrupt the current turn. The session and its history stay — the next message continues in the same conversation |
+| `/更新`, `/update` | Upgrade the opencode installation. The server is stopped afterwards, so the next message starts the new version |
 
 ---
 
