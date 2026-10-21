@@ -172,7 +172,8 @@ describe("createCommandHandler", () => {
       // Verify buttons are created for each session
       const actionElements = content.elements?.filter((e: any) => e.tag === "action")
       // 2 from API + 1 current session (ses-123) not in API list → prepended
-      expect(actionElements).toHaveLength(3)
+      // + the "back to the command menu" button
+      expect(actionElements).toHaveLength(4)
 
       const buttonTexts = actionElements.map((el: any) => el.actions?.[0]?.text?.content)
       expect(buttonTexts[0]).toBe("▶ 当前会话 · 刚刚")
@@ -205,7 +206,8 @@ describe("createCommandHandler", () => {
       const callArgs = (mockFeishuClient.replyMessage as any).mock.calls[0]
       const content = JSON.parse(callArgs?.[1]?.content as string)
       const actionElements = content.elements?.filter((e: any) => e.tag === "action")
-      expect(actionElements).toHaveLength(3)
+      // 3 sessions + the "back to the command menu" button
+      expect(actionElements).toHaveLength(4)
       const buttonTexts = actionElements.map((el: any) => el.actions?.[0]?.text?.content)
       // Current session moved to the top and marked with ▶ (existing entry, not duplicated)
       expect(buttonTexts[0]).toBe("▶ Current · 刚刚")

@@ -140,13 +140,30 @@ function buildSessionsCard(
           ],
         }
       }),
+      {
+        tag: "action",
+        actions: [
+          {
+            tag: "button",
+            text: { tag: "plain_text", content: "← 返回命令菜单" },
+            value: {
+              action: "command_execute",
+              menu: menuId,
+              command: "/help",
+            },
+          },
+        ],
+      },
     ],
   }
 }
 
 // ── Help card builder ──
 
-function buildHelpCard(opencodeCommands: { name: string; description?: string }[] = []): Record<string, unknown> {
+function buildHelpCard(
+  opencodeCommands: { name: string; description?: string }[] = [],
+  menuId = "",
+): Record<string, unknown> {
   return {
     config: { wide_screen_mode: true },
     header: {
@@ -168,28 +185,28 @@ function buildHelpCard(opencodeCommands: { name: string; description?: string }[
             tag: "button",
             text: { tag: "plain_text", content: "🆕 新建会话" },
             type: "primary",
-            value: { action: "command_execute", command: "/new" },
+            value: { action: "command_execute", menu: menuId, command: "/new" },
           },
           {
             tag: "button",
             text: { tag: "plain_text", content: "🔌 连接会话" },
-            value: { action: "command_execute", command: "/sessions" },
+            value: { action: "command_execute", menu: menuId, command: "/sessions" },
           },
           {
             tag: "button",
             text: { tag: "plain_text", content: "⏹ 打断当前任务" },
             type: "danger",
-            value: { action: "command_execute", command: "/abort" },
+            value: { action: "command_execute", menu: menuId, command: "/abort" },
           },
           {
             tag: "button",
             text: { tag: "plain_text", content: "🧠 模型菜单" },
-            value: { action: "command_execute", command: "/模型" },
+            value: { action: "command_execute", menu: menuId, command: "/模型" },
           },
           {
             tag: "button",
             text: { tag: "plain_text", content: "🛌 定时关闭" },
-            value: { action: "command_execute", command: "/自动关闭" },
+            value: { action: "command_execute", menu: menuId, command: "/自动关闭" },
           },
         ],
       },
@@ -447,6 +464,14 @@ interface ModelMenuView {
   page: number
 }
 
+/** The command menu card, so it can be updated in place. */
+interface MenuCardEntry {
+  id: string
+  messageId: string
+  chatId: string
+  createdAt: number
+}
+
 /** The session list card, so it can be updated in place. */
 interface SessionMenuEntry {
   id: string
@@ -492,6 +517,9 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
   /** The session list cards, per chat. */
   const sessionMenus = new Map<string, SessionMenuEntry>()
   const latestSessionMenuByChat = new Map<string, string>()
+  /** The command menu cards — they turn into the session list on a click. */
+  const menuCards = new Map<string, MenuCardEntry>()
+  const latestMenuCardByChat = new Map<string, string>()
 
   const purgeModelMenus = (now = Date.now()): void => {
     for (const [id, entry] of modelMenus) {
@@ -589,9 +617,10 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
     }
 
     // The card of this chat is refreshed instead of piling up new ones.
+    // A click in the command menu turns THAT card into the session list.
     const latest = latestSessionMenuByChat.get(chatId)
     const existing = menuId
-      ? sessionMenus.get(menuId)
+      ? (sessionMenus.get(menuId) ?? menuCards.get(menuId))
       : latest
         ? sessionMenus.get(latest)
         : undefined
@@ -632,6 +661,14 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
       createdAt: Date.now(),
     })
     latestSessionMenuByChat.set(chatId, menuId)
+    // The command menu card and the session list are the same card.
+    menuCards.set(menuId, {
+      id: menuId,
+      messageId: cardMessageId,
+      chatId,
+      createdAt: Date.now(),
+    })
+    latestMenuCardByChat.set(chatId, menuId)
   }
 
   async function handleConnect(
@@ -658,7 +695,9 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
     logger.info(`/connect: bound ${feishuKey} to session ${targetSessionId}`)
 
     // The card stays where it is — it shows the session that is now bound.
-    const menu = menuId ? sessionMenus.get(menuId) : undefined
+    const menu = menuId
+      ? (sessionMenus.get(menuId) ?? menuCards.get(menuId))
+      : undefined
     if (menu) {
       const sessions = (await opencode
         .listSessions({ directory: process.env.OPENCODE_CWD || process.cwd() })
@@ -678,8 +717,9 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
   }
 
   async function handleHelp(
-    _chatId: string,
+    chatId: string,
     messageId: string,
+    menuId?: string,
   ): Promise<void> {
     // The opencode commands are per project — fetch them so the menu shows
     // what this project actually offers.
@@ -689,11 +729,52 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
     } catch (err) {
       logger.warn(`Could not fetch the opencode commands: ${err}`)
     }
-    const card = buildHelpCard(opencodeCommands)
-    await feishuClient.replyMessage(messageId, {
+
+    // The menu card is a card of its own: clicking "连接会话" turns it into
+    // the session list instead of sending another card.
+    const latest = latestMenuCardByChat.get(chatId)
+    const existing = menuId
+      ? menuCards.get(menuId)
+      : latest
+        ? menuCards.get(latest)
+        : undefined
+    const id = existing?.id ?? menuId ?? newMenuId()
+    const card = buildHelpCard(opencodeCommands, id)
+    await publishMenuCard(chatId, messageId, existing, card, id)
+  }
+
+  /** Put a menu card on the chat — updating the one that is there. */
+  async function publishMenuCard(
+    chatId: string,
+    messageId: string,
+    existing: MenuCardEntry | undefined,
+    card: Record<string, unknown>,
+    menuId: string,
+  ): Promise<void> {
+    if (existing) {
+      const res = await feishuClient.updateMessage(
+        existing.messageId,
+        JSON.stringify(card),
+      )
+      if (res.code === 0) return
+      logger.warn(`Could not update the menu card: ${res.code} ${res.msg}`)
+    }
+    const res = await feishuClient.replyMessage(messageId, {
       msg_type: "interactive",
       content: JSON.stringify(card),
     })
+    const cardMessageId = res.data?.["message_id"] as string | undefined
+    if (!cardMessageId) {
+      logger.warn("The menu card was sent but its message id is unknown")
+      return
+    }
+    menuCards.set(menuId, {
+      id: menuId,
+      messageId: cardMessageId,
+      chatId,
+      createdAt: Date.now(),
+    })
+    latestMenuCardByChat.set(chatId, menuId)
   }
 
   /**
@@ -1178,7 +1259,7 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
         case "/":
         case "/help":
         case "/帮助":
-          await handleHelp(chatId, messageId)
+          await handleHelp(chatId, messageId, options?.menuId)
           return true
 
         default: {
