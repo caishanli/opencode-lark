@@ -115,7 +115,6 @@ export function createStreamingBridge(
     let turnModel: { id: string; providerID: string } | undefined
     let turnContextLimit: number | undefined
     let lastUsage: {
-      generated: number
       context: number
       /** Every token the turn consumed: input + cache + output + reasoning. */
       total: number
@@ -125,6 +124,10 @@ export function createStreamingBridge(
       hit: string
       cost: string
       turnMs: number
+      /** How many times the agent wrote in this turn. */
+      rounds: number
+      /** How many model calls the turn took. */
+      steps: number
     } | null = null
 
     /**
@@ -133,9 +136,8 @@ export function createStreamingBridge(
      */
     const usageLine = (): string | null => {
       if (!lastUsage) return null
-      const { generated, context, total, sessionTotal, rate, hit, cost, turnMs } = lastUsage
-      const totalPart = total > 0 ? `，总 ${formatTokens(total)} toks` : ""
-      const hitPart = context > 0 ? `(缓存 ${hit}%${totalPart})` : ""
+      const { context, total, sessionTotal, rate, hit, cost, turnMs, rounds, steps } = lastUsage
+      const hitPart = context > 0 ? `(缓存 ${hit}%)` : ""
       const timePart = turnMs > 0 ? `耗时 ${(turnMs / 1000).toFixed(1)}s · ` : ""
       const limit = turnContextLimit
       const used =
@@ -144,12 +146,17 @@ export function createStreamingBridge(
       // What the whole session has consumed so far — the turn's own total
       // above is only a part of it.
       const sessionPart = sessionTotal > 0 ? ` · 会话累计 ${formatTokens(sessionTotal)}` : ""
+      // How much work the agent did: the rounds it wrote in and the model
+      // calls it took.
+      const workPart = steps > 0 ? `${rounds} 轮 ${steps} 步 · ` : ""
       return (
-        `${timePart}${formatTokens(generated)} toks${hitPart} · ` +
+        `${timePart}${workPart}${formatTokens(total)} toks${hitPart} · ` +
         `${formatRate(rate)} tok/s${contextPart}${sessionPart}${cost}`
       )
     }
     let stepStartedAt = 0
+    /** How many model calls this turn took. */
+    let stepCount = 0
 
     const ensureCard = (): void => {
       if (card || cardStartPromise) return
@@ -291,6 +298,7 @@ export function createStreamingBridge(
           case "ModelCall": {
             if (action.phase === "started") {
               stepStartedAt = Date.now()
+              stepCount += 1
               if (action.model && action.model.id) {
                 turnModel = action.model
                 // The window limit is fetched in the background: the usage
@@ -379,7 +387,18 @@ export function createStreamingBridge(
               (now.reasoning ?? 0) +
               (now.cache?.read ?? 0) +
               (now.cache?.write ?? 0)
-            lastUsage = { generated, context, total, sessionTotal, rate, hit, cost, turnMs }
+            lastUsage = {
+              context,
+              total,
+              sessionTotal,
+              rate,
+              hit,
+              cost,
+              turnMs,
+              // Every text run of the agent is a round.
+              rounds: turnAssistantMessageIds.size,
+              steps: stepCount,
+            }
             const line = usageLine()
             if (line) writeToCard((c) => void c.setUsage(line))
             // `session.usage.updated` fires after EVERY step, not once per
