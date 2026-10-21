@@ -137,23 +137,20 @@ export function createStreamingBridge(
     const usageLine = (): string | null => {
       if (!lastUsage) return null
       const { context, total, sessionTotal, rate, hit, cost, turnMs, rounds, steps } = lastUsage
+      const hitPart = `(缓存 ${hit}%)`
       const timePart = turnMs > 0 ? `耗时 ${(turnMs / 1000).toFixed(1)}s · ` : ""
       const limit = turnContextLimit
       const used =
         limit && limit > 0 && context > 0 ? ` (${formatPercent(context / limit)}%)` : ""
       const contextPart = context > 0 ? ` · 上下文 ${formatTokens(context)}${used}` : ""
       // What the whole session has consumed so far — the turn's own total
-      // above is only a part of it. The cache hit rate belongs to it: it is
-      // the ratio of the counters the server reports.
-      const sessionPart =
-        sessionTotal > 0
-          ? ` · 会话累计 ${formatTokens(sessionTotal)} (缓存 ${hit}%)`
-          : ""
+      // above is only a part of it.
+      const sessionPart = sessionTotal > 0 ? ` · 会话累计 ${formatTokens(sessionTotal)}` : ""
       // How much work the agent did: the rounds it wrote in and the model
       // calls it took.
       const workPart = steps > 0 ? `${rounds} 轮 ${steps} 步 · ` : ""
       return (
-        `${timePart}${workPart}${formatTokens(total)} toks · ` +
+        `${timePart}${workPart}${formatTokens(total)} toks${hitPart} · ` +
         `${formatRate(rate)} tok/s${contextPart}${sessionPart}${cost}`
       )
     }
