@@ -86,7 +86,12 @@ function truncateTitle(title: string, maxChars = 30): string {
   return trimmed.slice(0, maxChars - 3) + "..."
 }
 
-function buildSessionsCard(sessions: Session[], currentSessionId?: string): Record<string, unknown> {
+function buildSessionsCard(
+  sessions: Session[],
+  currentSessionId?: string,
+  menuId = "",
+  notice?: string,
+): Record<string, unknown> {
   const recentSessions = sessions.slice(0, 10)
   return {
     config: { wide_screen_mode: true },
@@ -100,7 +105,9 @@ function buildSessionsCard(sessions: Session[], currentSessionId?: string): Reco
     elements: [
       {
         tag: "markdown",
-        content: "**点击连接到对应会话：**",
+        content: notice
+          ? `${notice}\n**点击连接到对应会话：**`
+          : "**点击连接到对应会话：**",
       },
       ...recentSessions.map((s) => {
         const isCurrentSession = s.id === currentSessionId
@@ -124,7 +131,11 @@ function buildSessionsCard(sessions: Session[], currentSessionId?: string): Reco
                 tag: "plain_text",
                 content: label,
               },
-              value: { action: "command_execute", command: `/connect ${s.id}` },
+              value: {
+                action: "session_connect",
+                menu: menuId,
+                command: `/connect ${s.id}`,
+              },
             },
           ],
         }
@@ -436,6 +447,16 @@ interface ModelMenuView {
   page: number
 }
 
+/** The session list card, so it can be updated in place. */
+interface SessionMenuEntry {
+  id: string
+  messageId: string
+  chatId: string
+  createdAt: number
+  /** The title of the bound session — shown after a connection. */
+  title?: string
+}
+
 /** The idle stop option card, so it can be updated in place. */
 interface IdleStopMenuEntry {
   id: string
@@ -468,6 +489,9 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
   /** The idle stop option cards, per chat. */
   const idleStopMenus = new Map<string, IdleStopMenuEntry>()
   const latestIdleStopByChat = new Map<string, string>()
+  /** The session list cards, per chat. */
+  const sessionMenus = new Map<string, SessionMenuEntry>()
+  const latestSessionMenuByChat = new Map<string, string>()
 
   const purgeModelMenus = (now = Date.now()): void => {
     for (const [id, entry] of modelMenus) {
@@ -537,6 +561,7 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
     feishuKey: string,
     chatId: string,
     messageId: string,
+    menuId?: string,
   ): Promise<void> {
     const sessions = (await opencode.listSessions({ directory: process.env.OPENCODE_CWD || process.cwd() })) as Session[]
     if (sessions.length === 0) {
@@ -563,11 +588,50 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
       }
     }
 
-    const card = buildSessionsCard(sessions, currentSessionId)
-    await feishuClient.replyMessage(messageId, {
+    // The card of this chat is refreshed instead of piling up new ones.
+    const latest = latestSessionMenuByChat.get(chatId)
+    const existing = menuId
+      ? sessionMenus.get(menuId)
+      : latest
+        ? sessionMenus.get(latest)
+        : undefined
+    const id = existing?.id ?? menuId ?? newMenuId()
+    const card = buildSessionsCard(sessions, currentSessionId, id)
+    await publishSessionCard(chatId, messageId, existing, card, id)
+  }
+
+  /** Put the session list on the chat — updating the one that is there. */
+  async function publishSessionCard(
+    chatId: string,
+    messageId: string,
+    existing: SessionMenuEntry | undefined,
+    card: Record<string, unknown>,
+    menuId: string,
+  ): Promise<void> {
+    if (existing) {
+      const res = await feishuClient.updateMessage(
+        existing.messageId,
+        JSON.stringify(card),
+      )
+      if (res.code === 0) return
+      logger.warn(`Could not update the session card: ${res.code} ${res.msg}`)
+    }
+    const res = await feishuClient.replyMessage(messageId, {
       msg_type: "interactive",
       content: JSON.stringify(card),
     })
+    const cardMessageId = res.data?.["message_id"] as string | undefined
+    if (!cardMessageId) {
+      logger.warn("The session card was sent but its message id is unknown")
+      return
+    }
+    sessionMenus.set(menuId, {
+      id: menuId,
+      messageId: cardMessageId,
+      chatId,
+      createdAt: Date.now(),
+    })
+    latestSessionMenuByChat.set(chatId, menuId)
   }
 
   async function handleConnect(
@@ -575,9 +639,10 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
     chatId: string,
     messageId: string,
     targetSessionId: string,
+    menuId?: string,
   ): Promise<void> {
-    const existing = await opencode.getSession(targetSessionId)
-    if (!existing) {
+    const target = await opencode.getSession(targetSessionId)
+    if (!target) {
       await replyText(chatId, messageId, "会话不存在。")
       return
     }
@@ -587,12 +652,29 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
 
     // Set new mapping
     const success = sessionManager.setMapping(feishuKey, targetSessionId)
-    if (success) {
-      logger.info(`/connect: bound ${feishuKey} to session ${targetSessionId}`)
-      await replyText(chatId, messageId, `已连接到会话: ${targetSessionId}`)
-    } else {
+    if (!success) {
       throw new Error("Failed to set session mapping")
     }
+    logger.info(`/connect: bound ${feishuKey} to session ${targetSessionId}`)
+
+    // The card stays where it is — it shows the session that is now bound.
+    const menu = menuId ? sessionMenus.get(menuId) : undefined
+    if (menu) {
+      const sessions = (await opencode
+        .listSessions({ directory: process.env.OPENCODE_CWD || process.cwd() })
+        .catch(() => [])) as Session[]
+      const current = await sessionManager.getExisting(feishuKey)
+      const label = target.title?.trim() ? truncateTitle(target.title) : targetSessionId
+      const card = buildSessionsCard(
+        sessions.length > 0 ? sessions : [{ id: targetSessionId }],
+        current ?? targetSessionId,
+        menu.id,
+        `✅ 已连接到 ${label}`,
+      )
+      await publishSessionCard(chatId, messageId, menu, card, menu.id)
+      return
+    }
+    await replyText(chatId, messageId, `已连接到会话: ${targetSessionId}`)
   }
 
   async function handleHelp(
@@ -1064,7 +1146,7 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
           return true
 
         case "/sessions":
-          await handleSessions(feishuKey, chatId, messageId)
+          await handleSessions(feishuKey, chatId, messageId, options?.menuId)
           return true
 
         case "/connect": {
@@ -1073,7 +1155,7 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
             await replyText(chatId, messageId, "用法: /connect {session_id}")
             return true
           }
-          await handleConnect(feishuKey, chatId, messageId, targetSessionId)
+          await handleConnect(feishuKey, chatId, messageId, targetSessionId, options?.menuId)
           return true
         }
 

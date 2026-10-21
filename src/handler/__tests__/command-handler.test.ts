@@ -408,6 +408,42 @@ describe("createCommandHandler", () => {
       expect(mockFeishuClient.replyMessage).toHaveBeenCalled()
     })
 
+    it("/sessions keeps its card, and connecting patches it in place", async () => {
+      mockFeishuClient.replyMessage = vi.fn().mockResolvedValue({
+        code: 0,
+        msg: "ok",
+        data: { message_id: "card-sessions" },
+      })
+      mockFeishuClient.updateMessage = vi.fn().mockResolvedValue({ code: 0, msg: "ok" })
+      mockGateway.listSessions = vi.fn().mockResolvedValue([
+        { id: "ses-a", title: "A", time: { created: 1, updated: Date.now() } },
+        { id: "ses-b", title: "B", time: { created: 1, updated: Date.now() } },
+      ])
+      mockGateway.getSession = vi.fn().mockResolvedValue({ id: "ses-b", title: "B" })
+      mockSessionManager.getExisting = vi.fn().mockResolvedValue(null)
+
+      const handler = createHandler()
+      await handler("chat-1", "chat-1", "msg-1", "/sessions")
+
+      // the card is sent once
+      expect(mockFeishuClient.replyMessage).toHaveBeenCalledTimes(1)
+      const card = JSON.parse((mockFeishuClient.replyMessage as any).mock.calls[0][1].content)
+      const button = card.elements
+        .filter((el: any) => el.tag === "action")
+        .flatMap((el: any) => el.actions)
+        .find((b: any) => b.value.command.includes("ses-b"))
+      expect(button.value.action).toBe("session_connect")
+      const menuId = button.value.menu
+
+      // the user clicks the session — the same card is patched
+      await handler("chat-1", "chat-1", "msg-1", "/connect ses-b", { menuId })
+
+      expect(mockFeishuClient.replyMessage).toHaveBeenCalledTimes(1)
+      expect(mockFeishuClient.updateMessage).toHaveBeenCalledTimes(1)
+      const patched = JSON.parse((mockFeishuClient.updateMessage as any).mock.calls[0][1])
+      expect(patched.elements[0].content).toContain("已连接到")
+    })
+
     it("/自动关闭 shows the options", async () => {
       mockFeishuClient.replyMessage = vi.fn().mockResolvedValue({
         code: 0,

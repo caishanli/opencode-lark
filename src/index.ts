@@ -354,25 +354,9 @@ async function main(): Promise<void> {
     if (actionType === "question_answer" || actionType === "permission_reply") {
       return interactiveHandler(action)
     }
-    if (actionType === "idle_stop") {
-      // The idle stop options are picked on the card itself — it is patched
-      // in place, never replaced by a new message.
-      const menuId = action.action?.value?.menu
-      const cmd = action.action?.value?.command
-      if (menuId && cmd) {
-        await commandHandler(
-          action.open_chat_id,
-          action.open_chat_id,
-          action.open_message_id,
-          cmd,
-          { menuId },
-        )
-      }
-      return
-    }
-    if (actionType === "model_menu") {
-      // The model menu navigates inside the card it was drawn on — the card
-      // is patched in place, never replaced by a new message.
+    if (actionType === "idle_stop" || actionType === "model_menu" || actionType === "session_connect") {
+      // These menus navigate inside the card they were drawn on — the card is
+      // patched in place, never replaced by a new message.
       const menuId = action.action?.value?.menu
       const cmd = action.action?.value?.command
       if (menuId && cmd) {
