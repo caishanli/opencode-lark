@@ -363,6 +363,7 @@ describe("createCommandHandler", () => {
         idleTimeoutMinutes: vi.fn(() => 30),
         setIdleTimeoutMinutes: vi.fn(),
         stop: vi.fn().mockResolvedValue(undefined),
+        upgradeOpencode: vi.fn().mockResolvedValue({ success: true, output: "upgraded to v2.0.33" }),
       }
       const handler = createHandler(undefined, mockGateway, { supervisor } as any)
 
@@ -376,7 +377,7 @@ describe("createCommandHandler", () => {
       // the user clicks the update button
       await handler("chat-1", "chat-1", "msg-1", "/更新", { menuId })
 
-      expect(mockGateway.upgradeOpencode).toHaveBeenCalledWith(undefined)
+      expect(supervisor.upgradeOpencode).toHaveBeenCalledWith(undefined)
       // the server is stopped so the next message starts the new version
       expect(supervisor.stop).toHaveBeenCalled()
       // the result is shown on the menu card

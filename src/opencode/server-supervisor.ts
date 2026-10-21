@@ -68,6 +68,8 @@ export interface ServerSupervisor {
   idleTimeoutMinutes(): number
   /** Set the idle timeout in minutes (0 = the server is never stopped). */
   setIdleTimeoutMinutes(minutes: number): void
+  /** Upgrade the opencode installation (runs its own CLI). */
+  upgradeOpencode(target?: string): Promise<{ success: boolean; output: string }>
 }
 
 const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
@@ -213,6 +215,46 @@ export function createServerSupervisor(options: ServerSupervisorOptions): Server
       if (existsSync(candidate)) return candidate
     }
     return null
+  }
+
+  /**
+   * Upgrade opencode by running its own CLI — the server has no upgrade
+   * endpoint (opencode 2.0.32 answers 404 on /api/global/upgrade).
+   */
+  const upgradeOpencode = async (
+    target?: string,
+  ): Promise<{ success: boolean; output: string }> => {
+    const binary = resolveCommand(options.command)
+    if (!binary) {
+      return { success: false, output: `找不到 ${options.command} 可执行文件` }
+    }
+    const args = target ? ["upgrade", target] : ["upgrade"]
+    logger.info(`Upgrading opencode: ${binary} ${args.join(" ")}`)
+    return new Promise((resolve) => {
+      let output = ""
+      let done = false
+      const finish = (success: boolean): void => {
+        if (done) return
+        done = true
+        resolve({ success, output: output.trim() })
+      }
+      try {
+        const proc = spawn(binary, args, { stdio: ["ignore", "pipe", "pipe"] })
+        proc.stdout?.on("data", (chunk) => {
+          output += chunk.toString()
+        })
+        proc.stderr?.on("data", (chunk) => {
+          output += chunk.toString()
+        })
+        proc.on("error", (err) => {
+          output += String(err)
+          finish(false)
+        })
+        proc.on("close", (code) => finish(code === 0))
+      } catch (err) {
+        resolve({ success: false, output: String(err) })
+      }
+    })
   }
 
   const startServer = async (): Promise<boolean> => {
@@ -400,6 +442,7 @@ export function createServerSupervisor(options: ServerSupervisorOptions): Server
     ensureRunning,
     stop,
     isRunning: ping,
+    upgradeOpencode,
     async whenRunning() {
       if (await ping()) return
       await new Promise<void>((resolve) => waiters.push(resolve))

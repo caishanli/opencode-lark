@@ -36,6 +36,8 @@ export interface CommandHandlerDeps {
     setIdleTimeoutMinutes(minutes: number): void
     /** Stop the server (it is started again on demand). */
     stop?(): Promise<void>
+    /** Upgrade the opencode installation. */
+    upgradeOpencode?(target?: string): Promise<{ success: boolean; output: string }>
   }
 }
 
@@ -933,9 +935,15 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
       await publishMenuCard(chatId, messageId, existing, card, existing.id)
     }
 
-    let result: { success: boolean; version?: string; error?: string }
+    const upgrade = deps.supervisor?.upgradeOpencode
+    if (!upgrade) {
+      await replyText(chatId, messageId, "这个命令不可用：桥没有管理 opencode 进程")
+      return
+    }
+
+    let result: { success: boolean; output: string }
     try {
-      result = await opencode.upgradeOpencode(target || undefined)
+      result = await upgrade(target || undefined)
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       await replyText(chatId, messageId, `更新失败：${message}`)
@@ -943,7 +951,15 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
     }
 
     if (!result.success) {
-      const message = `更新失败：${result.error ?? "未知错误"}`
+      // The CLI draws a spinner with escape codes — strip them.
+      const plain = result.output.replace(/\u001b\[[0-9;?]*[a-zA-Z]/g, "")
+      const detail = plain
+        .split("\n")
+        .map((l) => l.replace(/[◒◐◓◑◍]/g, "").trim())
+        .filter(Boolean)
+        .slice(-2)
+        .join(" ")
+      const message = `更新失败${detail ? `：${detail}` : ""}`
       if (existing) {
         const card = buildHelpCard([], existing.id, `❌ ${message}`)
         await publishMenuCard(chatId, messageId, existing, card, existing.id)
@@ -957,9 +973,11 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
     // message starts the new version.
     await deps.supervisor?.stop?.().catch(() => {})
 
-    const text = `✅ 已更新到 ${result.version ?? "最新版本"}，opencode 会在下次使用时重启`
+    // The CLI prints "From 2.0.32 → 2.1.2" — the new version is the last one.
+    const version = result.output.match(/v?\d+\.\d+\.\d+/g)?.at(-1)
+    const text = `✅ 已更新到 ${version ?? "最新版本"}，opencode 会在下次使用时重启`
     if (existing) {
-      const card = buildHelpCard([], existing.id, `✅ 已更新到 ${result.version ?? "最新版本"}（下次使用时生效）`)
+      const card = buildHelpCard([], existing.id, `✅ 已更新到 ${version ?? "最新版本"}（下次使用时生效）`)
       await publishMenuCard(chatId, messageId, existing, card, existing.id)
       return
     }

@@ -98,8 +98,6 @@ export interface OpencodeGateway {
   listModels(): Promise<ModelInfo[]>
   /** The context window of a model, in tokens (undefined if unknown). */
   modelContextLimit(providerID: string, modelID: string): Promise<number | undefined>
-  /** Upgrade the opencode installation. Returns the new version. */
-  upgradeOpencode(target?: string): Promise<{ success: boolean; version?: string; error?: string }>
   /** Compact the conversation of a session (drops the old turns). */
   compactSession(sessionID: string): Promise<void>
   /** Fetch the context windows of all models, so the first lookup is instant. */
@@ -252,25 +250,6 @@ export function createOpencodeGateway(options: OpencodeGatewayOptions): Opencode
     async compactSession(sessionID) {
       const res = await client.v2.session.compact({ sessionID })
       throwIfError(res, "compact")
-    },
-    async upgradeOpencode(target) {
-      const res = await client.v2.global.upgrade(
-        target ? { target } : undefined,
-      )
-      const body = unwrap(res) as
-        | { success?: boolean; version?: string; error?: string }
-        | undefined
-      if (res?.error) {
-        return { success: false, error: errorText(res, "the upgrade failed") }
-      }
-      if (!body || typeof body !== "object") {
-        return { success: false, error: "the server did not report a result" }
-      }
-      return {
-        success: body.success === true,
-        ...(typeof body.version === "string" ? { version: body.version } : {}),
-        ...(typeof body.error === "string" ? { error: body.error } : {}),
-      }
     },
     async warmModelLimits() {
       await loadModelLimits()
