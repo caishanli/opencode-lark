@@ -396,41 +396,69 @@ describe("createCommandHandler", () => {
       expect(mockFeishuClient.replyMessage).toHaveBeenCalled()
     })
 
-    it("/自动关闭 toggles the automatic stop of the server", async () => {
-      mockFeishuClient.replyMessage = vi.fn().mockResolvedValue({ code: 0, msg: "ok" })
-      let enabled = true
+    it("/自动关闭 shows the options", async () => {
+      mockFeishuClient.replyMessage = vi.fn().mockResolvedValue({
+        code: 0,
+        msg: "ok",
+        data: { message_id: "card-1" },
+      })
       const supervisor = {
-        isIdleWatchEnabled: vi.fn(() => enabled),
-        setIdleWatchEnabled: vi.fn((v: boolean) => {
-          enabled = v
-        }),
+        isIdleWatchEnabled: vi.fn(() => true),
+        setIdleWatchEnabled: vi.fn(),
+        idleTimeoutMinutes: vi.fn(() => 30),
+        setIdleTimeoutMinutes: vi.fn(),
       }
       const handler = createHandler(undefined, mockGateway, { supervisor } as any)
 
       const result = await handler("chat-1", "chat-1", "msg-1", "/自动关闭")
 
       expect(result).toBe(true)
-      expect(supervisor.setIdleWatchEnabled).toHaveBeenCalledWith(false)
       const call = (mockFeishuClient.replyMessage as any).mock.calls[0]
-      expect(JSON.parse(call[1].content).text).toContain("已关闭")
+      const content = JSON.parse(call[1].content)
+      expect(content.header?.title?.content).toContain("自动关闭")
+      const buttons = content.elements
+        .filter((el: any) => el.tag === "action")
+        .flatMap((el: any) => el.actions)
+      expect(buttons.map((b: any) => b.text.content)).toEqual([
+        "不关闭",
+        "15 分钟",
+        "✅ 30 分钟",
+        "60 分钟",
+      ])
+      expect(buttons[1].value.command).toBe("/自动关闭 15")
     })
 
-    it("/自动关闭 on turns the automatic stop on", async () => {
+    it("/自动关闭 15 sets the timeout", async () => {
       mockFeishuClient.replyMessage = vi.fn().mockResolvedValue({ code: 0, msg: "ok" })
-      let enabled = false
       const supervisor = {
-        isIdleWatchEnabled: vi.fn(() => enabled),
-        setIdleWatchEnabled: vi.fn((v: boolean) => {
-          enabled = v
-        }),
+        isIdleWatchEnabled: vi.fn(() => true),
+        setIdleWatchEnabled: vi.fn(),
+        idleTimeoutMinutes: vi.fn(() => 30),
+        setIdleTimeoutMinutes: vi.fn(),
       }
       const handler = createHandler(undefined, mockGateway, { supervisor } as any)
 
-      await handler("chat-1", "chat-1", "msg-1", "/自动关闭 on")
+      const result = await handler("chat-1", "chat-1", "msg-1", "/自动关闭 15")
 
-      expect(supervisor.setIdleWatchEnabled).toHaveBeenCalledWith(true)
+      expect(result).toBe(true)
+      expect(supervisor.setIdleTimeoutMinutes).toHaveBeenCalledWith(15)
       const call = (mockFeishuClient.replyMessage as any).mock.calls[0]
-      expect(JSON.parse(call[1].content).text).toContain("已开启")
+      expect(JSON.parse(call[1].content).text).toContain("15 分钟")
+    })
+
+    it("/自动关闭 0 never stops the server", async () => {
+      mockFeishuClient.replyMessage = vi.fn().mockResolvedValue({ code: 0, msg: "ok" })
+      const supervisor = {
+        isIdleWatchEnabled: vi.fn(() => true),
+        setIdleWatchEnabled: vi.fn(),
+        idleTimeoutMinutes: vi.fn(() => 30),
+        setIdleTimeoutMinutes: vi.fn(),
+      }
+      const handler = createHandler(undefined, mockGateway, { supervisor } as any)
+
+      await handler("chat-1", "chat-1", "msg-1", "/自动关闭 off")
+
+      expect(supervisor.setIdleTimeoutMinutes).toHaveBeenCalledWith(0)
     })
 
     it("/models is an alias of /模型", async () => {

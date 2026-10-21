@@ -32,6 +32,8 @@ export interface CommandHandlerDeps {
   supervisor?: {
     isIdleWatchEnabled(): boolean
     setIdleWatchEnabled(enabled: boolean): void
+    idleTimeoutMinutes(): number
+    setIdleTimeoutMinutes(minutes: number): void
   }
 }
 
@@ -177,7 +179,7 @@ function buildHelpCard(opencodeCommands: { name: string; description?: string }[
       },
       {
         tag: "markdown",
-        content: "_打字命令：`/connect <会话ID>` · `/模型 [provider] [页码]` · `/自动关闭 [on|off]` · `/help`_",
+        content: "_打字命令：`/connect <会话ID>` · `/模型 [provider] [页码]` · `/自动关闭 [不关闭|15|30|60]` · `/help`_",
       },
       ...buildOpencodeCommandElements(opencodeCommands),
     ],
@@ -240,6 +242,19 @@ function describeCurrentModel(
     currentName: found?.name ?? model.id,
     currentProvider: providerID,
   }
+}
+
+/** The idle stop options: 0 = never, otherwise the minutes. */
+function parseIdleStopValue(value: string): number | null {
+  if (["off", "关", "关闭", "停用", "never", "不关闭", "false", "0"].includes(value)) return 0
+  const minutes = Number(value.replace(/\D/g, ""))
+  if (!Number.isFinite(minutes)) return null
+  if (![0, 15, 30, 60].includes(minutes)) return null
+  return minutes
+}
+
+function describeIdleStop(minutes: number): string {
+  return minutes > 0 ? `${minutes} 分钟空闲后自动关闭` : "不自动关闭（一直开着）"
 }
 
 /**
@@ -416,6 +431,14 @@ interface ModelMenuView {
   page: number
 }
 
+/** The idle stop option card, so it can be updated in place. */
+interface IdleStopMenuEntry {
+  id: string
+  messageId: string
+  chatId: string
+  createdAt: number
+}
+
 /** A model menu card that can be updated in place. */
 interface ModelMenuEntry {
   id: string
@@ -437,6 +460,9 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
   // per chat so that typing /模型 again refreshes the same card.
   const modelMenus = new Map<string, ModelMenuEntry>()
   const latestMenuByChat = new Map<string, string>()
+  /** The idle stop option cards, per chat. */
+  const idleStopMenus = new Map<string, IdleStopMenuEntry>()
+  const latestIdleStopByChat = new Map<string, string>()
 
   const purgeModelMenus = (now = Date.now()): void => {
     for (const [id, entry] of modelMenus) {
@@ -589,6 +615,7 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
     chatId: string,
     messageId: string,
     argument: string,
+    menuId?: string,
   ): Promise<void> {
     const supervisor = deps.supervisor
     if (!supervisor) {
@@ -597,31 +624,128 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
     }
 
     const value = argument.trim().toLowerCase()
-    const enabled = supervisor.isIdleWatchEnabled()
+    const current = supervisor.idleTimeoutMinutes()
 
+    // Without a value: show the options.
     if (!value) {
-      supervisor.setIdleWatchEnabled(!enabled)
-      await replyText(
-        chatId,
-        messageId,
-        supervisor.isIdleWatchEnabled()
-          ? "已开启：opencode 空闲 30 分钟会被自动关掉（有消息时自动拉起）"
-          : "已关闭：opencode 会一直开着",
-      )
+      // The card of this chat is refreshed instead of piling up new ones.
+      const latest = latestIdleStopByChat.get(chatId)
+      const existing = menuId
+        ? idleStopMenus.get(menuId)
+        : latest
+          ? idleStopMenus.get(latest)
+          : undefined
+      const id = existing?.id ?? menuId ?? newMenuId()
+      const card = buildIdleStopCard(current, id)
+      await publishIdleStopCard(chatId, messageId, existing, card, id)
       return
     }
 
-    if (["on", "开", "开启", "启用", "true", "1"].includes(value)) {
-      supervisor.setIdleWatchEnabled(true)
-      await replyText(chatId, messageId, "已开启：opencode 空闲 30 分钟会被自动关掉")
+    // With a value: apply it.
+    const minutes = parseIdleStopValue(value)
+    if (minutes === null) {
+      await replyText(chatId, messageId, "用法：/自动关闭 [不关闭|15|30|60]")
       return
     }
-    if (["off", "关", "关闭", "停用", "false", "0"].includes(value)) {
-      supervisor.setIdleWatchEnabled(false)
-      await replyText(chatId, messageId, "已关闭：opencode 会一直开着")
+    supervisor.setIdleTimeoutMinutes(minutes)
+
+    const existing = menuId ? idleStopMenus.get(menuId) : undefined
+    if (existing) {
+      // The card stays where it is — it shows the new setting.
+      const card = buildIdleStopCard(
+        supervisor.idleTimeoutMinutes(),
+        existing.id,
+        `✅ 已设为 ${describeIdleStop(supervisor.idleTimeoutMinutes())}`,
+      )
+      await publishIdleStopCard(chatId, messageId, existing, card, existing.id)
       return
     }
-    await replyText(chatId, messageId, "用法：/自动关闭 [on|off]（不带参数就是切换）")
+    await replyText(chatId, messageId, `已设为 ${describeIdleStop(minutes)}`)
+  }
+
+  /**
+   * The idle stop options: never, 15, 30 or 60 minutes.
+   */
+  function buildIdleStopCard(
+    current: number,
+    menuId: string,
+    notice?: string,
+  ): { card: Record<string, unknown>; menuId: string } {
+    const options = [0, 15, 30, 60]
+    const elements: Record<string, unknown>[] = [
+      {
+        tag: "markdown",
+        content: notice
+          ? `${notice}\n**当前：${describeIdleStop(current)}**`
+          : `**当前：${describeIdleStop(current)}**\n空闲多久后自动关掉 opencode：`,
+      },
+      {
+        tag: "action",
+        actions: options.map((minutes) => {
+          const label = minutes === 0 ? "不关闭" : `${minutes} 分钟`
+          const isCurrent = minutes === current
+          return {
+            tag: "button",
+            text: { tag: "plain_text", content: isCurrent ? `✅ ${label}` : label },
+            type: isCurrent ? "primary" : "default",
+            value: {
+              action: "idle_stop",
+              menu: menuId,
+              command: `/自动关闭 ${minutes}`,
+            },
+          }
+        }),
+      },
+      {
+        tag: "markdown",
+        content: "_点一个就切换；关掉后 opencode 一直开着，有消息也不受影响_",
+      },
+    ]
+    return {
+      menuId,
+      card: {
+        config: { wide_screen_mode: true },
+        header: {
+          title: { tag: "plain_text", content: "🛌 自动关闭" },
+          template: "blue",
+        },
+        elements,
+      },
+    }
+  }
+
+  /** Put the options card on the chat — updating the one that is there. */
+  async function publishIdleStopCard(
+    chatId: string,
+    messageId: string,
+    existing: IdleStopMenuEntry | undefined,
+    built: { card: Record<string, unknown>; menuId: string },
+    menuId: string,
+  ): Promise<void> {
+    if (existing) {
+      const res = await feishuClient.updateMessage(
+        existing.messageId,
+        JSON.stringify(built.card),
+      )
+      if (res.code === 0) return
+      logger.warn(`Could not update the idle stop card: ${res.code} ${res.msg}`)
+    }
+    const res = await feishuClient.replyMessage(messageId, {
+      msg_type: "interactive",
+      content: JSON.stringify(built.card),
+    })
+    const cardMessageId = res.data?.["message_id"] as string | undefined
+    if (!cardMessageId) {
+      logger.warn("The idle stop card was sent but its message id is unknown")
+      return
+    }
+    idleStopMenus.set(menuId, {
+      id: menuId,
+      messageId: cardMessageId,
+      chatId,
+      createdAt: Date.now(),
+    })
+    latestIdleStopByChat.set(chatId, menuId)
   }
 
   /**
@@ -946,7 +1070,12 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
 
         case "/自动关闭":
         case "/autostop":
-          await handleIdleStop(chatId, messageId, parts.slice(1).join(" "))
+          await handleIdleStop(
+            chatId,
+            messageId,
+            parts.slice(1).join(" "),
+            options?.menuId,
+          )
           return true
 
         case "/模型":

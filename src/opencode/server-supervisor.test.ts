@@ -151,32 +151,38 @@ describe("server supervisor", () => {
     expect(messages.join(" ")).toContain("definitely-not-a-real-binary-xyz")
   })
 
-  it("remembers that the idle stop was switched off", async () => {
+  it("remembers the idle timeout", async () => {
     const stateFile = "/tmp/opencode/supervisor-state-test.json"
     rmSync(stateFile, { force: true })
     const { supervisor: sup } = makeSupervisor({ stateFile })
+    expect(sup.idleTimeoutMinutes()).toBe(30)
     expect(sup.isIdleWatchEnabled()).toBe(true)
-    sup.setIdleWatchEnabled(false)
-    expect(sup.isIdleWatchEnabled()).toBe(false)
-    expect(JSON.parse(readFileSync(stateFile, "utf-8")).enabled).toBe(false)
 
-    // a new process reads the switch back
-    const next = createServerSupervisor({
-      command: "opencode",
-      args: [],
-      pidFile: PID_FILE,
-      stateFile,
-      idleTimeoutMs: 1000,
-      opencode: createMockGateway(),
-      logger: createMockLogger(),
-    })
+    sup.setIdleTimeoutMinutes(15)
+    expect(sup.idleTimeoutMinutes()).toBe(15)
+    expect(JSON.parse(readFileSync(stateFile, "utf-8")).idleTimeoutMinutes).toBe(15)
+
+    // a new process reads it back
+    const next = makeSupervisor({ stateFile }).supervisor
+    expect(next.idleTimeoutMinutes()).toBe(15)
+  })
+
+  it("remembers that the server should never be stopped", async () => {
+    const stateFile = "/tmp/opencode/supervisor-state-test3.json"
+    rmSync(stateFile, { force: true })
+    const { supervisor: sup } = makeSupervisor({ stateFile })
+    sup.setIdleTimeoutMinutes(0)
+    expect(sup.isIdleWatchEnabled()).toBe(false)
+    expect(JSON.parse(readFileSync(stateFile, "utf-8")).idleTimeoutMinutes).toBe(0)
+
+    const next = makeSupervisor({ stateFile }).supervisor
     expect(next.isIdleWatchEnabled()).toBe(false)
   })
 
-  it("does not start the idle watch when it is switched off", async () => {
+  it("does not start the idle watch when the server should never be stopped", async () => {
     const stateFile = "/tmp/opencode/supervisor-state-test2.json"
     rmSync(stateFile, { force: true })
-    writeFileSync(stateFile, JSON.stringify({ enabled: false }))
+    writeFileSync(stateFile, JSON.stringify({ idleTimeoutMinutes: 0 }))
     const { supervisor: sup } = makeSupervisor({
       stateFile,
       idleTimeoutMs: 100,

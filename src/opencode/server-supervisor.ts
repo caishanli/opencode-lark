@@ -63,6 +63,10 @@ export interface ServerSupervisor {
   isIdleWatchEnabled(): boolean
   /** Turn the automatic stop on or off (remembered across restarts). */
   setIdleWatchEnabled(enabled: boolean): void
+  /** How long the server may sit idle before it is stopped (0 = never). */
+  idleTimeoutMinutes(): number
+  /** Set the idle timeout in minutes (0 = the server is never stopped). */
+  setIdleTimeoutMinutes(minutes: number): void
 }
 
 const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
@@ -73,8 +77,11 @@ export function createServerSupervisor(options: ServerSupervisorOptions): Server
   const readyTimeoutMs = options.readyTimeoutMs ?? 20_000
 
   let child: ChildProcess | null = null
-  /** Whether the server is stopped automatically when it goes idle. */
-  let idleWatchEnabled = readIdleWatchEnabled()
+  /** How long the server may sit idle before it is stopped (0 = never). */
+  let idleTimeoutMs = (() => {
+    const remembered = readIdleTimeoutMinutes()
+    return remembered === null ? options.idleTimeoutMs : remembered * 60_000
+  })()
   let starting: Promise<boolean> | null = null
   let stoppedOnPurpose = false
   /** When the server was last seen without any work in flight. */
@@ -82,23 +89,30 @@ export function createServerSupervisor(options: ServerSupervisorOptions): Server
   let timer: ReturnType<typeof setInterval> | null = null
   const waiters: Array<() => void> = []
 
-  /** The switch is remembered, so it survives a restart of the bridge. */
-  function readIdleWatchEnabled(): boolean {
-    if (!options.stateFile || !existsSync(options.stateFile)) return true
+  /** The timeout is remembered, so it survives a restart of the bridge. */
+  function readIdleTimeoutMinutes(): number | null {
+    if (!options.stateFile || !existsSync(options.stateFile)) return null
     try {
-      const parsed = JSON.parse(readFileSync(options.stateFile, "utf-8")) as { enabled?: unknown }
-      return parsed?.enabled !== false
+      const parsed = JSON.parse(readFileSync(options.stateFile, "utf-8")) as {
+        idleTimeoutMinutes?: unknown
+      }
+      const minutes = Number(parsed?.idleTimeoutMinutes)
+      if (Number.isFinite(minutes) && minutes >= 0) return minutes
     } catch {
-      return true
+      // a broken state file just means the default
     }
+    return null
   }
 
-  function writeIdleWatchEnabled(): void {
+  function writeIdleTimeoutMinutes(minutes: number): void {
     if (!options.stateFile) return
     try {
-      writeFileSync(options.stateFile, JSON.stringify({ enabled: idleWatchEnabled }, null, 2))
+      writeFileSync(
+        options.stateFile,
+        JSON.stringify({ idleTimeoutMinutes: minutes }, null, 2),
+      )
     } catch (err) {
-      logger.warn(`Could not remember the idle stop switch: ${err}`)
+      logger.warn(`Could not remember the idle timeout: ${err}`)
     }
   }
 
@@ -320,7 +334,7 @@ export function createServerSupervisor(options: ServerSupervisorOptions): Server
   }
 
   const tick = async (): Promise<void> => {
-    if (options.idleTimeoutMs <= 0) return
+    if (idleTimeoutMs <= 0) return
     if (!(await ping())) {
       // The server is down (stopped on purpose, or it died).
       idleSince = null
@@ -333,12 +347,12 @@ export function createServerSupervisor(options: ServerSupervisorOptions): Server
     if (idleSince === null) {
       idleSince = Date.now()
       logger.info(
-        `The opencode server is idle — it will be stopped in ${Math.round(options.idleTimeoutMs / 60_000)} minutes`,
+        `The opencode server is idle — it will be stopped in ${Math.round(idleTimeoutMs / 60_000)} minutes`,
       )
       return
     }
     const idleMs = Date.now() - idleSince
-    if (idleMs >= options.idleTimeoutMs) {
+    if (idleMs >= idleTimeoutMs) {
       logger.info(
         `The opencode server has been idle for ${Math.round(idleMs / 60_000)} minutes — stopping it`,
       )
@@ -346,8 +360,22 @@ export function createServerSupervisor(options: ServerSupervisorOptions): Server
     }
   }
 
+  const setIdleTimeoutMinutes = (minutes: number): void => {
+    const value = Math.max(0, Math.round(minutes))
+    if (value * 60_000 === idleTimeoutMs) return
+    idleTimeoutMs = value * 60_000
+    writeIdleTimeoutMinutes(value)
+    if (value > 0) {
+      logger.info(`The opencode server is stopped after ${value} minutes of inactivity`)
+      startIdleWatch()
+    } else {
+      logger.info("The idle stop is off — the server stays up")
+      stopIdleWatch()
+    }
+  }
+
   const startIdleWatch = (): void => {
-    if (!idleWatchEnabled) {
+    if (idleTimeoutMs <= 0) {
       logger.info("The idle watch is off — the server stays up")
       return
     }
@@ -356,7 +384,7 @@ export function createServerSupervisor(options: ServerSupervisorOptions): Server
       void tick().catch((err) => logger.warn(`The idle watch failed: ${err}`))
     }, checkIntervalMs)
     logger.info(
-      `Idle watch started (check every ${Math.round(checkIntervalMs / 1000)}s, stop after ${Math.round(options.idleTimeoutMs / 60_000)} minutes of inactivity)`,
+      `Idle watch started (check every ${Math.round(checkIntervalMs / 1000)}s, stop after ${Math.round(idleTimeoutMs / 60_000)} minutes of inactivity)`,
     )
   }
 
@@ -378,18 +406,11 @@ export function createServerSupervisor(options: ServerSupervisorOptions): Server
     isStoppedOnPurpose: () => stoppedOnPurpose,
     startIdleWatch,
     stopIdleWatch,
-    isIdleWatchEnabled: () => idleWatchEnabled,
+    isIdleWatchEnabled: () => idleTimeoutMs > 0,
     setIdleWatchEnabled(enabled: boolean) {
-      if (idleWatchEnabled === enabled) return
-      idleWatchEnabled = enabled
-      writeIdleWatchEnabled()
-      if (enabled) {
-        logger.info("The idle stop is on — the server is stopped when it goes idle")
-        startIdleWatch()
-      } else {
-        logger.info("The idle stop is off — the server stays up")
-        stopIdleWatch()
-      }
+      setIdleTimeoutMinutes(enabled ? Math.round(idleTimeoutMs / 60_000) || 30 : 0)
     },
+    idleTimeoutMinutes: () => Math.round(idleTimeoutMs / 60_000),
+    setIdleTimeoutMinutes,
   }
 }
