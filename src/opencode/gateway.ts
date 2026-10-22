@@ -248,7 +248,12 @@ export function createOpencodeGateway(options: OpencodeGatewayOptions): Opencode
       })) as ModelInfo[]
     },
     async compactSession(sessionID) {
-      const res = await client.v2.session.compact({ sessionID })
+      // The generated wrapper declares no body, but opencode v2 requires a
+      // JSON object here: without one it answers
+      // 400 {"message":"Expected object","kind":"Payload"}. The wrapper
+      // spreads `options` straight into the request, so `body` passes
+      // through; the cast is only needed because the types omit it.
+      const res = await (client.v2.session as any).compact({ sessionID }, { body: {} })
       throwIfError(res, "compact")
     },
     async warmModelLimits() {

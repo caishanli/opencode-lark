@@ -61,6 +61,30 @@ describe("gateway: session ops", () => {
     expect(JSON.parse(body)).toEqual({ text: "hi", files: [{ uri: "file:///tmp/a.png", name: "a.png" }], delivery: "queue" })
   })
 
+  it("compactSession posts an object body (server 400s without one)", async () => {
+    // The generated SDK wrapper declares only { sessionID }, but the server
+    // requires a JSON body: without one it answers
+    // 400 {"_tag":"InvalidRequestError","message":"Expected object"}.
+    let sent = ""
+    const fetchImpl = vi.fn(async (req: Request) => {
+      sent = await req.text()
+      if (!sent) {
+        return new Response(JSON.stringify({ _tag: "InvalidRequestError", message: "Expected object", kind: "Payload" }), {
+          status: 400, headers: { "content-type": "application/json" },
+        })
+      }
+      return new Response(JSON.stringify({ data: { type: "compaction" } }), {
+        status: 200, headers: { "content-type": "application/json" },
+      })
+    })
+    const gw = createOpencodeGateway({ baseUrl: "http://x", password: "pw", fetch: fetchImpl as any })
+    await expect(gw.compactSession("ses_1")).resolves.toBeUndefined()
+    const req = fetchImpl.mock.calls[0][0] as Request
+    expect(req.url).toBe("http://x/api/session/ses_1/compact")
+    expect(req.method).toBe("POST")
+    expect(JSON.parse(sent)).toEqual({})
+  })
+
   it("messages passes type via $query_type", async () => {
     const fetchImpl = makeFetch({ data: [{ id: "m1", type: "assistant" }], cursor: null })
     const gw = createOpencodeGateway({ baseUrl: "http://x", password: "pw", fetch: fetchImpl as any })
