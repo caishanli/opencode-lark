@@ -9,10 +9,13 @@
 import type { SessionManager } from "../session/session-manager.js"
 import type { StreamingBridge } from "./streaming-integration.js"
 import type { EventProcessor } from "../streaming/event-processor.js"
-import type { EventListenerMap } from "../utils/event-listeners.js"
+import { addListener, removeListener, type EventListenerMap } from "../utils/event-listeners.js"
 import type { FeishuApiClient } from "../feishu/api-client.js"
 import type { Logger } from "../utils/logger.js"
 import type { ModelInfo, OpencodeGateway } from "../opencode/gateway.js"
+import { eventPayload } from "../opencode/events.js"
+import { toFeishuMarkdown } from "../feishu/markdown.js"
+import { formatTokens } from "../streaming/usage.js"
 
 // ── Dependency injection interface ──
 
@@ -603,6 +606,118 @@ interface ModelMenuEntry {
   view: ModelMenuView
 }
 
+// ── Compaction card ──
+
+type CompactionCardStatus = "running" | "waiting" | "done" | "failed"
+
+interface CompactionCardState {
+  status: CompactionCardStatus
+  /** The handoff summary opencode wrote — the actual result of the compaction. */
+  summary?: string
+  /** Tokens the summarization itself used. */
+  input?: number
+  output?: number
+  error?: string
+}
+
+/** A /compact can sit in opencode's queue for a while; warn, don't fail. */
+const COMPACTION_WARN_MS = 5 * 60_000
+/** After this long nothing is coming. */
+const COMPACTION_GIVE_UP_MS = 30 * 60_000
+
+/**
+ * The compaction report. It is honest about the state: the request returns
+ * long before the summary exists, so "running" is not "done".
+ */
+function buildCompactionCard(state: CompactionCardState): Record<string, unknown> {
+  const titles: Record<CompactionCardStatus, string> = {
+    running: "🗜 正在压缩…",
+    waiting: "⏳ 压缩还没有结果",
+    done: "✅ 会话已压缩",
+    failed: "❌ 压缩失败",
+  }
+  const templates: Record<CompactionCardStatus, string> = {
+    running: "blue",
+    waiting: "orange",
+    done: "green",
+    failed: "red",
+  }
+
+  const elements: Record<string, unknown>[] = []
+  if (state.status === "done") {
+    const usage = `${formatTokens(state.input ?? 0)} in · ${formatTokens(state.output ?? 0)} out`
+    elements.push({ tag: "markdown", content: `**${usage}**` })
+    if (state.summary) {
+      elements.push({
+        tag: "collapsible_panel",
+        expanded: false,
+        background_color: "grey-50",
+        border: { color: "grey", corner_radius: "8px" },
+        padding: "8px 8px 8px 8px",
+        header: {
+          title: { tag: "plain_text", content: "📄 压缩摘要" },
+          vertical_align: "center",
+          padding: "8px 8px 8px 8px",
+          icon: {
+            tag: "standard_icon",
+            token: "down-small-ccm_outlined",
+            color: "grey",
+            size: "16px 16px",
+          },
+          icon_position: "right",
+          icon_expanded_angle: -180,
+        },
+        elements: [
+          { tag: "markdown", content: toFeishuMarkdown(state.summary) },
+        ],
+      })
+    }
+  } else if (state.status === "failed") {
+    elements.push({ tag: "markdown", content: state.error || "未知错误" })
+  } else if (state.status === "waiting") {
+    elements.push({
+      tag: "markdown",
+      content: "服务端还没有报告结果，压缩可能仍在排队。结果出来后会更新这张卡。",
+    })
+  } else {
+    elements.push({
+      tag: "markdown",
+      content: "opencode 正在生成摘要，完成后这里会显示结果。",
+    })
+  }
+
+  return {
+    config: { wide_screen_mode: true },
+    header: {
+      title: { tag: "plain_text", content: titles[state.status] },
+      template: templates[state.status],
+    },
+    elements,
+  }
+}
+
+/** opencode's failure payloads are not consistent: a message, a string, ... */
+function compactionErrorMessage(error: unknown): string {
+  if (typeof error === "string") return error
+  if (error && typeof error === "object") {
+    const message = (error as { message?: unknown }).message
+    if (typeof message === "string" && message) return message
+  }
+  return "未知错误"
+}
+
+/** The compaction a card is waiting for. */
+interface PendingCompaction {
+  sessionId: string
+  /** The card to patch when the result arrives. */
+  cardMessageId?: string
+  settled: boolean
+  listener: (event: unknown) => void
+  warnTimer?: ReturnType<typeof setTimeout>
+  giveUpTimer?: ReturnType<typeof setTimeout>
+  settle: (state: CompactionCardState) => void
+}
+
 // ── Factory ──
 
 export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
@@ -621,6 +736,8 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
   /** The command menu cards — they turn into the session list on a click. */
   const menuCards = new Map<string, MenuCardEntry>()
   const latestMenuCardByChat = new Map<string, string>()
+  /** Compactions whose result has not arrived yet, keyed by session. */
+  const pendingCompactions = new Map<string, PendingCompaction>()
 
   /**
    * Answer on the menu card the user clicked, instead of sending a new
@@ -940,8 +1057,43 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
   }
 
   /**
+   * Show the compaction report in the card the command came from, or in a
+   * new card when it was typed as a plain message. Returns the card's
+   * message id so the result can be patched into it later.
+   */
+  async function sendCompactionCard(
+    chatId: string,
+    messageId: string,
+    menuId: string | undefined,
+    card: Record<string, unknown>,
+  ): Promise<string | undefined> {
+    const existing = findMenuCard(menuId)
+    if (existing) {
+      const res = await feishuClient.updateMessage(
+        existing.messageId,
+        JSON.stringify(card),
+      )
+      if (res.code === 0) return existing.messageId
+      logger.warn(`Could not update the menu card: ${res.code} ${res.msg}`)
+    }
+    const res = await feishuClient.replyMessage(messageId, {
+      msg_type: "interactive",
+      content: JSON.stringify(card),
+    })
+    const cardMessageId = res.data?.["message_id"] as string | undefined
+    if (!cardMessageId) {
+      logger.warn("The compaction card was sent but its message id is unknown")
+    }
+    return cardMessageId
+  }
+
+  /**
    * Compact the conversation: opencode summarizes the old turns and starts
    * the session over with the summary. The context window shrinks.
+   *
+   * The API only *queues* the compaction — it returns before the summary
+   * exists. So the card opens as "running" and is patched when opencode
+   * reports the outcome (`session.compaction.ended` / `.failed`).
    */
   async function handleCompact(
     feishuKey: string,
@@ -956,21 +1108,122 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
       return
     }
 
+    // A second /compact replaces the first — do not leave a card stuck on
+    // "running" forever.
+    pendingCompactions.get(sessionId)?.settle({
+      status: "failed",
+      error: "被新的压缩请求替代",
+    })
+
+    let cardMessageId: string | undefined
+    try {
+      cardMessageId = await sendCompactionCard(
+        chatId,
+        messageId,
+        menuId,
+        buildCompactionCard({ status: "running" }),
+      )
+    } catch (err) {
+      logger.warn(`Could not send the compaction card: ${err}`)
+    }
+
+    const listeners = deps.eventListeners
+    const pending: PendingCompaction = {
+      sessionId,
+      cardMessageId,
+      settled: false,
+      listener: () => {},
+      settle: () => {},
+    }
+
+    const patch = async (state: CompactionCardState): Promise<void> => {
+      if (!cardMessageId) return
+      try {
+        const res = await feishuClient.updateMessage(
+          cardMessageId,
+          JSON.stringify(buildCompactionCard(state)),
+        )
+        if (res.code !== 0) {
+          logger.warn(`Could not update the compaction card: ${res.code} ${res.msg}`)
+        }
+      } catch (err) {
+        logger.warn(`Could not update the compaction card: ${err}`)
+      }
+    }
+
+    const clearTimers = (): void => {
+      if (pending.warnTimer) clearTimeout(pending.warnTimer)
+      if (pending.giveUpTimer) clearTimeout(pending.giveUpTimer)
+      pending.warnTimer = undefined
+      pending.giveUpTimer = undefined
+    }
+
+    const settle = (state: CompactionCardState): void => {
+      if (pending.settled) return
+      pending.settled = true
+      clearTimers()
+      if (listeners) removeListener(listeners, sessionId, pending.listener)
+      if (pendingCompactions.get(sessionId) === pending) {
+        pendingCompactions.delete(sessionId)
+      }
+      void patch(state)
+    }
+    pending.settle = settle
+
+    pending.listener = (raw: unknown): void => {
+      const type = (raw as { type?: unknown } | null)?.type
+      if (typeof type !== "string" || !type.startsWith("session.compaction.")) return
+      const payload = (eventPayload(raw) ?? {}) as Record<string, unknown>
+
+      if (type === "session.compaction.ended") {
+        const tokens = (payload.tokens ?? {}) as Record<string, unknown>
+        settle({
+          status: "done",
+          summary: typeof payload.text === "string" ? payload.text : "",
+          input: Number(tokens.input ?? 0),
+          output: Number(tokens.output ?? 0),
+        })
+        return
+      }
+      if (type === "session.compaction.failed") {
+        settle({ status: "failed", error: compactionErrorMessage(payload.error) })
+        return
+      }
+      if (type === "session.compaction.started") {
+        // It really is running now — summarising a big context takes a while,
+        // so only warn about it later.
+        if (pending.warnTimer) clearTimeout(pending.warnTimer)
+        pending.warnTimer = setTimeout(
+          () => void patch({ status: "waiting" }),
+          COMPACTION_WARN_MS,
+        )
+        pending.warnTimer.unref?.()
+      }
+    }
+
+    pendingCompactions.set(sessionId, pending)
+    if (listeners) addListener(listeners, sessionId, pending.listener)
+
+    pending.warnTimer = setTimeout(
+      () => void patch({ status: "waiting" }),
+      COMPACTION_WARN_MS,
+    )
+    pending.warnTimer.unref?.()
+    pending.giveUpTimer = setTimeout(() => {
+      settle({
+        status: "failed",
+        error: `等了 ${COMPACTION_GIVE_UP_MS / 60_000} 分钟也没有收到压缩结果`,
+      })
+    }, COMPACTION_GIVE_UP_MS)
+    pending.giveUpTimer.unref?.()
+
     try {
       await opencode.compactSession(sessionId)
+      logger.info(`/compact: compaction queued for session ${sessionId}`)
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
-      await replyText(chatId, messageId, `压缩失败：${message}`)
-      return
+      settle({ status: "failed", error: message })
     }
-    logger.info(`/compact: compacted session ${sessionId}`)
-    await replyOnMenuCard(
-      chatId,
-      messageId,
-      menuId,
-      `✅ 已压缩会话 ${sessionId}，上下文已缩减（对话历史保留在会话里）`,
-      `🗜 已压缩会话 ${sessionId}，上下文已缩减`,
-    )
   }
 
   /**

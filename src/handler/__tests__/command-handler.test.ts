@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest"
 import { createCommandHandler, type CommandHandlerDeps } from "../command-handler.js"
-import { createMockLogger, createMockFeishuClient } from "../../__tests__/setup.js"
+import { createMockLogger, createMockFeishuClient, waitFor } from "../../__tests__/setup.js"
 import { createMockGateway } from "../../__tests__/setup.js"
 import type { SessionManager } from "../../session/session-manager.js"
 import type { SessionMapping } from "../../types.js"
@@ -332,8 +332,12 @@ describe("createCommandHandler", () => {
       expect(commands).toContain("/compact")
     })
 
-    it("/compact compresses the session", async () => {
-      mockFeishuClient.replyMessage = vi.fn().mockResolvedValue({ code: 0, msg: "ok" })
+    it("/compact shows that the compaction is running, not that it finished", async () => {
+      mockFeishuClient.replyMessage = vi.fn().mockResolvedValue({
+        code: 0,
+        msg: "ok",
+        data: { message_id: "card-compact" },
+      })
       mockSessionManager.getExisting = vi.fn().mockResolvedValue("ses-123")
       mockSessionManager.getSession = vi.fn().mockReturnValue({ session_id: "ses-123" })
 
@@ -343,7 +347,97 @@ describe("createCommandHandler", () => {
       expect(result).toBe(true)
       expect(mockGateway.compactSession).toHaveBeenCalledWith("ses-123")
       const call = (mockFeishuClient.replyMessage as any).mock.calls[0]
-      expect(JSON.parse(call[1].content).text).toContain("已压缩")
+      expect(call[1].msg_type).toBe("interactive")
+      const card = JSON.stringify(JSON.parse(call[1].content))
+      expect(card).toContain("正在压缩")
+      expect(card).not.toContain("已压缩")
+    })
+
+    it("/compact updates the same card with the result when the compaction ends", async () => {
+      mockFeishuClient.replyMessage = vi.fn().mockResolvedValue({
+        code: 0,
+        msg: "ok",
+        data: { message_id: "card-compact" },
+      })
+      mockFeishuClient.updateMessage = vi.fn().mockResolvedValue({ code: 0, msg: "ok" })
+      const eventListeners = new Map()
+      const handler = createHandler(undefined, mockGateway, { eventListeners } as any)
+
+      await handler("chat-1", "chat-1", "msg-1", "/compact")
+
+      const listener = [...(eventListeners.get("ses-123") ?? [])][0] as (event: unknown) => void
+      expect(typeof listener).toBe("function")
+      listener({
+        type: "session.compaction.ended",
+        data: {
+          sessionID: "ses-123",
+          text: "## Objective\n- keep the bridge honest",
+          tokens: { input: 28402, output: 2509, reasoning: 0, cache: { read: 8192, write: 0 } },
+          cost: 0,
+          reason: "manual",
+          created: Date.now(),
+        },
+      })
+
+      await waitFor(() => expect(mockFeishuClient.updateMessage).toHaveBeenCalled())
+      const [messageId, content] = (mockFeishuClient.updateMessage as any).mock.calls.at(-1)
+      expect(messageId).toBe("card-compact")
+      const card = JSON.parse(content)
+      const text = JSON.stringify(card)
+      expect(text).toContain("会话已压缩")
+      expect(text).toContain("28.4k in")
+      expect(text).toContain("2.5k out")
+      expect(text).toContain("keep the bridge honest")
+
+      // The summary is folded away until the user opens it.
+      const panel = card.elements.find((el: any) => el.tag === "collapsible_panel")
+      expect(panel).toBeTruthy()
+      expect(panel.expanded).toBe(false)
+    })
+
+    it("/compact reports a failed compaction on the card", async () => {
+      mockFeishuClient.replyMessage = vi.fn().mockResolvedValue({
+        code: 0,
+        msg: "ok",
+        data: { message_id: "card-compact" },
+      })
+      mockFeishuClient.updateMessage = vi.fn().mockResolvedValue({ code: 0, msg: "ok" })
+      const eventListeners = new Map()
+      const handler = createHandler(undefined, mockGateway, { eventListeners } as any)
+
+      await handler("chat-1", "chat-1", "msg-1", "/compact")
+
+      const listener = [...(eventListeners.get("ses-123") ?? [])][0] as (event: unknown) => void
+      listener({
+        type: "session.compaction.failed",
+        data: {
+          sessionID: "ses-123",
+          error: { type: "provider", message: "provider refused to summarize" },
+        },
+      })
+
+      await waitFor(() => expect(mockFeishuClient.updateMessage).toHaveBeenCalled())
+      const content = (mockFeishuClient.updateMessage as any).mock.calls.at(-1)[1]
+      expect(content).toContain("压缩失败")
+      expect(content).toContain("provider refused to summarize")
+    })
+
+    it("/compact reports a rejected request on the card", async () => {
+      mockFeishuClient.replyMessage = vi.fn().mockResolvedValue({
+        code: 0,
+        msg: "ok",
+        data: { message_id: "card-compact" },
+      })
+      mockFeishuClient.updateMessage = vi.fn().mockResolvedValue({ code: 0, msg: "ok" })
+      mockGateway.compactSession.mockRejectedValueOnce(new Error("Expected object"))
+
+      const handler = createHandler()
+      await handler("chat-1", "chat-1", "msg-1", "/compact")
+
+      await waitFor(() => expect(mockFeishuClient.updateMessage).toHaveBeenCalled())
+      const content = (mockFeishuClient.updateMessage as any).mock.calls.at(-1)[1]
+      expect(content).toContain("压缩失败")
+      expect(content).toContain("Expected object")
     })
 
     it("/更新 upgrades opencode and reports it on the card", async () => {
