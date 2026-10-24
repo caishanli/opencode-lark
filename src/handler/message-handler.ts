@@ -545,6 +545,41 @@ export function createMessageHandler(
     }
   }
 
+  /**
+   * A message admitted with delivery=queue is visible in opencode right away,
+   * but its turn starts only after the current one. Wait for that execution to
+   * start, then attach a streaming card to it (with nothing to send).
+   */
+  function watchQueuedTurn(chatId: string, sessionId: string): void {
+    const bridge = deps.streamingBridge
+    if (!bridge) return
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const listener = (raw: unknown): void => {
+      const type = (raw as { type?: unknown } | null)?.type
+      if (type !== "session.execution.started") return
+      removeListener(eventListeners, sessionId, listener)
+      if (timer) clearTimeout(timer)
+      void bridge
+        .handleMessage(
+          chatId,
+          sessionId,
+          eventListeners,
+          eventProcessor,
+          async () => "",
+          () => {},
+          "",
+          null,
+        )
+        .catch((err) => logger.warn(`Queued turn bridge failed: ${err}`))
+    }
+    timer = setTimeout(
+      () => removeListener(eventListeners, sessionId, listener),
+      10 * 60_000,
+    )
+    timer.unref?.()
+    addListener(eventListeners, sessionId, listener)
+  }
+
   // ── Debouncer (opt-in via debounceMs > 0) ──
   const debouncer = deps.debounceMs && deps.debounceMs > 0
     ? new MessageDebouncer(deps.debounceMs, handleBatchFlush, logger)
@@ -885,14 +920,32 @@ export function createMessageHandler(
             return
           }
           if (choice === "queue") {
-            // Same as the opencode web UI: the message enters after the
-            // running turn's last step. Waiting here (instead of the server
-            // queue) keeps the new bridge attached to the new turn.
-            const sid = currentSessionId
-            for (let i = 0; i < 900; i++) {
-              if (!(await isSessionRunning(sid))) break
-              await new Promise((resolve) => setTimeout(resolve, 2_000))
+            // Match the web UI: admit the message immediately so it is
+            // visible in opencode, then attach a card when its turn starts.
+            if (!(await isSessionRunning(currentSessionId))) {
+              await deliver("interrupt", { queued: true })
+              return
             }
+            try {
+              await opencode.sendPrompt(
+                currentSessionId,
+                {
+                  text: textParts,
+                  files: fileParts.length ? fileParts : undefined,
+                },
+                { delivery: "queue" },
+              )
+              if (reactionId) {
+                await feishuClient
+                  .deleteReaction(event.message_id, reactionId)
+                  .catch(() => {})
+              }
+              watchQueuedTurn(event.chat_id, currentSessionId)
+            } catch (err) {
+              logger.warn(`Could not queue the message: ${err}`)
+              await deliver("interrupt", { queued: true })
+            }
+            return
           }
           await deliver("interrupt", { queued: true })
         },
