@@ -463,6 +463,22 @@ export function createMessageHandler(
 
   const signedSessions = new Set<string>()
 
+  /**
+   * A new Feishu message is a command, not a queue entry: when the agent is
+   * still running, stop that turn before handing the new prompt over. The
+   * interrupt endpoint is a no-op for an idle session, so every message can
+   * call it.
+   */
+  async function interruptRunningTurn(sessionId: string): Promise<void> {
+    try {
+      await opencode.abort(sessionId)
+    } catch (err) {
+      logger.warn(
+        `Could not interrupt session ${sessionId} before the new message: ${err}`,
+      )
+    }
+  }
+
   // ── Debouncer (opt-in via debounceMs > 0) ──
   const debouncer = deps.debounceMs && deps.debounceMs > 0
     ? new MessageDebouncer(deps.debounceMs, handleBatchFlush, logger)
@@ -730,10 +746,12 @@ export function createMessageHandler(
         const command = await matchOpencodeCommand(opencode, textParts, logger)
         if (command) {
           logger.info(`Running opencode command: /${command.command}`)
+          await interruptRunningTurn(currentSessionId)
           await opencode.sendCommand(currentSessionId, command)
           return ""
         }
         await deps.ensureServer?.()
+        await interruptRunningTurn(currentSessionId)
         await opencode.sendPrompt(currentSessionId, { text: textParts, files: fileParts.length ? fileParts : undefined })
         return ""
       } catch (err) {
@@ -1005,10 +1023,12 @@ export function createMessageHandler(
         const command = await matchOpencodeCommand(opencode, textParts, logger)
         if (command) {
           logger.info(`Running opencode command: /${command.command}`)
+          await interruptRunningTurn(currentSessionId)
           await opencode.sendCommand(currentSessionId, command)
           return ""
         }
         await deps.ensureServer?.()
+        await interruptRunningTurn(currentSessionId)
         await opencode.sendPrompt(currentSessionId, { text: textParts, files: fileParts.length ? fileParts : undefined })
         return ""
       } catch (err) {

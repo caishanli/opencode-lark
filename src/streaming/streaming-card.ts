@@ -563,7 +563,7 @@ export class StreamingCardSession {
 
   private baseStatus(): string {
     return this.status === "completed" ? "✅ 已完成"
-      : this.status === "interrupted" ? "⚠️ 已中断（服务重启、连接断开或长时间无响应）"
+      : this.status === "interrupted" ? "⚠️ 已中断（被新消息打断或服务重启）"
       : this.status === "error" ? "❌ 失败"
       : "⏳ 运行中…"
   }

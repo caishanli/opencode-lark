@@ -250,6 +250,28 @@ describe("createMessageHandler", () => {
     expect(prompt.files).toBeUndefined()
   })
 
+  it("interrupts the running turn before sending a new message", async () => {
+    const deps = makeDeps()
+    const { handleMessage: handler } = createMessageHandler(deps)
+
+    const handlerPromise = handler(makeEvent())
+    await waitFor(() => {
+      expect(deps.opencode.sendPrompt).toHaveBeenCalledTimes(1)
+    })
+    ;[...(deps.eventListeners.get("ses-1") ?? [])].forEach((fn) => {
+      fn({
+        type: "session.status",
+        properties: { sessionID: "ses-1", status: { type: "idle" } },
+      })
+    })
+    await handlerPromise
+
+    expect(deps.opencode.abort).toHaveBeenCalledWith("ses-1")
+    const abortOrder = (deps.opencode.abort as any).mock.invocationCallOrder[0]
+    const sendOrder = (deps.opencode.sendPrompt as any).mock.invocationCallOrder[0]
+    expect(abortOrder).toBeLessThan(sendOrder)
+  })
+
   it("ignores a redelivered message (same message_id, new event_id)", async () => {
     // Feishu's long connection redelivers events with a NEW event_id, so the
     // event_id check misses it. The message_id is the stable identity.
