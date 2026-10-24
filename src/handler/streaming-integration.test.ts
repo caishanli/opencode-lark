@@ -875,7 +875,7 @@ describe("createStreamingBridge", () => {
     expect(content).toContain("4.0k")
     // the hit rate comes from the counters the server reports
     expect(content).toContain("4.1k tok")
-    expect(content).toContain("缓存命中 75%")
+    expect(content).toContain("hit 75%")
     expect(content).toContain("总 4.1k tok")
   })
 
@@ -1019,7 +1019,7 @@ describe("createStreamingBridge", () => {
     expect(content).toContain("10 tok")      // generated only
     expect(content).toContain("ctx 200")      // input + cache read
     expect(content).toContain("210 tok")
-    expect(content).toContain("缓存命中 75%")
+    expect(content).toContain("hit 75%")
     // the cumulative numbers must not show up as the turn's own numbers —
     // they are only reported as the session total, clearly labelled
     expect(content).toContain("总 4.1k tok")

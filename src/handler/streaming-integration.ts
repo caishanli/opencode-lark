@@ -143,7 +143,7 @@ export function createStreamingBridge(
       // Same shorthand as the opencode status bar: a clock for time, a
       // database for the stored (session) tokens — and a spelled-out label
       // for the cache, because any icon there just invited a guess.
-      const hitPart = ` · 缓存命中 ${hit}%`
+      const hitPart = ` · hit ${hit}%`
       const timePart = turnMs > 0 ? `⏱ ${(turnMs / 1000).toFixed(1)}s · ` : ""
       const limit = turnContextLimit
       const used =
