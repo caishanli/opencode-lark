@@ -60,6 +60,30 @@ describe("startUpgradeProgress", () => {
     expect(sample.phase).toBe("downloading")
   })
 
+  it("measures the speed between two samples", async () => {
+    const dir = makeTmp()
+    const install = join(dir, "opencode_install_5555")
+    mkdirSync(install)
+    const file = join(install, "cli-linux-x64-2.1.4.tgz")
+    writeFileSync(file, Buffer.alloc(1_000_000))
+
+    const samples: UpgradeProgressSample[] = []
+    const stop = startUpgradeProgress({
+      startedAt: Date.now() - 1_000,
+      tmpDir: dir,
+      intervalMs: 250,
+      fetchTotal: async () => 100_000_000,
+      onUpdate: (sample) => samples.push(sample),
+    })
+
+    await waitFor(() => expect(samples.length).toBeGreaterThan(0))
+    writeFileSync(file, Buffer.alloc(5_000_000))
+    // Two 250 ms ticks: the first sees the growth, the second reports a speed.
+    await new Promise((resolve) => setTimeout(resolve, 700))
+    expect(samples.some((sample) => (sample.bytesPerSecond ?? 0) > 0)).toBe(true)
+    stop()
+  })
+
   it("switches to installing once the tarball is gone", async () => {
     const dir = makeTmp()
     const install = join(dir, "opencode_install_4243")

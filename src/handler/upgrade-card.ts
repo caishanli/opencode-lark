@@ -28,14 +28,22 @@ export function formatUpgradeProgress(
   if (sample.phase === "installing") {
     return `⬆️ opencode 正在安装${sample.version ? ` ${sample.version}` : ""}… · ${seconds}s`
   }
-  const bar =
-    sample.percent !== undefined ? `${progressBar(sample.percent)} ${sample.percent}% · ` : ""
-  const size = sample.total
-    ? `${megabytes(sample.bytes)} / ${megabytes(sample.total)}`
-    : megabytes(sample.bytes)
+  const parts: string[] = []
+  if (sample.percent !== undefined) {
+    parts.push(`${progressBar(sample.percent)} ${sample.percent}%`)
+  }
+  parts.push(
+    sample.total
+      ? `${megabytes(sample.bytes)} / ${megabytes(sample.total)}`
+      : megabytes(sample.bytes),
+  )
+  if (sample.bytesPerSecond && sample.bytesPerSecond > 20_000) {
+    parts.push(`${megabytes(sample.bytesPerSecond)}/s`)
+  }
+  parts.push(`${seconds}s`)
   return (
     `⬆️ opencode 正在下载${sample.version ? ` ${sample.version}` : ""}…\n` +
-    `${bar}${size} · ${seconds}s`
+    parts.join(" · ")
   )
 }
 

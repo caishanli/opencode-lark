@@ -33,6 +33,20 @@ describe("formatUpgradeProgress", () => {
     expect(text).toContain("█")
   })
 
+  it("shows the transfer speed", () => {
+    const text = formatUpgradeProgress(
+      {
+        bytes: 50_000_000,
+        total: 100_000_000,
+        percent: 50,
+        bytesPerSecond: 5_900_000,
+        phase: "downloading",
+      },
+      13_000,
+    )
+    expect(text).toContain("5.9MB/s")
+  })
+
   it("falls back to the transferred size without a total", () => {
     const text = formatUpgradeProgress(
       { bytes: 12_000_000, phase: "downloading" },

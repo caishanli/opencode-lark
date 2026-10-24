@@ -511,7 +511,7 @@ describe("createCommandHandler", () => {
       const progressCard = JSON.parse(
         (mockFeishuClient.replyMessage as any).mock.calls[0][1].content,
       )
-      expect(progressCard.elements[0].content).toContain("正在下载")
+      expect(progressCard.elements[0].content).toContain("正在检查新版本")
 
       resolveUpgrade({ success: true, output: "Upgraded to v2.0.34" })
       await run

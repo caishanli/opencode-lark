@@ -1536,7 +1536,9 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
     const progress = (notice: string): Promise<void> =>
       push(buildUpgradeProgressCard(notice))
 
-    await progress(formatUpgradeProgress({ bytes: 0, phase: "downloading" }, 0))
+    // The CLI checks the version and fetches the installer before the tarball
+    // exists; do not claim to be downloading during that.
+    await progress("⬆️ opencode 正在检查新版本…")
 
     const upgrade = deps.supervisor?.upgradeOpencode
     if (!upgrade) {

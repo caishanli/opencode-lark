@@ -20,6 +20,8 @@ export interface UpgradeProgressSample {
   percent?: number
   /** The version being installed, parsed from the tarball name. */
   version?: string
+  /** Bytes per second, measured between two samples (smoothed). */
+  bytesPerSecond?: number
   /** Downloading the tarball, or installing it after the download. */
   phase: "downloading" | "installing"
 }
@@ -89,7 +91,11 @@ function findTarball(
 }
 
 async function fetchTotalFromRegistry(url: string): Promise<number | undefined> {
-  const res = await fetch(url, { headers: { Range: "bytes=0-0" } })
+  const res = await fetch(url, {
+    headers: { Range: "bytes=0-0" },
+    // The download must keep reporting even when the registry is slow.
+    signal: AbortSignal.timeout(5_000),
+  })
   if (!res.ok && res.status !== 206) return undefined
   const range = res.headers.get("content-range")
   const total = range
@@ -132,6 +138,35 @@ export function startUpgradeProgress(options: UpgradeProgressOptions): () => voi
   let sawTarball = false
   let total: number | undefined
   let totalRequested = false
+  let lastBytes = 0
+  let lastAt = 0
+  let speed = 0
+
+  const report = (bytes: number, version: string | undefined): void => {
+    const now = Date.now()
+    if (lastAt > 0 && bytes > lastBytes) {
+      const seconds = (now - lastAt) / 1000
+      if (seconds >= 0.2) {
+        const instant = (bytes - lastBytes) / seconds
+        speed = speed > 0 ? speed * 0.6 + instant * 0.4 : instant
+      }
+    }
+    lastBytes = bytes
+    lastAt = now
+
+    const percent =
+      total && total > 0
+        ? Math.max(0, Math.min(100, Math.round((bytes / total) * 100)))
+        : undefined
+    options.onUpdate({
+      bytes,
+      total,
+      percent,
+      version,
+      bytesPerSecond: speed > 0 ? speed : undefined,
+      phase: "downloading",
+    })
+  }
 
   const tick = async (): Promise<void> => {
     if (stopped) return
@@ -142,25 +177,20 @@ export function startUpgradeProgress(options: UpgradeProgressOptions): () => voi
       return
     }
     sawTarball = true
-
     const parsed = parseTarballName(found.file)
+
+    // Report the bytes first — looking the total up in the registry must not
+    // hold the first update back.
+    report(found.size, parsed?.version)
+
     if (!totalRequested) {
       totalRequested = true
-      total = await totalFor(found.file, fetchTotal)
-      if (stopped) return
+      void totalFor(found.file, fetchTotal).then((value) => {
+        if (stopped || !value) return
+        total = value
+        void tick()
+      })
     }
-    const percent =
-      total && total > 0
-        ? Math.max(0, Math.min(100, Math.round((found.size / total) * 100)))
-        : undefined
-
-    options.onUpdate({
-      bytes: found.size,
-      total,
-      percent,
-      version: parsed?.version,
-      phase: "downloading",
-    })
   }
 
   const timer = setInterval(() => {
