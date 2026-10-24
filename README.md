@@ -101,6 +101,12 @@ FEISHU_APP_ID=cli_xxx FEISHU_APP_SECRET=xxx OPENCODE_SERVER_PASSWORD=xxx bash in
 Re-running is safe: the configuration is kept and a running service is not
 restarted (use `scripts/restart-when-idle.sh` after changing code).
 
+| Command | What it does |
+|---|---|
+| `install.sh` *(default)* | install/update everything; on **Ubuntu** it also enables boot start (systemd user + `loginctl enable-linger`) |
+| `install.sh update` | `git pull`, `bun install`, then restart the service once the running turn is idle |
+| `install.sh remove [--purge]` | stop and remove the service; `--purge` also deletes the configuration and `data/` |
+
 ### Manual
 
 ```bash

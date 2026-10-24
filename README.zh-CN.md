@@ -98,6 +98,12 @@ FEISHU_APP_ID=cli_xxx FEISHU_APP_SECRET=xxx OPENCODE_SERVER_PASSWORD=xxx bash in
 
 重复执行是安全的：已有配置会保留，正在运行的服务不会被重启（改代码后用 `scripts/restart-when-idle.sh`）。
 
+| 命令 | 作用 |
+|---|---|
+| `install.sh`（默认） | 安装/更新全部内容；在 **Ubuntu** 上还会开启开机自启（systemd user + `loginctl enable-linger`） |
+| `install.sh update` | `git pull`、`bun install`，然后等当前回合结束后重启服务 |
+| `install.sh remove [--purge]` | 停止并移除服务；`--purge` 同时删除配置和 `data/` |
+
 ### 手动安装
 
 ```bash
