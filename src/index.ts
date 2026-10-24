@@ -68,6 +68,9 @@ async function main(): Promise<void> {
 
   if (forceInit) {
     await runSetupWizard()
+    process.stdout.write("\n配置完成。启动服务：systemctl --user start opencode-lark\n")
+    // `init` only configures; starting the bridge is the service's job.
+    process.exit(0)
   } else {
     const configPath = await pickConfig()
     if (configPath) {

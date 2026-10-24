@@ -305,9 +305,6 @@ export async function runSetupWizard(): Promise<void> {
       }
 
       logger.info("Setup wizard completed, .env written to %s", envPath)
-
-      // ── Starting ──
-      process.stdout.write(`\n${bold("Starting opencode-lark...")}\n\n`)
     } finally {
       rl2.close()
     }

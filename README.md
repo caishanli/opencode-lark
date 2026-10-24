@@ -84,6 +84,25 @@ Downloaded files are saved to `${OPENCODE_CWD}/.opencode-lark/attachments/` (fal
 
 > **Note**: [Bun](https://bun.sh) is the required runtime — this project uses `bun:sqlite` which is Bun-only.
 
+### One-shot (new machine)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/caishanli/opencode-lark/main/install.sh | bash
+```
+
+It installs Bun and opencode when they are missing, clones the repo, installs
+the dependencies, runs the setup wizard (QR code → Feishu app) and installs the
+systemd user service. Reusing an existing Feishu app skips the wizard:
+
+```bash
+FEISHU_APP_ID=cli_xxx FEISHU_APP_SECRET=xxx OPENCODE_SERVER_PASSWORD=xxx bash install.sh
+```
+
+Re-running is safe: the configuration is kept and a running service is not
+restarted (use `scripts/restart-when-idle.sh` after changing code).
+
+### Manual
+
 ```bash
 # Global install
 npm install -g opencode-lark

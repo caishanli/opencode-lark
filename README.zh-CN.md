@@ -84,6 +84,22 @@ opencode TUI
 
 > **注意**：[Bun](https://bun.sh) 是必需的运行时，本项目使用 `bun:sqlite`，仅 Bun 支持。
 
+### 一台新机器，一条命令
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/caishanli/opencode-lark/main/install.sh | bash
+```
+
+会依次检查/安装 Bun 和 opencode、拉取仓库、安装依赖、跑配置向导（扫码创建飞书应用）、装好 systemd 用户服务。已经有飞书应用时可以不进向导：
+
+```bash
+FEISHU_APP_ID=cli_xxx FEISHU_APP_SECRET=xxx OPENCODE_SERVER_PASSWORD=xxx bash install.sh
+```
+
+重复执行是安全的：已有配置会保留，正在运行的服务不会被重启（改代码后用 `scripts/restart-when-idle.sh`）。
+
+### 手动安装
+
 ```bash
 # 全局安装
 npm install -g opencode-lark
