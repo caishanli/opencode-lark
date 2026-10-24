@@ -39,6 +39,7 @@ STATE_DIR="$HOME/.local/state/opencode-lark"
 REPO=""
 SERVER_URL="${OPENCODE_SERVER_URL:-http://127.0.0.1:4096}"
 STARTED_SERVER_PID=""
+REPO_UPDATED=0
 
 cleanup() {
   if [ -n "$STARTED_SERVER_PID" ]; then
@@ -94,6 +95,48 @@ resolve_repo() {
   return 0
 }
 
+# Bring an existing clone up to date. Sets REPO_UPDATED=1 when HEAD moved, so
+# the service can be restarted after the code changed.
+update_clone() {
+  REPO_UPDATED=0
+  [ -d "$REPO/.git" ] || return 0
+  if [ -n "$(git -C "$REPO" status --porcelain 2>/dev/null || true)" ]; then
+    warn "仓库有本地改动，跳过更新"
+    return 0
+  fi
+  if ! git -C "$REPO" rev-parse --abbrev-ref --symbolic-full-name '@{u}' >/dev/null 2>&1; then
+    note "当前分支没有上游，跳过更新"
+    return 0
+  fi
+  local before after
+  before="$(git -C "$REPO" rev-parse HEAD)"
+  say "更新代码"
+  if ! git -C "$REPO" pull --ff-only --quiet; then
+    warn "git pull 失败，继续用当前代码"
+    return 0
+  fi
+  after="$(git -C "$REPO" rev-parse HEAD)"
+  if [ "$before" = "$after" ]; then
+    ok "代码已是最新 ($(git -C "$REPO" log --oneline -1))"
+  else
+    REPO_UPDATED=1
+    ok "代码已更新: $(git -C "$REPO" log --oneline -1)"
+  fi
+}
+
+# Restart through the idle-aware script with the bridge's own credentials.
+restart_bridge() {
+  local env_file
+  env_file="$(find_env_file)"
+  if [ -n "$env_file" ]; then
+    set -a
+    # shellcheck disable=SC1090
+    . "$env_file"
+    set +a
+  fi
+  ( cd "$REPO" && scripts/restart-when-idle.sh )
+}
+
 ensure_repo() {
   # resolve_repo returns non-zero when the script is not inside the repository,
   # but it still fills REPO with the default location — which may already be a
@@ -102,6 +145,7 @@ ensure_repo() {
   if [ -f "$REPO/src/index.ts" ]; then
     REPO="$(cd "$REPO" && pwd)"
     ok "仓库: $REPO"
+    update_clone
     return 0
   fi
   if [ -e "$REPO" ] && [ -n "$(ls -A "$REPO" 2>/dev/null)" ]; then
@@ -356,7 +400,13 @@ install_service() {
   systemctl --user daemon-reload
 
   if systemctl --user is-active --quiet opencode-lark; then
-    ok "服务已在运行（改动代码后用 $REPO/scripts/restart-when-idle.sh 重启）"
+    if [ "${REPO_UPDATED:-0}" = "1" ]; then
+      say "代码已更新，空闲时重启服务"
+      restart_bridge
+      ok "服务已重启"
+    else
+      ok "服务已在运行（改动代码后用 $REPO/scripts/restart-when-idle.sh 重启）"
+    fi
   else
     systemctl --user enable --now opencode-lark
     ok "服务已启动"
@@ -442,16 +492,8 @@ do_config() {
     return 0
   fi
   if systemctl --user is-active --quiet opencode-lark; then
-    local env_file
-    env_file="$(find_env_file)"
-    if [ -n "$env_file" ]; then
-      set -a
-      # shellcheck disable=SC1090
-      . "$env_file"
-      set +a
-    fi
     say "重启服务以加载新配置"
-    ( cd "$REPO" && scripts/restart-when-idle.sh )
+    restart_bridge
   else
     systemctl --user start opencode-lark
     ok "服务已启动"
@@ -465,15 +507,7 @@ do_update() {
   fi
   require_bun
 
-  if [ -d "$REPO/.git" ]; then
-    if git -C "$REPO" rev-parse --abbrev-ref --symbolic-full-name '@{u}' >/dev/null 2>&1; then
-      say "拉取最新代码"
-      git -C "$REPO" pull --ff-only
-    else
-      warn "当前分支没有上游，跳过 git pull"
-    fi
-  fi
-
+  update_clone
   install_deps
 
   if [ "${OPENCODE_LARK_NO_SERVICE:-0}" = "1" ] || ! has_systemd; then
@@ -485,17 +519,8 @@ do_update() {
     return 0
   fi
 
-  # The idle-aware restart needs the server URL and password the bridge uses.
-  local env_file
-  env_file="$(find_env_file)"
-  if [ -n "$env_file" ]; then
-    set -a
-    # shellcheck disable=SC1090
-    . "$env_file"
-    set +a
-  fi
   say "空闲时重启服务"
-  ( cd "$REPO" && scripts/restart-when-idle.sh )
+  restart_bridge
 }
 
 do_remove() {

@@ -96,7 +96,7 @@ curl -fsSL https://raw.githubusercontent.com/caishanli/opencode-lark/main/instal
 FEISHU_APP_ID=cli_xxx FEISHU_APP_SECRET=xxx OPENCODE_SERVER_PASSWORD=xxx bash install.sh
 ```
 
-重复执行是安全的：已有配置会保留，正在运行的服务不会被重启（改代码后用 `scripts/restart-when-idle.sh`）。
+重复执行是安全的：会先 `git pull` 更新代码、保留已有配置；只有代码真的变了才重启服务，而且会等当前回合结束。
 
 | 命令 | 作用 |
 |---|---|

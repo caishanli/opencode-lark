@@ -101,8 +101,9 @@ same values. Reusing an existing Feishu app skips the wizard:
 FEISHU_APP_ID=cli_xxx FEISHU_APP_SECRET=xxx OPENCODE_SERVER_PASSWORD=xxx bash install.sh
 ```
 
-Re-running is safe: the configuration is kept and a running service is not
-restarted (use `scripts/restart-when-idle.sh` after changing code).
+Re-running is safe: it pulls the latest code (`git pull --ff-only`), keeps the
+configuration, and restarts the service only when the code actually changed
+(and only once the running turn is idle).
 
 | Command | What it does |
 |---|---|
