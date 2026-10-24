@@ -202,6 +202,22 @@ describe("StreamingCardSession", () => {
     expect(last.content).toContain("340 tok/s")
   })
 
+  it("leads with the context gauge and draws the ring as the icon", async () => {
+    const { session, feishuClient: fc } = createStartedSession()
+    await session.start()
+    await session.setUsage("⏱ 1.0s · 10 tok", {
+      context: "84.8k (42%)",
+      icon: "img_key_42",
+    })
+    await session.close()
+
+    const status = elements(fc).find(
+      (el: any) => el.tag === "markdown" && String(el.content).includes("84.8k"),
+    )
+    expect(status?.content).toBe("84.8k (42%) · ✅ 已完成 · ⏱ 1.0s · 10 tok")
+    expect(status?.icon).toEqual({ tag: "custom_icon", img_key: "img_key_42" })
+  })
+
   it("adds a status line that completes when the turn ends", async () => {
     const { session, feishuClient: fc } = createStartedSession()
     await session.start()

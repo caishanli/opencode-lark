@@ -43,6 +43,11 @@ export interface StreamingBridgeDeps {
   /** The reply detail for this chat (`/回复`) — concise hides the tool panels
    *  and the status line. */
   replyMode?: (chatId: string) => "standard" | "concise"
+  /** Uploaded context-window rings, one image per percentage. */
+  ringIcons?: {
+    get(percent: number): string | undefined
+    ensure(percent: number): Promise<string | undefined>
+  }
 }
 
 export interface StreamingBridge {
@@ -139,17 +144,12 @@ export function createStreamingBridge(
      */
     const usageLine = (): string | null => {
       if (!lastUsage) return null
-      const { context, total, sessionTotal, rate, hit, cost, turnMs, rounds, steps } = lastUsage
+      const { total, sessionTotal, rate, hit, cost, turnMs, rounds, steps } = lastUsage
       // Same shorthand as the opencode status bar: a clock for time, a
-      // database for the stored (session) tokens, `ctx` for the context
-      // window — and a spelled-out label for the cache, because any icon
-      // there just invited a guess.
+      // database for the stored (session) tokens — and a spelled-out label
+      // for the cache, because any icon there just invited a guess.
       const hitPart = ` · 缓存命中 ${hit}%`
       const timePart = turnMs > 0 ? `⏱ ${(turnMs / 1000).toFixed(1)}s · ` : ""
-      const limit = turnContextLimit
-      const used =
-        limit && limit > 0 && context > 0 ? ` (${formatPercent(context / limit)}%)` : ""
-      const contextPart = context > 0 ? ` · ctx ${formatTokens(context)}${used}` : ""
       // What the whole session has consumed so far — Σ, because the turn's
       // own total above is only a part of it.
       const sessionPart = sessionTotal > 0 ? ` · Σ ${formatTokens(sessionTotal)} tok` : ""
@@ -158,8 +158,30 @@ export function createStreamingBridge(
       const workPart = steps > 0 ? `${rounds} 轮 ${steps} 步 · ` : ""
       return (
         `${timePart}${workPart}${formatTokens(total)} tok${hitPart} · ` +
-        `${formatRate(rate)} tok/s${contextPart}${sessionPart}${cost}`
+        `${formatRate(rate)} tok/s${sessionPart}${cost}`
       )
+    }
+
+    /** The context percentage as an integer, for the ring's image key. */
+    const contextPercent = (): number | undefined => {
+      const context = lastUsage?.context ?? 0
+      const limit = turnContextLimit
+      if (!limit || limit <= 0 || context <= 0) return undefined
+      return Math.round((context / limit) * 100)
+    }
+
+    /**
+     * The context window, shown first because the ring icon in front of the
+     * line is its gauge. Without an uploaded ring the label `ctx` keeps the
+     * numbers meaningful.
+     */
+    const contextLine = (iconKey?: string): string | undefined => {
+      const context = lastUsage?.context ?? 0
+      if (context <= 0) return undefined
+      const limit = turnContextLimit
+      const used =
+        limit && limit > 0 ? ` (${formatPercent(context / limit)}%)` : ""
+      return `${iconKey ? "" : "ctx "}${formatTokens(context)}${used}`
     }
     let stepStartedAt = 0
     /** How many model calls this turn took. */
@@ -219,6 +241,33 @@ export function createStreamingBridge(
         if (!card) return
         const started = cardStartPromise ?? Promise.resolve()
         void started.then(() => fn(card!)).catch(() => {})
+      }
+
+      /**
+       * Write the status line (and its ring icon). The first time a
+       * percentage appears the ring is still uploading: show `ctx …` for
+       * that moment and refresh once the image key arrives.
+       */
+      const publishUsage = (): void => {
+        const line = usageLine()
+        if (!line) return
+        const percent = contextPercent()
+        const key = percent !== undefined ? deps.ringIcons?.get(percent) : undefined
+        writeToCard((c) =>
+          void c.setUsage(line, { context: contextLine(key), icon: key }),
+        )
+        if (percent === undefined || !deps.ringIcons || key) return
+        void deps.ringIcons.ensure(percent).then((newKey) => {
+          if (!newKey) return
+          const refreshed = usageLine()
+          if (!refreshed) return
+          writeToCard((c) =>
+            void c.setUsage(refreshed, {
+              context: contextLine(newKey),
+              icon: newKey,
+            }),
+          )
+        })
       }
 
       const TEXT_PUSH_INTERVAL_MS = 350
@@ -340,8 +389,7 @@ export function createStreamingBridge(
                     .then((limit) => {
                       if (!limit) return
                       turnContextLimit = limit
-                      const line = usageLine()
-                      if (line) writeToCard((c) => void c.setUsage(line))
+                      publishUsage()
                     })
                     .catch((err) => logger.warn(`Could not fetch the model limit: ${err}`))
                 }
@@ -437,8 +485,7 @@ export function createStreamingBridge(
               // rounds.
               steps: Math.max(1, stepCount),
             }
-            const line = usageLine()
-            if (line) writeToCard((c) => void c.setUsage(line))
+            publishUsage()
             // `session.usage.updated` fires after EVERY step, not once per
             // turn — closing the card here cut the reply off after the first
             // tool call. The turn ends with `session.execution.succeeded`.

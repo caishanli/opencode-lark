@@ -72,6 +72,10 @@ export interface OpenCardState {
   blocks?: Block[]
   /** The status line the card was showing. */
   usage?: string
+  /** The context-window part of the status line. */
+  usageContext?: string
+  /** Feishu image key of the ring icon. */
+  usageIcon?: string
   hasRealUsage?: boolean
 }
 
@@ -163,6 +167,10 @@ export class StreamingCardSession {
   private blocks: Block[] = []
   /** Token/rate summary shown in the head line. */
   private usageText = ""
+  /** The context-window part of the status line (e.g. "84.8k (42%)"). */
+  private usageContext = ""
+  /** Feishu image key of the ring shown as the status line's icon. */
+  private usageIcon = ""
   /** True once the server reported a real usage — the live estimate must
    *  never replace it. */
   private hasRealUsage = false
@@ -234,6 +242,8 @@ export class StreamingCardSession {
     session.assignedLength =
       last && last.kind === "message" ? last.start + last.text.length : 0
     session.usageText = options.state.usage ?? ""
+    session.usageContext = options.state.usageContext ?? ""
+    session.usageIcon = options.state.usageIcon ?? ""
     session.hasRealUsage = options.state.hasRealUsage ?? false
     return session
   }
@@ -278,8 +288,11 @@ export class StreamingCardSession {
 
   /** Show a token/rate summary next to the status line. */
   /** The real usage the server reported for the last step. */
-  async setUsage(text: string): Promise<void> {
-    await this.applyUsage(text, true)
+  async setUsage(
+    text: string,
+    extra: { context?: string; icon?: string } = {},
+  ): Promise<void> {
+    await this.applyUsage(text, true, extra)
   }
 
   /**
@@ -292,12 +305,22 @@ export class StreamingCardSession {
     await this.applyUsage(text, false)
   }
 
-  private async applyUsage(text: string, real: boolean): Promise<void> {
+  private async applyUsage(
+    text: string,
+    real: boolean,
+    extra: { context?: string; icon?: string } = {},
+  ): Promise<void> {
     if (this.closed) return
-    if (text === this.usageText) return
+    const context = extra.context ?? ""
+    const icon = extra.icon ?? ""
+    if (text === this.usageText && context === this.usageContext && icon === this.usageIcon) {
+      return
+    }
     // Record it even if the card has no message id yet: the usage event can
     // arrive before the card is created, and the line must not be lost.
     this.usageText = text
+    this.usageContext = context
+    this.usageIcon = icon
     if (real) this.hasRealUsage = true
     if (!this.messageId) return
     await this.sync()
@@ -449,7 +472,13 @@ export class StreamingCardSession {
       elements.push({ tag: "markdown", content: " " })
     }
     if (!sealed && !this.concise) {
-      elements.push({ tag: "markdown", content: this.statusLine() })
+      elements.push({
+        tag: "markdown",
+        content: this.statusLine(),
+        ...(this.usageIcon
+          ? { icon: { tag: "custom_icon", img_key: this.usageIcon } }
+          : {}),
+      })
     }
     return {
       schema: "2.0",
@@ -511,6 +540,8 @@ export class StreamingCardSession {
             },
       ),
       ...(this.usageText ? { usage: this.usageText } : {}),
+      ...(this.usageContext ? { usageContext: this.usageContext } : {}),
+      ...(this.usageIcon ? { usageIcon: this.usageIcon } : {}),
       ...(this.hasRealUsage ? { hasRealUsage: true } : {}),
     }
   }
@@ -550,6 +581,10 @@ export class StreamingCardSession {
             messageId: entry.messageId,
             ...(Array.isArray(entry.blocks) ? { blocks: entry.blocks } : {}),
             ...(typeof entry.usage === "string" ? { usage: entry.usage } : {}),
+            ...(typeof entry.usageContext === "string"
+              ? { usageContext: entry.usageContext }
+              : {}),
+            ...(typeof entry.usageIcon === "string" ? { usageIcon: entry.usageIcon } : {}),
             ...(entry.hasRealUsage ? { hasRealUsage: true } : {}),
           }
         }
@@ -567,7 +602,10 @@ export class StreamingCardSession {
       : this.status === "interrupted" ? "⚠️ 已中断（服务重启、连接断开或长时间无响应）"
       : this.status === "error" ? "❌ 失败"
       : "⏳ 运行中…"
-    return this.usageText ? `${base} · ${this.usageText}` : base
+    // The ring that prefixes the line is the context gauge, so the context
+    // numbers lead and read as its label.
+    const parts = [this.usageContext, base, this.usageText].filter(Boolean)
+    return parts.join(" · ")
   }
 
   private countElements(card: Record<string, unknown>): number {
