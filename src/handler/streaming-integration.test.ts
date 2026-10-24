@@ -884,6 +884,8 @@ describe("createStreamingBridge", () => {
     expect(content).toContain("4.1k tok")
     expect(content).toContain("hit 75%")
     expect(content).toContain("总 4.1k tok")
+    // the rate sits between the "已完成" label and the elapsed time
+    expect(content).toMatch(/✅ 已完成 · [\d.]+k? tok\/s · ⏱ [\d.]+s/)
   })
 
   it("shows how much of the context window is in use", async () => {

@@ -144,6 +144,9 @@ export function createStreamingBridge(
       if (!lastUsage) return null
       const { context, total, sessionTotal, rate, hit, cost, turnMs, rounds, steps } = lastUsage
       const pieces: string[] = []
+      // The rate comes first: it sits between the "已完成" label and the
+      // elapsed time, so the headline reads speed → duration → work.
+      if (total > 0) pieces.push(`${formatRate(rate)} tok/s`)
       if (turnMs > 0) pieces.push(`⏱ ${(turnMs / 1000).toFixed(1)}s`)
       // How much work the agent did: the rounds it wrote in and the model
       // calls it took.
@@ -154,7 +157,6 @@ export function createStreamingBridge(
       if (total > 0) {
         pieces.push(`${formatTokens(total)} tok`)
         pieces.push(`hit ${hit}%`)
-        pieces.push(`${formatRate(rate)} tok/s`)
       }
       if (context > 0) {
         const limit = turnContextLimit
