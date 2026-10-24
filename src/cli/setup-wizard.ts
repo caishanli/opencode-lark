@@ -227,12 +227,22 @@ export async function runSetupWizard(): Promise<void> {
       // ── Step 2/3: opencode Server ──
       process.stdout.write(dim("Step 2/3: opencode Server") + "\n")
 
-      const DEFAULT_URL = "http://localhost:4096"
+      // A custom port comes in through OPENCODE_SERVER_URL (the installer
+      // starts its temporary server there); 4096 is only the fallback.
+      const FALLBACK_URL = "http://localhost:4096"
+      const DEFAULT_URL = process.env.OPENCODE_SERVER_URL?.trim() || FALLBACK_URL
       const urlInput = (
         await rl2.question(`  opencode server URL [${DEFAULT_URL}]: `)
       ).trim()
       const serverUrl = urlInput || DEFAULT_URL
       const baseUrl = serverUrl.replace("localhost", "127.0.0.1")
+      const serverPort = (() => {
+        try {
+          return new URL(baseUrl).port || "4096"
+        } catch {
+          return "4096"
+        }
+      })()
 
       // opencode v2 requires Basic auth; capture the password so the saved .env is usable.
       let serverPassword = process.env.OPENCODE_SERVER_PASSWORD ?? ""
@@ -267,7 +277,7 @@ export async function runSetupWizard(): Promise<void> {
             red(`  ✗ Cannot reach opencode server at ${serverUrl}`) +
               "\n\n" +
               "  Please start it in another terminal:\n" +
-              dim("    OPENCODE_SERVER_PASSWORD=... opencode serve --port 4096") +
+              dim(`    OPENCODE_SERVER_PASSWORD=... opencode serve --port ${serverPort}`) +
               "\n\n",
           )
           await rl2.question("  Press Enter to retry...")
@@ -285,7 +295,7 @@ export async function runSetupWizard(): Promise<void> {
         `FEISHU_APP_ID=${appId}`,
         `FEISHU_APP_SECRET=${appSecret}`,
       ]
-      if (serverUrl !== DEFAULT_URL) {
+      if (serverUrl !== FALLBACK_URL) {
         lines.push(`OPENCODE_SERVER_URL=${serverUrl}`)
       }
       const pw = serverPassword
