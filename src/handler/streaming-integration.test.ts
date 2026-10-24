@@ -876,7 +876,7 @@ describe("createStreamingBridge", () => {
     // the hit rate comes from the counters the server reports
     expect(content).toContain("4.1k tok")
     expect(content).toContain("缓存命中 75%")
-    expect(content).toContain("Σ 4.1k tok")
+    expect(content).toContain("总 4.1k tok")
   })
 
   it("shows how much of the context window is in use", async () => {
@@ -1022,7 +1022,7 @@ describe("createStreamingBridge", () => {
     expect(content).toContain("缓存命中 75%")
     // the cumulative numbers must not show up as the turn's own numbers —
     // they are only reported as the session total, clearly labelled
-    expect(content).toContain("Σ 4.1k tok")
+    expect(content).toContain("总 4.1k tok")
     expect(content).not.toContain("4.0k")
   })
 
