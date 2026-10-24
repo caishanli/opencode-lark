@@ -485,6 +485,45 @@ describe("createCommandHandler", () => {
       expect(patched.elements[0].content).toContain("2.0.33")
     })
 
+    it("/更新 shows progress and asks whether to restart", async () => {
+      mockFeishuClient.replyMessage = vi.fn().mockResolvedValue({
+        code: 0,
+        msg: "ok",
+        data: { message_id: "card-update" },
+      })
+      mockFeishuClient.updateMessage = vi.fn().mockResolvedValue({ code: 0, msg: "ok" })
+      let resolveUpgrade: (value: { success: boolean; output: string }) => void = () => {}
+      const pending = new Promise<{ success: boolean; output: string }>((resolve) => {
+        resolveUpgrade = resolve
+      })
+      const supervisor = {
+        isIdleWatchEnabled: vi.fn(() => true),
+        setIdleWatchEnabled: vi.fn(),
+        idleTimeoutMinutes: vi.fn(() => 30),
+        setIdleTimeoutMinutes: vi.fn(),
+        stop: vi.fn().mockResolvedValue(undefined),
+        upgradeOpencode: vi.fn(() => pending),
+      }
+      const handler = createHandler(undefined, mockGateway, { supervisor } as any)
+
+      const run = handler("chat-1", "chat-1", "msg-1", "/更新", { menuId: "menu-1" })
+      await waitFor(() => expect(mockFeishuClient.replyMessage).toHaveBeenCalled())
+      const progressCard = JSON.parse(
+        (mockFeishuClient.replyMessage as any).mock.calls[0][1].content,
+      )
+      expect(progressCard.elements[0].content).toContain("正在下载")
+
+      resolveUpgrade({ success: true, output: "Upgraded to v2.0.34" })
+      await run
+
+      const patched = JSON.parse((mockFeishuClient.updateMessage as any).mock.calls.at(-1)[1])
+      expect(patched.elements[0].content).toContain("2.0.34")
+      const actions = patched.elements
+        .filter((el: any) => el.tag === "action")
+        .flatMap((el: any) => el.actions)
+      expect(actions.map((action: any) => action.value.choice)).toEqual(["now", "later"])
+    })
+
     it("/help lists the commands opencode offers in this project", async () => {
       mockFeishuClient.replyMessage = vi.fn().mockResolvedValue({ code: 0, msg: "ok" })
       ;(mockGateway.commands as ReturnType<typeof vi.fn>).mockResolvedValue([

@@ -16,6 +16,14 @@ import type { AgentInfo, ModelInfo, OpencodeGateway } from "../opencode/gateway.
 import { eventPayload } from "../opencode/events.js"
 import { toFeishuMarkdown } from "../feishu/markdown.js"
 import { formatTokens } from "../streaming/usage.js"
+import { startUpgradeProgress } from "../opencode/upgrade-progress.js"
+import {
+  buildUpgradeFailedCard,
+  buildUpgradeNoopCard,
+  buildUpgradeProgressCard,
+  buildUpgradeRestartCard,
+  formatUpgradeProgress,
+} from "./upgrade-card.js"
 import { ReplyModeStore, type ReplyMode } from "./reply-mode.js"
 
 // ── Dependency injection interface ──
@@ -1503,12 +1511,32 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
     target?: string,
   ): Promise<void> {
     const existing = menuId ? menuCards.get(menuId) : undefined
+    const cardId = existing?.id ?? menuId ?? newMenuId()
+    const startedAt = Date.now()
 
-    // The card shows the progress while the server downloads the new version.
-    if (existing) {
-      const card = buildHelpCard([], existing.id, "🔄 正在更新 opencode…")
-      await publishMenuCard(chatId, messageId, existing, card, existing.id)
+    // The card is opened before the upgrade: the download takes about a
+    // minute and the CLI itself only shows an "Upgrading…" spinner.
+    let stopped = false
+    let chain: Promise<void> = Promise.resolve()
+    const push = (card: Record<string, unknown>): Promise<void> => {
+      chain = chain
+        .then(async () => {
+          if (stopped) return
+          await publishMenuCard(
+            chatId,
+            messageId,
+            menuCards.get(cardId) ?? existing,
+            card,
+            cardId,
+          )
+        })
+        .catch((err) => logger.warn(`Could not update the upgrade card: ${err}`))
+      return chain
     }
+    const progress = (notice: string): Promise<void> =>
+      push(buildUpgradeProgressCard(notice))
+
+    await progress(formatUpgradeProgress({ bytes: 0, phase: "downloading" }, 0))
 
     const upgrade = deps.supervisor?.upgradeOpencode
     if (!upgrade) {
@@ -1516,14 +1544,45 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
       return
     }
 
+    let sampledVersion: string | undefined
+    const stopProgress = startUpgradeProgress({
+      startedAt,
+      onUpdate: (sample) => {
+        if (sample.version) sampledVersion = sample.version
+        void progress(formatUpgradeProgress(sample, Date.now() - startedAt))
+      },
+    })
+
+    /** Stop the poller and wait for the card writes that are still queued. */
+    const settle = async (): Promise<void> => {
+      stopped = true
+      stopProgress()
+      await chain
+    }
+
+    /** Replace the progress card once the upgrade is over. */
+    const finish = (card: Record<string, unknown>): Promise<void> =>
+      publishMenuCard(
+        chatId,
+        messageId,
+        menuCards.get(cardId) ?? existing,
+        card,
+        cardId,
+      )
+
     let result: { success: boolean; output: string }
     try {
       result = await upgrade(target || undefined)
     } catch (err) {
+      await settle()
       const message = err instanceof Error ? err.message : String(err)
-      await replyText(chatId, messageId, `更新失败：${message}`)
+      await finish(buildUpgradeFailedCard(`更新失败：${message}`))
       return
     }
+
+    await settle()
+    const version =
+      result.output.match(/v?\d+\.\d+\.\d+/g)?.at(-1) ?? sampledVersion ?? "最新版本"
 
     if (!result.success) {
       // The CLI draws a spinner with escape codes — strip them.
@@ -1534,29 +1593,22 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
         .filter(Boolean)
         .slice(-2)
         .join(" ")
-      const message = `更新失败${detail ? `：${detail}` : ""}`
-      if (existing) {
-        const card = buildHelpCard([], existing.id, `❌ ${message}`)
-        await publishMenuCard(chatId, messageId, existing, card, existing.id)
-        return
-      }
-      await replyText(chatId, messageId, message)
+      await finish(buildUpgradeFailedCard(`更新失败${detail ? `：${detail}` : ""}`))
       return
     }
 
-    // The running server still uses the old binary — stop it, so the next
-    // message starts the new version.
+    // Already current: nothing changed, so neither stop the server nor offer
+    // a restart.
+    if (/skipped|already installed/i.test(result.output)) {
+      await finish(buildUpgradeNoopCard(version))
+      return
+    }
+
+    // The running server still has the old binary loaded — stop it, so the
+    // restart button (or the next message) starts the new one.
     await deps.supervisor?.stop?.().catch(() => {})
 
-    // The CLI prints "From 2.0.32 → 2.1.2" — the new version is the last one.
-    const version = result.output.match(/v?\d+\.\d+\.\d+/g)?.at(-1)
-    const text = `✅ 已更新到 ${version ?? "最新版本"}，opencode 会在下次使用时重启`
-    if (existing) {
-      const card = buildHelpCard([], existing.id, `✅ 已更新到 ${version ?? "最新版本"}（下次使用时生效）`)
-      await publishMenuCard(chatId, messageId, existing, card, existing.id)
-      return
-    }
-    await replyText(chatId, messageId, text)
+    await finish(buildUpgradeRestartCard(version, Date.now() - startedAt))
   }
 
   /**

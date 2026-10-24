@@ -41,6 +41,7 @@ import {
 import { createCommandHandler } from "./handler/command-handler.js"
 import { ReplyModeStore } from "./handler/reply-mode.js"
 import { createPendingPromptStore } from "./handler/pending-prompts.js"
+import { buildUpgradeRestartResultCard } from "./handler/upgrade-card.js"
 import { createOutboundMediaHandler } from "./handler/outbound-media.js"
 import { createSessionObserver } from "./streaming/session-observer.js"
 import { addListener, removeListener } from "./utils/event-listeners.js"
@@ -407,6 +408,34 @@ async function main(): Promise<void> {
       actionType === "form_submit"
     ) {
       return interactiveHandler(action)
+    }
+    if (actionType === "opencode_restart") {
+      const choice = action.action?.value?.choice
+      const version = String(action.action?.value?.version ?? "")
+      const messageId = action.open_message_id
+      // The callback has already returned a toast; the card is patched once
+      // the server is up (or immediately, for "later").
+      void (async () => {
+        try {
+          if (choice === "later") {
+            await feishuClient.updateMessage(
+              messageId,
+              JSON.stringify(buildUpgradeRestartResultCard("later", version)),
+            )
+            return
+          }
+          // The upgrade already stopped the old process; start the new one
+          // unless a later message already did.
+          const up = (await supervisor.isRunning()) || (await supervisor.ensureRunning())
+          await feishuClient.updateMessage(
+            messageId,
+            JSON.stringify(buildUpgradeRestartResultCard(up ? "now" : "failed", version)),
+          )
+        } catch (err) {
+          logger.warn(`Could not restart opencode after the update: ${err}`)
+        }
+      })()
+      return
     }
     if (actionType === "pending_prompt") {
       const pendingId = action.action.value.pendingId

@@ -45,6 +45,18 @@ export function buildInteractiveCallbackResponse(
     }
   }
 
+  if (actionType === "opencode_restart") {
+    return {
+      toast: {
+        type: "info",
+        content:
+          value.choice === "later"
+            ? "好的，下一条消息时启动新版本"
+            : "正在重启 opencode 服务…",
+      },
+    }
+  }
+
   if (actionType === "form_submit") {
     return {
       toast: { type: "info", content: "正在提交选择…" },
