@@ -87,24 +87,24 @@ opencode TUI
 ### 一台新机器，一条命令
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/caishanli/opencode-lark/main/manage.sh | bash
+curl -fsSL https://raw.githubusercontent.com/caishanli/opencode-lark/main/opencode-lark.sh | bash
 ```
 
 会依次检查/安装 Bun 和 opencode、拉取仓库、安装依赖、跑配置向导（扫码创建飞书应用）、装好 systemd 用户服务。已经有飞书应用时可以不进向导：
 
 ```bash
-FEISHU_APP_ID=cli_xxx FEISHU_APP_SECRET=xxx OPENCODE_SERVER_PASSWORD=xxx bash manage.sh
+FEISHU_APP_ID=cli_xxx FEISHU_APP_SECRET=xxx OPENCODE_SERVER_PASSWORD=xxx bash opencode-lark.sh
 ```
 
 重复执行是安全的：已有配置会保留，正在运行的服务不会被重启（改代码后用 `scripts/restart-when-idle.sh`）。
 
 | 命令 | 作用 |
 |---|---|
-| `manage.sh`（默认） | 安装/更新全部内容；在 **Ubuntu** 上还会开启开机自启（systemd user + `loginctl enable-linger`） |
-| `manage.sh config` | 重新配置飞书应用（换应用 / 换凭据），旧应用的配置会被删除 |
-| `manage.sh update` | `git pull`、`bun install`，然后等当前回合结束后重启服务 |
-| `manage.sh remove [--purge]` | 停止并移除服务；`--purge` 同时删除配置和 `data/` |
-| `manage.sh help` | 显示命令说明 |
+| `opencode-lark.sh`（默认） | 安装/更新全部内容；在 **Ubuntu** 上还会开启开机自启（systemd user + `loginctl enable-linger`） |
+| `opencode-lark.sh config` | 重新配置飞书应用（换应用 / 换凭据），旧应用的配置会被删除 |
+| `opencode-lark.sh update` | `git pull`、`bun install`，然后等当前回合结束后重启服务 |
+| `opencode-lark.sh remove [--purge]` | 停止并移除服务；`--purge` 同时删除配置和 `data/` |
+| `opencode-lark.sh help` | 显示命令说明 |
 
 扫码流程创建的应用本身已经带好机器人权限和 `card.action.trigger` 回调；保存凭据后安装脚本会从飞书读回配置，缺什么就提示什么。
 
