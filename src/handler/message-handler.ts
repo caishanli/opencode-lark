@@ -746,6 +746,7 @@ export function createMessageHandler(
     // ── 8. Build the POST-to-opencode function ──
     let currentSessionId = sessionId
     let deliveryMode: "interrupt" | "queue" = "interrupt"
+    let sendQueued = false
     // Build text + files for v2 prompt body
     const textParts = parts
       .filter((p: any) => p.type === "text")
@@ -771,7 +772,7 @@ export function createMessageHandler(
           text: textParts,
           files: fileParts.length ? fileParts : undefined,
         }
-        if (deliveryMode === "queue") {
+        if (deliveryMode === "queue" || sendQueued) {
           await opencode.sendPrompt(currentSessionId, prompt, { delivery: "queue" })
         } else {
           await opencode.sendPrompt(currentSessionId, prompt)
@@ -828,7 +829,7 @@ export function createMessageHandler(
               await new Promise((resolve) => setTimeout(resolve, 2_000))
             }
           }
-          await deliver("interrupt")
+          await deliver("interrupt", { queued: true })
         },
       })
       try {
@@ -840,7 +841,7 @@ export function createMessageHandler(
         // Without the card the user cannot choose: deliver immediately.
         deps.pendingPrompts.take(pending.id)
         logger.warn(`Could not send the interrupt-or-queue card: ${err}`)
-        await deliver("interrupt")
+        await deliver("interrupt", { queued: true })
       }
       return
     }
@@ -848,8 +849,15 @@ export function createMessageHandler(
     await deliver("interrupt")
 
     // ── 9. Try streaming bridge (registers listener BEFORE POST) → sync fallback ──
-    async function deliver(mode: "interrupt" | "queue"): Promise<void> {
+    async function deliver(
+      mode: "interrupt" | "queue",
+      opts: { queued?: boolean } = {},
+    ): Promise<void> {
       deliveryMode = mode
+      // A steer prompt admitted right after an interrupt is attached to the
+      // interrupted turn, which the web UI does not render as a new message.
+      // An explicit queue becomes a fresh turn once the session is idle.
+      sendQueued = opts.queued === true
       if (mode === "interrupt") {
         // Stop the running turn *before* the new streaming bridge registers:
         // the old execution's interrupted event would otherwise arrive at the
@@ -1086,6 +1094,7 @@ export function createMessageHandler(
     // Build POST function
     let currentSessionId = sessionId
     let deliveryMode: "interrupt" | "queue" = "interrupt"
+    let sendQueued = false
     // Build text + files for v2 prompt body
     const textParts = parts
       .filter((p: any) => p.type === "text")
@@ -1113,7 +1122,7 @@ export function createMessageHandler(
           text: textParts,
           files: fileParts.length ? fileParts : undefined,
         }
-        if (deliveryMode === "queue") {
+        if (deliveryMode === "queue" || sendQueued) {
           await opencode.sendPrompt(currentSessionId, prompt, { delivery: "queue" })
         } else {
           await opencode.sendPrompt(currentSessionId, prompt)
