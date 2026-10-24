@@ -150,6 +150,8 @@ export interface OpencodeGateway {
   /** Change the model of a session. */
   switchModel(sessionID: string, model: { id: string; providerID: string; variant?: string }): Promise<void>
   abort(sessionID: string): Promise<void>
+  /** Interrupt and, with `resume`, continue the turn with pending steer input. */
+  interrupt(sessionID: string, resume?: boolean): Promise<void>
   activeStatuses(): Promise<Record<string, { type: string }>>
 
   listPermissions(): Promise<PermissionRequest[]>
@@ -362,6 +364,14 @@ export function createOpencodeGateway(options: OpencodeGatewayOptions): Opencode
     },
     async abort(sessionID) {
       await client.v2.session.interrupt({ sessionID })
+    },
+    async interrupt(sessionID, resume = false) {
+      const query = resume ? "?resume=true" : ""
+      const res = await rawRequest(
+        `/api/session/${encodeURIComponent(sessionID)}/interrupt${query}`,
+        { method: "POST" },
+      )
+      if (!res.ok) throw new Error(`interrupt failed: HTTP ${res.status}`)
     },
     async activeStatuses() {
       const res = await client.v2.session.active()

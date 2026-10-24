@@ -19,6 +19,7 @@ import type { StreamingBridge } from "./streaming-integration.js"
 import { buildFinalResponseCard } from "./streaming-integration.js"
 import { buildPendingPromptCard } from "./pending-prompt-card.js"
 import type { PendingPromptStore } from "./pending-prompts.js"
+import { markSteering } from "../streaming/steering.js"
 import type { SessionObserver } from "../streaming/session-observer.js"
 import type { EventListenerMap } from "../utils/event-listeners.js"
 import { addListener, removeListener } from "../utils/event-listeners.js"
@@ -882,6 +883,35 @@ export function createMessageHandler(
                 .deleteReaction(event.message_id, reactionId)
                 .catch(() => {})
             }
+            return
+          }
+          if (choice === "steer") {
+            // Same as the opencode web UI: admit the message as a steer and
+            // interrupt with resume, so the same turn continues with it. No
+            // new bridge: the card of the running turn stays attached.
+            if (await isSessionRunning(currentSessionId)) {
+              markSteering(currentSessionId)
+              try {
+                await opencode.sendPrompt(
+                  currentSessionId,
+                  {
+                    text: textParts,
+                    files: fileParts.length ? fileParts : undefined,
+                  },
+                  { delivery: "steer" },
+                )
+                await opencode.interrupt(currentSessionId, true)
+              } catch (err) {
+                logger.warn(`Could not steer the running turn: ${err}`)
+              }
+              if (reactionId) {
+                await feishuClient
+                  .deleteReaction(event.message_id, reactionId)
+                  .catch(() => {})
+              }
+              return
+            }
+            await deliver("interrupt", { queued: true })
             return
           }
           if (choice === "queue") {

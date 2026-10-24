@@ -290,7 +290,7 @@ describe("createMessageHandler", () => {
     const pending = store.list()
     expect(pending).toHaveLength(1)
     const card = JSON.parse((deps.feishuClient.replyMessage as any).mock.calls[0][1].content)
-    expect(JSON.stringify(card)).toContain("打断并发送")
+    expect(JSON.stringify(card)).toContain("立即插入")
     expect(JSON.stringify(card)).toContain("排队执行")
 
     await pending[0]!.onChoose("cancel")

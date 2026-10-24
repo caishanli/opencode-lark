@@ -42,7 +42,7 @@ export function buildPendingPromptCard(pending: PendingPrompt): Record<string, u
       {
         tag: "action",
         actions: [
-          button("⚡ 打断并发送", "primary", pending, "interrupt"),
+          button("⚡ 立即插入", "primary", pending, "steer"),
           button("⏳ 排队执行", "default", pending, "queue"),
           button("✖ 取消", "danger", pending, "cancel"),
         ],
@@ -52,7 +52,7 @@ export function buildPendingPromptCard(pending: PendingPrompt): Record<string, u
 }
 
 const RESULT_TEXT: Record<PendingPromptChoice, string> = {
-  interrupt: "已打断上一轮，正在发送新消息。",
+  steer: "已插入当前回合，模型会接着处理这条消息。",
   queue: "已排队，等这一轮结束后执行。",
   cancel: "已取消这条消息。",
 }

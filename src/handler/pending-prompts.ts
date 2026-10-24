@@ -9,7 +9,7 @@
 
 import { randomUUID } from "node:crypto"
 
-export type PendingPromptChoice = "interrupt" | "queue" | "cancel"
+export type PendingPromptChoice = "steer" | "queue" | "cancel"
 
 export interface PendingPrompt {
   id: string

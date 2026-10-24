@@ -410,14 +410,16 @@ async function main(): Promise<void> {
     }
     if (actionType === "pending_prompt") {
       const pendingId = action.action.value.pendingId
-      const choice = action.action.value.choice
+      const rawChoice = action.action.value.choice
       if (!pendingId) return
       const pending = pendingPrompts.take(pendingId)
       if (!pending) {
         logger.warn("The pending prompt expired before the choice arrived")
         return
       }
-      if (choice === "interrupt" || choice === "queue" || choice === "cancel") {
+      // Old cards carried `interrupt`; it now means "steer into the turn".
+      const choice = rawChoice === "interrupt" ? "steer" : rawChoice
+      if (choice === "steer" || choice === "queue" || choice === "cancel") {
         void pending.onChoose(choice).catch((err) =>
           logger.warn(`Pending prompt delivery failed: ${err}`),
         )

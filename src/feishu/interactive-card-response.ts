@@ -31,9 +31,10 @@ export function buildInteractiveCallbackResponse(
   }
 
   if (actionType === "pending_prompt") {
-    const choice = (value.choice ?? "cancel") as PendingPromptChoice
+    const rawChoice = value.choice ?? "cancel"
+    const choice = (rawChoice === "interrupt" ? "steer" : rawChoice) as PendingPromptChoice
     const label =
-      choice === "interrupt" ? "已打断，正在发送…"
+      choice === "steer" ? "已插入当前回合…"
       : choice === "queue" ? "已排队…"
       : "已取消"
     return {
