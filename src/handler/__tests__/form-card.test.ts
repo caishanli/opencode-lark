@@ -117,6 +117,7 @@ describe("buildFormCard", () => {
       "input",
       "button",
     ])
+    expect((form?.elements as any)[1].text.content).toBe("提交其他答案")
 
     expect((card.elements as any)[0].content).toContain("- **A** — why A")
   })

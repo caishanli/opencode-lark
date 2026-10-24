@@ -117,12 +117,12 @@ export function buildFormCard(form: FormInfo): Record<string, unknown> {
           {
             tag: "input",
             name: `${only.key}__other`,
-            placeholder: text("其他答案（可选）"),
+            placeholder: text("其他答案（填写后点「提交其他答案」）"),
           },
           {
             tag: "button",
             name: "submit",
-            text: text("提交"),
+            text: text("提交其他答案"),
             type: "default",
             action_type: "form_submit",
             value: { action: "form_submit", sessionId: form.sessionID, formId: form.id },
