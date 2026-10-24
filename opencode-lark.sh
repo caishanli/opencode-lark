@@ -62,6 +62,12 @@ usage() {
 EOF
 }
 
+# /dev/tty exists even when there is no controlling terminal; opening it is
+# the only reliable test (a piped `curl | bash` has no usable stdin).
+have_tty() {
+  ( exec 3</dev/tty ) 2>/dev/null
+}
+
 is_ubuntu() {
   [ -r /etc/os-release ] && ( . /etc/os-release; [ "${ID:-}" = "ubuntu" ] )
 }
@@ -165,13 +171,20 @@ write_env_from_environment() {
 # The wizard creates (or connects) the Feishu app through the QR flow, which
 # also provisions the bot scopes and the card callback.
 run_wizard() {
-  if ! [ -t 0 ] && ! [ -r /dev/tty ]; then
+  if ! [ -t 0 ] && ! have_tty; then
     return 1
   fi
 
   say "配置飞书应用（扫码自动创建并授权，或手动输入 App ID / App Secret）"
   if [ -z "${OPENCODE_SERVER_PASSWORD:-}" ]; then
-    read -rsp "  opencode server 密码（Basic auth）: " OPENCODE_SERVER_PASSWORD
+    # `curl … | bash` leaves stdin at EOF (it is the script's own pipe), so the
+    # prompts must read the controlling terminal explicitly.
+    if ! [ -t 0 ] && ! have_tty; then
+      die "没有终端可以输入密码；请设置 OPENCODE_SERVER_PASSWORD 后重试"
+    fi
+    if ! read -rsp "  opencode server 密码（Basic auth）: " OPENCODE_SERVER_PASSWORD < /dev/tty; then
+      die "读不到终端输入；请设置 OPENCODE_SERVER_PASSWORD 后重试"
+    fi
     printf '\n'
     [ -n "$OPENCODE_SERVER_PASSWORD" ] || die "密码不能为空"
   fi
@@ -212,7 +225,7 @@ configure() {
   if write_env_from_environment; then
     return 0
   fi
-  if ! [ -t 0 ] && ! [ -r /dev/tty ]; then
+  if ! [ -t 0 ] && ! have_tty; then
     die "没有终端可交互：请设置 FEISHU_APP_ID / FEISHU_APP_SECRET / OPENCODE_SERVER_PASSWORD"
   fi
   run_wizard
@@ -346,9 +359,9 @@ do_config() {
   local existing_env before="" new_file new_name old
   existing_env="$(find_env_file)"
   if [ -n "$existing_env" ]; then
-    if [ -t 0 ]; then
-      local answer
-      read -rp "重新配置会替换现有飞书凭据（$existing_env），继续？[y/N]: " answer
+    if [ -t 0 ] || have_tty; then
+      local answer=""
+      read -rp "重新配置会替换现有飞书凭据（$existing_env），继续？[y/N]: " answer < /dev/tty || answer=""
       case "$answer" in y|Y|yes|YES) ;; *) die "已取消" ;; esac
     fi
     # Remember what is there; only the file the wizard writes survives, so a
