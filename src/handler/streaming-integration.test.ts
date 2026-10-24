@@ -801,12 +801,12 @@ describe("createStreamingBridge", () => {
 
     const content = cardContent(mockFeishu)
     // the token count is the turn's total (input 1000 + output 100 + cache 3000)
-    expect(content).toContain("4.1k toks")
+    expect(content).toContain("4.1k tok")
     expect(content).toContain("tok/s")
-    expect(content).toContain("🪟 4.0k")
+    expect(content).toContain("◔ 4.0k")
     // the hit rate comes from the counters the server reports
-    expect(content).toContain("4.1k toks(♻️ 75%)")
-    expect(content).toContain("🧾 4.1k")
+    expect(content).toContain("4.1k tok · 缓存命中 75%")
+    expect(content).toContain("🗄 4.1k tok")
   })
 
   it("shows how much of the context window is in use", async () => {
@@ -856,7 +856,7 @@ describe("createStreamingBridge", () => {
     const content = cardContent(mockFeishu)
     // 4000 of 10000 tokens = 40%
     // 4000 of 10000 tokens = 40%
-    expect(content).toContain("🪟 4.0k (40%)")
+    expect(content).toContain("◔ 4.0k (40%)")
     expect(modelContextLimit).toHaveBeenCalledWith("p1", "m1")
   })
 
@@ -947,13 +947,13 @@ describe("createStreamingBridge", () => {
 
     const content = cardContent(mockFeishu)
     // delta = input 100 + output 10 + cache.read 100
-    expect(content).toContain("10 toks")      // generated only
-    expect(content).toContain("🪟 200")      // input + cache read
-    expect(content).toContain("210 toks(♻️ 75%)")
+    expect(content).toContain("10 tok")      // generated only
+    expect(content).toContain("◔ 200")      // input + cache read
+    expect(content).toContain("210 tok · 缓存命中 75%")
     // the cumulative numbers must not show up as the turn's own numbers —
     // they are only reported as the session total, clearly labelled
-    expect(content).toContain("🧾 4.1k")
-    expect(content).not.toContain("🪟 4.0k")
+    expect(content).toContain("🗄 4.1k tok")
+    expect(content).not.toContain("◔ 4.0k")
   })
 
   it("times the rate against model time (step span), not the whole turn", async () => {
@@ -998,7 +998,7 @@ describe("createStreamingBridge", () => {
     // the card shows the TOTAL turn duration …
     expect(content).toMatch(/⏱ [\d.]+s/)
     // the turn's total (input 1000 + output 100 + cache 3000)
-    expect(content).toContain("110 toks")
+    expect(content).toContain("110 tok")
     // … but the rate is timed against the model time only: it must match
     // 100 tokens / model time (not 100 tokens / whole turn).
     const match = /([\d.]+)(k?) tok\/s/.exec(content)
@@ -1047,8 +1047,8 @@ describe("createStreamingBridge", () => {
 
     const content = cardContent(mockFeishu)
     // the last step's context (6000) — not the sum over both steps (18000)
-    expect(content).toContain("🪟 6.0k")
-    expect(content).not.toContain("🪟 18.0k")
+    expect(content).toContain("◔ 6.0k")
+    expect(content).not.toContain("◔ 18.0k")
   })
 
   it("closes the turn on session.execution.succeeded", async () => {

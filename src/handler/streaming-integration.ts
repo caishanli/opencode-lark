@@ -137,20 +137,24 @@ export function createStreamingBridge(
     const usageLine = (): string | null => {
       if (!lastUsage) return null
       const { context, total, sessionTotal, rate, hit, cost, turnMs, rounds, steps } = lastUsage
-      const hitPart = `(♻️ ${hit}%)`
+      // Same shorthand as the opencode status bar: a clock for time, a
+      // database for the stored (session) tokens, a pie for the context
+      // window — and a spelled-out label for the cache, because any icon
+      // there just invited a guess.
+      const hitPart = ` · 缓存命中 ${hit}%`
       const timePart = turnMs > 0 ? `⏱ ${(turnMs / 1000).toFixed(1)}s · ` : ""
       const limit = turnContextLimit
       const used =
         limit && limit > 0 && context > 0 ? ` (${formatPercent(context / limit)}%)` : ""
-      const contextPart = context > 0 ? ` · 🪟 ${formatTokens(context)}${used}` : ""
+      const contextPart = context > 0 ? ` · ◔ ${formatTokens(context)}${used}` : ""
       // What the whole session has consumed so far — the turn's own total
       // above is only a part of it.
-      const sessionPart = sessionTotal > 0 ? ` · 🧾 ${formatTokens(sessionTotal)}` : ""
+      const sessionPart = sessionTotal > 0 ? ` · 🗄 ${formatTokens(sessionTotal)} tok` : ""
       // How much work the agent did: the rounds it wrote in and the model
       // calls it took.
       const workPart = steps > 0 ? `${rounds} 轮 ${steps} 步 · ` : ""
       return (
-        `${timePart}${workPart}${formatTokens(total)} toks${hitPart} · ` +
+        `${timePart}${workPart}${formatTokens(total)} tok${hitPart} · ` +
         `${formatRate(rate)} tok/s${contextPart}${sessionPart}${cost}`
       )
     }
