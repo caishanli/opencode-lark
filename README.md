@@ -122,7 +122,8 @@ bash install.sh --proxy http://127.0.0.1:7890
 
 The proxy is saved to `~/.config/opencode-lark/.env.<appId>` together with
 `NO_PROXY=127.0.0.1,localhost`, so the opencode server the bridge starts uses
-it for model calls; delete those lines to turn that off.
+it for model calls; delete those lines to turn that off. Later runs
+(`update`, `install`) reuse the saved proxy automatically.
 
 | Command | What it does |
 |---|---|

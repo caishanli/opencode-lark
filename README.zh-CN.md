@@ -111,7 +111,7 @@ curl -fsSL https://raw.githubusercontent.com/caishanli/opencode-lark/main/instal
 bash install.sh --proxy http://127.0.0.1:7890
 ```
 
-代理会写进 `~/.config/opencode-lark/.env.<appId>`，并带上 `NO_PROXY=127.0.0.1,localhost`，这样桥拉起的 opencode server 调模型也走代理；不需要就删掉那几行。
+代理会写进 `~/.config/opencode-lark/.env.<appId>`，并带上 `NO_PROXY=127.0.0.1,localhost`，这样桥拉起的 opencode server 调模型也走代理；不需要就删掉那几行。之后运行 `update` / `install` 也会自动复用保存的代理。
 
 | 命令 | 作用 |
 |---|---|

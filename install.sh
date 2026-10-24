@@ -89,6 +89,24 @@ setup_proxy() {
 }
 setup_proxy
 
+# Later runs (update, install) reuse the proxy saved in the .env file.
+load_saved_proxy() {
+  proxy_active && return 0
+  local env_file value=""
+  env_file="$(find_env_file)"
+  [ -n "$env_file" ] || return 0
+  value="$(sed -n 's/^HTTPS_PROXY=//p' "$env_file" | tail -1 | tr -d '"\r')"
+  if [ -z "$value" ]; then
+    value="$(sed -n 's/^HTTP_PROXY=//p' "$env_file" | tail -1 | tr -d '"\r')"
+  fi
+  if [ -z "$value" ]; then
+    value="$(sed -n 's/^ALL_PROXY=//p' "$env_file" | tail -1 | tr -d '"\r')"
+  fi
+  [ -n "$value" ] || return 0
+  PROXY="$value"
+  setup_proxy
+}
+
 usage() {
   cat <<'EOF'
 用法: install.sh [命令] [--proxy <url>]
@@ -632,6 +650,8 @@ do_remove() {
   note "代码目录没有删除；需要的话手动 rm -rf ${REPO:-$HOME/opencode-lark}"
   note "如果不再需要，注销后自启也一并失效（loginctl disable-linger $USER 可立即关闭）"
 }
+
+load_saved_proxy
 
 case "$CMD" in
   install) do_install ;;
