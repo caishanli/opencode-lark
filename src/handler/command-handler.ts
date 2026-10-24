@@ -12,10 +12,11 @@ import type { EventProcessor } from "../streaming/event-processor.js"
 import { addListener, removeListener, type EventListenerMap } from "../utils/event-listeners.js"
 import type { FeishuApiClient } from "../feishu/api-client.js"
 import type { Logger } from "../utils/logger.js"
-import type { ModelInfo, OpencodeGateway } from "../opencode/gateway.js"
+import type { AgentInfo, ModelInfo, OpencodeGateway } from "../opencode/gateway.js"
 import { eventPayload } from "../opencode/events.js"
 import { toFeishuMarkdown } from "../feishu/markdown.js"
 import { formatTokens } from "../streaming/usage.js"
+import { ReplyModeStore, type ReplyMode } from "./reply-mode.js"
 
 // ── Dependency injection interface ──
 
@@ -42,6 +43,8 @@ export interface CommandHandlerDeps {
     /** Upgrade the opencode installation. */
     upgradeOpencode?(target?: string): Promise<{ success: boolean; output: string }>
   }
+  /** Per-chat reply detail, set by /回复 and read by the streaming bridge. */
+  replyModes?: ReplyModeStore
 }
 
 // ── Types ──
@@ -295,8 +298,39 @@ function buildHelpCard(
         ],
       },
       {
+        tag: "action",
+        actions: [
+          {
+            tag: "button",
+            text: { tag: "plain_text", content: "📊 状态" },
+            value: { action: "command_execute", menu: menuId, command: "/状态" },
+          },
+          {
+            tag: "button",
+            text: { tag: "plain_text", content: "🧩 模式" },
+            value: { action: "command_execute", menu: menuId, command: "/模式" },
+          },
+          {
+            tag: "button",
+            text: { tag: "plain_text", content: "💭 思考" },
+            value: { action: "command_execute", menu: menuId, command: "/思考" },
+          },
+          {
+            tag: "button",
+            text: { tag: "plain_text", content: "💬 回复" },
+            value: { action: "command_execute", menu: menuId, command: "/回复" },
+          },
+          {
+            tag: "button",
+            text: { tag: "plain_text", content: "📁 项目" },
+            value: { action: "command_execute", menu: menuId, command: "/项目" },
+          },
+        ],
+      },
+      {
         tag: "markdown",
-        content: "_打字命令：`/connect <会话ID>` · `/模型 [provider] [页码]` · `/自动关闭 [不关闭|15|30|60]` · `/help`_",
+        content:
+          "_打字命令：`/状态` · `/模式 [build|plan]` · `/思考 [default|low|high|max]` · `/回复 [简洁|标准]` · `/clear` · `/bind <会话ID>` · `/connect <会话ID>` · `/模型 [provider] [页码]` · `/自动关闭 [不关闭|15|30|60]`_",
       },
       ...buildOpencodeCommandElements(opencodeCommands),
     ],
@@ -718,6 +752,231 @@ interface PendingCompaction {
   settle: (state: CompactionCardState) => void
 }
 
+/** A card that can be updated in place (status, mode, thinking, reply). */
+interface SimpleMenuEntry {
+  id: string
+  messageId: string
+  chatId: string
+  createdAt: number
+}
+
+/** A button that hands a command back to the handler, keeping the card id. */
+function menuButton(label: string, command: string, menuId: string): Record<string, unknown> {
+  return {
+    tag: "button",
+    text: { tag: "plain_text", content: label },
+    value: { action: "command_execute", menu: menuId, command },
+  }
+}
+
+interface StatusCardData {
+  sessionId: string
+  title?: string
+  directory?: string
+  model?: { id?: string; providerID?: string; variant?: string } | null
+  agent?: string
+  running: boolean
+  context?: number
+  limit?: number
+  tokens?: {
+    input?: number
+    output?: number
+    reasoning?: number
+    cache?: { read?: number; write?: number }
+  }
+}
+
+/** /状态 — where the session lives, what it runs and how full the window is. */
+function buildStatusCard(data: StatusCardData, menuId: string): Record<string, unknown> {
+  const lines: string[] = []
+  if (data.directory) lines.push(`**工作区**：\`${data.directory}\``)
+  const title = data.title?.trim()
+  lines.push(`**会话**：${title ? `${title} · ` : ""}\`${data.sessionId}\``)
+  lines.push(
+    data.model?.id && data.model.providerID
+      ? `**模型**：\`${data.model.providerID}/${data.model.id}\` · 思考 \`${data.model.variant || "default"}\``
+      : "**模型**：未知（先发一条消息或到 /模型 选一个）",
+  )
+  lines.push(`**模式**：${data.agent || "build"}`)
+  lines.push(`**任务**：${data.running ? "🟢 运行中" : "⚪ 空闲"}`)
+  if (data.context && data.context > 0) {
+    const limit = data.limit && data.limit > 0 ? data.limit : undefined
+    const of = limit
+      ? ` / ${formatTokens(limit)}（${((data.context / limit) * 100).toFixed(2)}%）`
+      : ""
+    lines.push(`**上下文**：${formatTokens(data.context)}${of}`)
+  }
+  const tokens = data.tokens
+  if (tokens) {
+    lines.push(
+      `**累计**：input ${formatTokens(tokens.input ?? 0)} · output ${formatTokens(tokens.output ?? 0)}` +
+        ` · 缓存读 ${formatTokens(tokens.cache?.read ?? 0)}`,
+    )
+  }
+  return {
+    config: { wide_screen_mode: true },
+    header: { title: { tag: "plain_text", content: "📊 状态" }, template: "blue" },
+    elements: [
+      { tag: "markdown", content: lines.join("\n") },
+      {
+        tag: "action",
+        actions: [
+          menuButton("🔄 刷新", "/状态", menuId),
+          menuButton("🧠 模型", "/模型", menuId),
+          menuButton("🧩 模式", "/模式", menuId),
+          menuButton("💭 思考", "/思考", menuId),
+          menuButton("💬 回复", "/回复", menuId),
+        ],
+      },
+    ],
+  }
+}
+
+/** /模式 — the primary agents the server can run. */
+function buildModeCard(
+  agents: AgentInfo[],
+  current: string,
+  menuId: string,
+  notice?: string,
+): Record<string, unknown> {
+  const buttons = agents.map((agent) => {
+    const isCurrent = agent.id === current
+    return {
+      tag: "button",
+      text: { tag: "plain_text", content: `${isCurrent ? "✅ " : ""}${agent.name || agent.id}` },
+      type: isCurrent ? "primary" : "default",
+      value: { action: "command_execute", menu: menuId, command: `/模式 ${agent.id}` },
+    }
+  })
+  const elements: Record<string, unknown>[] = [
+    {
+      tag: "markdown",
+      content: notice
+        ? `${notice}\n**当前：${current}**`
+        : `**当前：${current}**\n选一个运行模式：`,
+    },
+    {
+      tag: "action",
+      actions: buttons.length > 0 ? buttons : [menuButton("返回命令菜单", "/help", menuId)],
+    },
+  ]
+  if (agents.length > 0) {
+    elements.push({
+      tag: "markdown",
+      content: agents
+        .map((agent) => `- \`${agent.id}\`${agent.description ? `：${agent.description}` : ""}`)
+        .join("\n"),
+    })
+  }
+  return {
+    config: { wide_screen_mode: true },
+    header: { title: { tag: "plain_text", content: "🧩 运行模式" }, template: "blue" },
+    elements,
+  }
+}
+
+/** /思考 — the reasoning-effort variants of the current model. */
+function buildThinkingCard(
+  variants: Array<{ id: string; name?: string }>,
+  current: string,
+  menuId: string,
+  notice?: string,
+): Record<string, unknown> {
+  const all = [{ id: "default" }, ...variants.filter((v) => v.id !== "default")]
+  const buttons = all.map((variant) => {
+    const isCurrent = variant.id === current
+    return {
+      tag: "button",
+      text: {
+        tag: "plain_text",
+        content: `${isCurrent ? "✅ " : ""}${variant.id}`,
+      },
+      type: isCurrent ? "primary" : "default",
+      value: { action: "command_execute", menu: menuId, command: `/思考 ${variant.id}` },
+    }
+  })
+  const elements: Record<string, unknown>[] = [
+    {
+      tag: "markdown",
+      content: notice
+        ? `${notice}\n**当前：${current}**`
+        : variants.length > 0
+          ? `**当前：${current}**\n思考级别（推理强度）：`
+          : "**当前模型没有可选的思考级别。**",
+    },
+  ]
+  if (variants.length > 0) {
+    elements.push({ tag: "action", actions: buttons })
+    elements.push({ tag: "markdown", content: "_default 表示用模型自己的默认值_" })
+  } else {
+    elements.push({
+      tag: "action",
+      actions: [menuButton("🧠 换个模型", "/模型", menuId)],
+    })
+  }
+  return {
+    config: { wide_screen_mode: true },
+    header: { title: { tag: "plain_text", content: "💭 思考级别" }, template: "blue" },
+    elements,
+  }
+}
+
+/** /回复 — how much of a turn the card shows. */
+function buildReplyModeCard(
+  current: ReplyMode,
+  menuId: string,
+  notice?: string,
+): Record<string, unknown> {
+  const options: Array<{ mode: ReplyMode; label: string }> = [
+    { mode: "concise", label: "简洁" },
+    { mode: "standard", label: "标准" },
+  ]
+  return {
+    config: { wide_screen_mode: true },
+    header: { title: { tag: "plain_text", content: "💬 回复详细程度" }, template: "blue" },
+    elements: [
+      {
+        tag: "markdown",
+        content: notice
+          ? `${notice}\n**当前：${current === "concise" ? "简洁" : "标准"}**`
+          : `**当前：${current === "concise" ? "简洁" : "标准"}**\n选一种：`,
+      },
+      {
+        tag: "action",
+        actions: options.map((option) => {
+          const isCurrent = option.mode === current
+          return {
+            tag: "button",
+            text: {
+              tag: "plain_text",
+              content: `${isCurrent ? "✅ " : ""}${option.label}`,
+            },
+            type: isCurrent ? "primary" : "default",
+            value: {
+              action: "command_execute",
+              menu: menuId,
+              command: `/回复 ${option.label}`,
+            },
+          }
+        }),
+      },
+      {
+        tag: "markdown",
+        content:
+          "_简洁：只显示回答正文，不显示工具面板和状态行。\n标准：正文 + 工具面板 + 状态行。_",
+      },
+    ],
+  }
+}
+
+function parseReplyMode(value: string): ReplyMode | null {
+  const v = value.trim().toLowerCase()
+  if (!v) return null
+  if (["简洁", "简短", "concise", "simple", "short"].includes(v)) return "concise"
+  if (["标准", "详细", "standard", "normal"].includes(v)) return "standard"
+  return null
+}
+
 // ── Factory ──
 
 export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
@@ -738,6 +997,11 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
   const latestMenuCardByChat = new Map<string, string>()
   /** Compactions whose result has not arrived yet, keyed by session. */
   const pendingCompactions = new Map<string, PendingCompaction>()
+  /** Status / mode / thinking / reply cards, all updatable in place. */
+  const simpleMenus = new Map<string, SimpleMenuEntry>()
+  const latestSimpleByChat = new Map<string, string>()
+  /** Fallback when no persistent store was injected (tests, embedded use). */
+  const localReplyModes = new Map<string, ReplyMode>()
 
   /**
    * Answer on the menu card the user clicked, instead of sending a new
@@ -770,7 +1034,8 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
       menuCards.get(menuId) ??
       sessionMenus.get(menuId) ??
       modelMenus.get(menuId) ??
-      idleStopMenus.get(menuId)
+      idleStopMenus.get(menuId) ??
+      simpleMenus.get(menuId)
     )
   }
 
@@ -1438,6 +1703,213 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
     latestIdleStopByChat.set(chatId, menuId)
   }
 
+  /** Put a simple menu card on the chat — updating the card that is there. */
+  async function publishSimpleCard(
+    chatId: string,
+    messageId: string,
+    menuId: string | undefined,
+    render: (menuId: string) => Record<string, unknown>,
+  ): Promise<void> {
+    const latest = latestSimpleByChat.get(chatId)
+    const existing = menuId
+      ? simpleMenus.get(menuId)
+      : latest
+        ? simpleMenus.get(latest)
+        : undefined
+    const id = existing?.id ?? menuId ?? newMenuId()
+    const card = render(id)
+    if (existing) {
+      const res = await feishuClient.updateMessage(existing.messageId, JSON.stringify(card))
+      if (res.code === 0) return
+      logger.warn(`Could not update the menu card: ${res.code} ${res.msg}`)
+    }
+    const res = await feishuClient.replyMessage(messageId, {
+      msg_type: "interactive",
+      content: JSON.stringify(card),
+    })
+    const cardMessageId = res.data?.["message_id"] as string | undefined
+    if (!cardMessageId) {
+      logger.warn("The menu card was sent but its message id is unknown")
+      return
+    }
+    simpleMenus.set(id, { id, messageId: cardMessageId, chatId, createdAt: Date.now() })
+    latestSimpleByChat.set(chatId, id)
+  }
+
+  const boundSessionId = async (feishuKey: string): Promise<string | null> =>
+    sessionManager.getSession(feishuKey)?.session_id ??
+    (await sessionManager.getExisting(feishuKey)) ??
+    null
+
+  /** /状态 — the current session, model, mode, task and context. */
+  async function handleStatus(
+    feishuKey: string,
+    chatId: string,
+    messageId: string,
+    menuId?: string,
+  ): Promise<void> {
+    const sessionId = await boundSessionId(feishuKey)
+    if (!sessionId) {
+      await replyText(chatId, messageId, "当前没有绑定的会话。")
+      return
+    }
+
+    const session = await opencode.getSession(sessionId).catch(() => null)
+    const statuses = await opencode
+      .activeStatuses()
+      .catch(() => ({}) as Record<string, { type: string }>)
+    const model = session?.model
+    let limit: number | undefined
+    if (model?.providerID && model.id) {
+      limit = await opencode
+        .modelContextLimit(model.providerID, model.id)
+        .catch(() => undefined)
+    }
+    // The context of the last step is the size of the window in use now.
+    let context: number | undefined
+    try {
+      const messages = await opencode.messages(sessionId, { limit: 5, order: "desc" })
+      const last = messages.find((m: any) => m?.type === "assistant" && m?.tokens)
+      if (last) {
+        context = (last.tokens.input ?? 0) + (last.tokens.cache?.read ?? 0)
+      }
+    } catch (err) {
+      logger.warn(`Could not read the session usage: ${err}`)
+    }
+
+    await publishSimpleCard(chatId, messageId, menuId, (id) =>
+      buildStatusCard(
+        {
+          sessionId,
+          title: session?.title,
+          directory: session?.location?.directory,
+          model,
+          agent: session?.agent,
+          running: Boolean(statuses[sessionId]),
+          context,
+          limit,
+          tokens: session?.tokens,
+        },
+        id,
+      ),
+    )
+  }
+
+  /** /模式 — switch the agent used for the following turns. */
+  async function handleMode(
+    feishuKey: string,
+    chatId: string,
+    messageId: string,
+    argument: string,
+    menuId?: string,
+  ): Promise<void> {
+    const sessionId = await boundSessionId(feishuKey)
+    if (!sessionId) {
+      await replyText(chatId, messageId, "当前没有绑定的会话。")
+      return
+    }
+    const session = await opencode.getSession(sessionId).catch(() => null)
+    const agents = (await opencode.listAgents().catch(() => [] as AgentInfo[])).filter(
+      (agent) => agent.mode === "primary" && !agent.hidden,
+    )
+    const current = session?.agent || "build"
+    const target = argument.trim()
+    let selected = current
+    let notice: string | undefined
+
+    if (target) {
+      const match = agents.find((agent) => agent.id === target)
+      if (!match) {
+        await replyText(chatId, messageId, `未知模式：${target}`)
+        return
+      }
+      await opencode.switchAgent(sessionId, target)
+      selected = target
+      notice = `✅ 已切换到 ${match.name || target}`
+      logger.info(`/模式: session ${sessionId} -> ${target}`)
+    }
+
+    await publishSimpleCard(chatId, messageId, menuId, (id) =>
+      buildModeCard(agents, selected, id, notice),
+    )
+  }
+
+  /** /思考 — switch the reasoning-effort variant of the current model. */
+  async function handleThinking(
+    feishuKey: string,
+    chatId: string,
+    messageId: string,
+    argument: string,
+    menuId?: string,
+  ): Promise<void> {
+    const sessionId = await boundSessionId(feishuKey)
+    if (!sessionId) {
+      await replyText(chatId, messageId, "当前没有绑定的会话。")
+      return
+    }
+    const session = await opencode.getSession(sessionId).catch(() => null)
+    const model = session?.model
+    if (!model?.id || !model.providerID) {
+      await replyText(chatId, messageId, "当前会话还没有模型，先发一条消息或用 /模型 选一个。")
+      return
+    }
+
+    const models = await opencode.listModels().catch(() => [] as ModelInfo[])
+    const info = models.find((m) => m.id === model.id && m.providerID === model.providerID)
+    const variants = info?.variants ?? []
+    let current = model.variant || "default"
+    const target = argument.trim()
+    let notice: string | undefined
+
+    if (target) {
+      if (target !== "default" && !variants.some((variant) => variant.id === target)) {
+        await replyText(chatId, messageId, `未知思考级别：${target}`)
+        return
+      }
+      await opencode.switchModel(sessionId, {
+        id: model.id,
+        providerID: model.providerID,
+        variant: target,
+      })
+      current = target
+      notice = `✅ 思考级别已切到 ${target}`
+      logger.info(`/思考: session ${sessionId} -> ${target}`)
+    }
+
+    await publishSimpleCard(chatId, messageId, menuId, (id) =>
+      buildThinkingCard(variants, current, id, notice),
+    )
+  }
+
+  const replyModeFor = (chatId: string): ReplyMode =>
+    deps.replyModes?.get(chatId) ?? localReplyModes.get(chatId) ?? "standard"
+
+  /** /回复 — how much of a turn the card shows. */
+  async function handleReplyMode(
+    chatId: string,
+    messageId: string,
+    argument: string,
+    menuId?: string,
+  ): Promise<void> {
+    let current = replyModeFor(chatId)
+    const target = parseReplyMode(argument)
+    let notice: string | undefined
+    if (argument.trim()) {
+      if (!target) {
+        await replyText(chatId, messageId, "用法：/回复 [简洁|标准]")
+        return
+      }
+      if (deps.replyModes) deps.replyModes.set(chatId, target)
+      else localReplyModes.set(chatId, target)
+      current = target
+      notice = `✅ 已切到${target === "concise" ? "简洁" : "标准"}`
+      logger.info(`/回复: chat ${chatId} -> ${target}`)
+    }
+    await publishSimpleCard(chatId, messageId, menuId, (id) =>
+      buildReplyModeCard(current, id, notice),
+    )
+  }
+
   /**
    * Two level model menu:
    *
@@ -1739,7 +2211,46 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
     try {
       switch (cmd) {
         case "/new":
+        case "/新建":
+        case "/clear":
           await handleNew(feishuKey, chatId, messageId, options?.menuId)
+          return true
+
+        case "/状态":
+        case "/status":
+          await handleStatus(feishuKey, chatId, messageId, options?.menuId)
+          return true
+
+        case "/模式":
+        case "/mode":
+          await handleMode(
+            feishuKey,
+            chatId,
+            messageId,
+            parts.slice(1).join(" "),
+            options?.menuId,
+          )
+          return true
+
+        case "/思考":
+        case "/thinking":
+          await handleThinking(
+            feishuKey,
+            chatId,
+            messageId,
+            parts.slice(1).join(" "),
+            options?.menuId,
+          )
+          return true
+
+        case "/回复":
+        case "/reply":
+          await handleReplyMode(chatId, messageId, parts.slice(1).join(" "), options?.menuId)
+          return true
+
+        case "/项目":
+        case "/project":
+          await handleSessions(feishuKey, chatId, messageId, options?.menuId)
           return true
 
         case "/abort":
@@ -1756,10 +2267,11 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
           )
           return true
 
-        case "/connect": {
+        case "/connect":
+        case "/bind": {
           const targetSessionId = parts[1]
           if (!targetSessionId) {
-            await replyText(chatId, messageId, "用法: /connect {session_id}")
+            await replyText(chatId, messageId, `用法: ${cmd} {session_id}`)
             return true
           }
           await handleConnect(feishuKey, chatId, messageId, targetSessionId, options?.menuId)

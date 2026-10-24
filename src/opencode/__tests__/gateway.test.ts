@@ -191,3 +191,47 @@ describe("gateway: createSession model selection", () => {
     expect(body.model).toBeUndefined()
   })
 })
+
+describe("gateway: agents and model variants", () => {
+  it("listAgents reads /api/agent", async () => {
+    const fetchImpl = makeFetch({
+      data: [
+        { id: "build", name: "Build", description: "default", mode: "primary", hidden: false },
+        { id: "compaction", name: "Compaction", mode: "primary", hidden: true },
+      ],
+    })
+    const gw = createOpencodeGateway({ baseUrl: "http://x", password: "pw", fetch: fetchImpl as any })
+    const agents = await gw.listAgents()
+    expect((fetchImpl.mock.calls[0][0] as Request).url).toContain("/api/agent")
+    expect(agents.map((a) => a.id)).toEqual(["build", "compaction"])
+    expect(agents[0].hidden).toBe(false)
+  })
+
+  it("switchAgent posts the agent to /api/session/:id/agent", async () => {
+    const fetchImpl = makeFetch({ data: {} })
+    const gw = createOpencodeGateway({ baseUrl: "http://x", password: "pw", fetch: fetchImpl as any })
+    await gw.switchAgent("ses-1", "plan")
+    const req = fetchImpl.mock.calls[0][0] as Request
+    expect(req.url).toBe("http://x/api/session/ses-1/agent")
+    expect(req.method).toBe("POST")
+    expect(JSON.parse(await req.text())).toEqual({ agent: "plan" })
+  })
+
+  it("switchModel carries the variant", async () => {
+    const fetchImpl = makeFetch({ data: {} })
+    const gw = createOpencodeGateway({ baseUrl: "http://x", password: "pw", fetch: fetchImpl as any })
+    await gw.switchModel("ses-1", { id: "m", providerID: "p", variant: "high" })
+    const req = fetchImpl.mock.calls[0][0] as Request
+    expect(req.url).toBe("http://x/api/session/ses-1/model")
+    expect(JSON.parse(await req.text())).toEqual({ model: { id: "m", providerID: "p", variant: "high" } })
+  })
+
+  it("listModels keeps the variants opencode reports", async () => {
+    const fetchImpl = makeFetch({
+      data: [{ id: "m", providerID: "p", name: "M", variants: [{ id: "low" }, { id: "high" }] }],
+    })
+    const gw = createOpencodeGateway({ baseUrl: "http://x", password: "pw", fetch: fetchImpl as any })
+    const models = await gw.listModels()
+    expect(models[0].variants?.map((v) => v.id)).toEqual(["low", "high"])
+  })
+})

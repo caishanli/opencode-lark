@@ -34,6 +34,8 @@ export interface StreamingCardOptions {
   /** File used to remember the open card, so a restarted process can close it
    *  instead of leaving it stuck on "running". */
   stateFile?: string
+  /** Text only: no tool panels, no status line. */
+  concise?: boolean
 }
 
 /** A run of assistant text. */
@@ -148,6 +150,8 @@ export class StreamingCardSession {
   private readonly feishuClient: FeishuApiClient
   private readonly chatId: string
   private readonly stateFile?: string
+  /** Text only: tool panels and the status line are not rendered. */
+  private readonly concise: boolean
 
   private messageId: string | null = null
   private closed = false
@@ -172,6 +176,7 @@ export class StreamingCardSession {
     this.feishuClient = options.feishuClient
     this.chatId = options.chatId
     this.stateFile = options.stateFile
+    this.concise = options.concise === true
   }
 
   get isActive(): boolean {
@@ -311,6 +316,7 @@ export class StreamingCardSession {
     title?: string,
     callId?: string,
   ): Promise<void> {
+    if (this.concise) return
     if (!this.messageId || this.closed) {
       return
     }
@@ -435,13 +441,14 @@ export class StreamingCardSession {
         }
         continue
       }
+      if (this.concise) continue
       const panel = this.buildToolPanel(block, index === lastToolsIndex)
       if (panel) elements.push(panel)
     }
     if (elements.length === 0) {
       elements.push({ tag: "markdown", content: " " })
     }
-    if (!sealed) {
+    if (!sealed && !this.concise) {
       elements.push({ tag: "markdown", content: this.statusLine() })
     }
     return {

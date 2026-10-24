@@ -40,6 +40,9 @@ export interface StreamingBridgeDeps {
   seenInteractiveIds: ExpiringSet<string>
   interactiveCardRegistry?: InteractiveCardRegistry
   outboundMedia?: OutboundMediaHandler
+  /** The reply detail for this chat (`/回复`) — concise hides the tool panels
+   *  and the status line. */
+  replyMode?: (chatId: string) => "standard" | "concise"
 }
 
 export interface StreamingBridge {
@@ -168,6 +171,7 @@ export function createStreamingBridge(
         feishuClient,
         chatId,
         stateFile: deps.cardStateFile,
+        concise: deps.replyMode?.(chatId) === "concise",
       })
       cardStartPromise = card.start().then(() => {
         logger.info(
@@ -421,7 +425,9 @@ export function createStreamingBridge(
 
 
           case "ToolStateChange":
-            ensureCard()
+            // In concise mode the tool calls stay out of the card; don't
+            // create an empty card just to report them.
+            if (deps.replyMode?.(chatId) !== "concise") ensureCard()
             logger.info(
               `Tool status: ${action.toolName} -> ${action.state}` +
               (action.title ? ` · ${action.title}` : "") +

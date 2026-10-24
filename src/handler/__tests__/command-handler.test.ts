@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest"
 import { createCommandHandler, type CommandHandlerDeps } from "../command-handler.js"
+import { ReplyModeStore } from "../reply-mode.js"
 import { createMockLogger, createMockFeishuClient, waitFor } from "../../__tests__/setup.js"
 import { createMockGateway } from "../../__tests__/setup.js"
 import type { SessionManager } from "../../session/session-manager.js"
@@ -330,6 +331,11 @@ describe("createCommandHandler", () => {
       expect(commands).toContain("/自动关闭")
       expect(commands).toContain("/更新")
       expect(commands).toContain("/compact")
+      expect(commands).toContain("/状态")
+      expect(commands).toContain("/模式")
+      expect(commands).toContain("/思考")
+      expect(commands).toContain("/回复")
+      expect(commands).toContain("/项目")
     })
 
     it("/compact shows that the compaction is running, not that it finished", async () => {
@@ -1071,6 +1077,166 @@ describe("createCommandHandler", () => {
 
       expect(result).toBe(true)
       expect(mockSessionManager.deleteMapping).toHaveBeenCalledWith("chat-1")
+    })
+  })
+
+  describe("/状态", () => {
+    it("shows the workspace, model, mode, task and context", async () => {
+      mockGateway.getSession.mockResolvedValue({
+        id: "ses-123",
+        title: "飞书 opencode",
+        agent: "build",
+        model: { id: "deepseek/deepseek-v4.1-flash", providerID: "command-code", variant: "high" },
+        location: { directory: "/home/caisl/opencode-lark" },
+        tokens: { input: 1000, output: 200, reasoning: 10, cache: { read: 9000, write: 0 } },
+      })
+      mockGateway.activeStatuses.mockResolvedValue({ "ses-123": { type: "running" } })
+      mockGateway.modelContextLimit.mockResolvedValue(1_000_000)
+      mockGateway.messages.mockResolvedValue([
+        { type: "assistant", tokens: { input: 1000, cache: { read: 4000 } } },
+      ])
+      mockFeishuClient.replyMessage = vi.fn().mockResolvedValue({
+        code: 0, msg: "ok", data: { message_id: "card-status" },
+      })
+
+      const handler = createHandler()
+      const result = await handler("chat-1", "chat-1", "msg-1", "/状态")
+
+      expect(result).toBe(true)
+      const card = JSON.parse((mockFeishuClient.replyMessage as any).mock.calls[0][1].content)
+      const text = JSON.stringify(card)
+      expect(text).toContain("/home/caisl/opencode-lark")
+      expect(text).toContain("deepseek/deepseek-v4.1-flash")
+      expect(text).toContain("high")
+      expect(text).toContain("build")
+      expect(text).toContain("运行中")
+      expect(text).toContain("5.0k")   // input + cache read of the last step
+      expect(text).toContain("1.0M")   // context window
+      expect(text).toContain("9.0k")   // cumulative cache read
+    })
+  })
+
+  describe("/模式", () => {
+    it("lists the primary modes and switches the agent in place", async () => {
+      mockGateway.getSession.mockResolvedValue({ id: "ses-123", agent: "build" })
+      mockGateway.listAgents.mockResolvedValue([
+        { id: "build", name: "Build", mode: "primary", hidden: false },
+        { id: "plan", name: "Plan", mode: "primary", hidden: false },
+        { id: "compaction", name: "Compaction", mode: "primary", hidden: true },
+      ])
+      mockFeishuClient.replyMessage = vi.fn().mockResolvedValue({
+        code: 0, msg: "ok", data: { message_id: "card-mode" },
+      })
+
+      const handler = createHandler()
+      await handler("chat-1", "chat-1", "msg-1", "/模式")
+
+      const card = JSON.parse((mockFeishuClient.replyMessage as any).mock.calls[0][1].content)
+      const buttons = card.elements
+        .filter((el: any) => el.tag === "action")
+        .flatMap((el: any) => el.actions)
+      expect(buttons.map((b: any) => b.value.command)).toEqual(["/模式 build", "/模式 plan"])
+      const menuId = buttons[0].value.menu
+
+      mockFeishuClient.updateMessage = vi.fn().mockResolvedValue({ code: 0, msg: "ok" })
+      await handler("chat-1", "chat-1", "msg-1", "/模式 plan", { menuId })
+
+      expect(mockGateway.switchAgent).toHaveBeenCalledWith("ses-123", "plan")
+      const updated = JSON.parse((mockFeishuClient.updateMessage as any).mock.calls.at(-1)[1])
+      expect(JSON.stringify(updated)).toContain("已切换到")
+    })
+  })
+
+  describe("/思考", () => {
+    it("lists the model's variants and switches with the chosen one", async () => {
+      mockGateway.getSession.mockResolvedValue({
+        id: "ses-123",
+        model: { id: "m", providerID: "p", variant: "default" },
+      })
+      mockGateway.listModels.mockResolvedValue([
+        { id: "m", providerID: "p", name: "M", variants: [{ id: "low" }, { id: "high" }] },
+      ])
+      mockFeishuClient.replyMessage = vi.fn().mockResolvedValue({
+        code: 0, msg: "ok", data: { message_id: "card-think" },
+      })
+
+      const handler = createHandler()
+      await handler("chat-1", "chat-1", "msg-1", "/思考")
+
+      const card = JSON.parse((mockFeishuClient.replyMessage as any).mock.calls[0][1].content)
+      const buttons = card.elements
+        .filter((el: any) => el.tag === "action")
+        .flatMap((el: any) => el.actions)
+      expect(buttons.map((b: any) => b.value.command)).toEqual([
+        "/思考 default",
+        "/思考 low",
+        "/思考 high",
+      ])
+      const menuId = buttons[0].value.menu
+
+      mockFeishuClient.updateMessage = vi.fn().mockResolvedValue({ code: 0, msg: "ok" })
+      await handler("chat-1", "chat-1", "msg-1", "/思考 high", { menuId })
+
+      expect(mockGateway.switchModel).toHaveBeenCalledWith("ses-123", {
+        id: "m",
+        providerID: "p",
+        variant: "high",
+      })
+    })
+  })
+
+  describe("/回复", () => {
+    it("switches the chat to concise and updates the card in place", async () => {
+      const store = new ReplyModeStore()
+      mockFeishuClient.replyMessage = vi.fn().mockResolvedValue({
+        code: 0, msg: "ok", data: { message_id: "card-reply" },
+      })
+
+      const handler = createHandler(undefined, mockGateway, { replyModes: store })
+      await handler("chat-1", "chat-1", "msg-1", "/回复")
+
+      const card = JSON.parse((mockFeishuClient.replyMessage as any).mock.calls[0][1].content)
+      const buttons = card.elements
+        .filter((el: any) => el.tag === "action")
+        .flatMap((el: any) => el.actions)
+      expect(buttons.map((b: any) => b.value.command)).toEqual(["/回复 简洁", "/回复 标准"])
+      const menuId = buttons[0].value.menu
+
+      mockFeishuClient.updateMessage = vi.fn().mockResolvedValue({ code: 0, msg: "ok" })
+      await handler("chat-1", "chat-1", "msg-1", "/回复 简洁", { menuId })
+
+      expect(store.get("chat-1")).toBe("concise")
+      const updated = JSON.parse((mockFeishuClient.updateMessage as any).mock.calls.at(-1)[1])
+      expect(JSON.stringify(updated)).toContain("当前：简洁")
+    })
+  })
+
+  describe("/clear /bind", () => {
+    it("/clear starts a new session like /new", async () => {
+      mockGateway.createSession.mockResolvedValueOnce({ id: "ses-new" })
+      mockFeishuClient.replyMessage = vi.fn().mockResolvedValue({ code: 0, msg: "ok" })
+
+      const handler = createHandler()
+      const result = await handler("chat-1", "chat-1", "msg-1", "/clear")
+
+      expect(result).toBe(true)
+      expect(mockGateway.createSession).toHaveBeenCalled()
+      expect(mockSessionManager.setMapping).toHaveBeenCalledWith("chat-1", "ses-new")
+    })
+
+    it("/bind binds an existing session like /connect", async () => {
+      mockGateway.getSession.mockResolvedValue({ id: "ses-999", title: "Other" })
+      mockFeishuClient.replyMessage = vi.fn().mockResolvedValue({ code: 0, msg: "ok" })
+
+      const handler = createHandler()
+      const result = await handler("chat-1", "chat-1", "msg-1", "/bind ses-999")
+
+      expect(result).toBe(true)
+      expect(mockSessionManager.setMapping).toHaveBeenCalledWith("chat-1", "ses-999")
+      expect(mockFeishuClient.replyMessage).toHaveBeenCalledWith("msg-1", {
+        msg_type: "text",
+        content: JSON.stringify({ text: "已连接到会话: ses-999" }),
+      })
     })
   })
 })

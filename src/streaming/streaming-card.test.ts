@@ -54,6 +54,26 @@ describe("StreamingCardSession", () => {
     expect(fc.sendMessage).toHaveBeenCalledTimes(1)
   })
 
+  it("concise mode keeps the text only — no tool panel, no status line", async () => {
+    const feishuClient = createMockFeishuClient()
+    ;(feishuClient.sendMessage as ReturnType<typeof vi.fn>).mockResolvedValue({
+      code: 0, msg: "ok", data: { message_id: "msg_456" },
+    })
+    ;(feishuClient.updateMessage as ReturnType<typeof vi.fn>).mockResolvedValue({ code: 0, msg: "ok" })
+
+    const session = new StreamingCardSession({ feishuClient, chatId: "chat_789", concise: true })
+    await session.start()
+    await session.setText("the answer")
+    await session.setToolStatus("bash", "completed", "ls")
+    await session.setUsage("✅ 已完成 · 1 轮 1 步 · 10 tok")
+    await session.close("the answer")
+
+    const els = elements(feishuClient)
+    expect(els.some((el: any) => el.tag === "collapsible_panel")).toBe(false)
+    expect(els.some((el: any) => String(el.content ?? "").includes("已完成"))).toBe(false)
+    expect(els.some((el: any) => String(el.content ?? "").includes("the answer"))).toBe(true)
+  })
+
   it("keeps the real usage when a live estimate arrives later", async () => {
     const { session, feishuClient: fc } = createStartedSession()
     await session.start()

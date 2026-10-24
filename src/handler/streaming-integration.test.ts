@@ -705,6 +705,66 @@ describe("createStreamingBridge", () => {
     expect(onComplete).toHaveBeenCalledWith(expect.stringContaining("Free usage limit reached"))
   })
 
+  it("concise reply mode shows the text without tool panels or the status line", async () => {
+    const deps = makeDeps({
+      replyMode: () => "concise",
+      feishuClient: {
+        ...createMockFeishuClient(),
+        sendMessage: vi.fn().mockResolvedValue({
+          code: 0,
+          data: { message_id: "msg_456" },
+        }),
+        replyMessage: vi.fn().mockResolvedValue({ code: 0 }),
+      },
+    })
+    const bridge = createStreamingBridge(deps)
+
+    const handlePromise = bridge.handleMessage(
+      "chat-1",
+      "ses-1",
+      eventListeners,
+      eventProcessor,
+      mockSendMessage,
+      vi.fn(),
+      "msg_original",
+      null,
+    )
+
+    await waitFor(() => {
+      expect(eventListeners.size).toBe(1)
+    })
+
+    const listener = [...eventListeners.get("ses-1")!][0]!
+    listener({
+      type: "message.part.updated",
+      properties: {
+        part: {
+          sessionID: "ses-1",
+          messageID: "m-1",
+          type: "tool",
+          tool: "bash",
+          state: { status: "completed", title: "List files" },
+        },
+      },
+    })
+    listener({
+      type: "session.text.delta",
+      data: { sessionID: "ses-1", delta: "hello" },
+    })
+    listener({
+      type: "session.execution.succeeded",
+      data: { sessionID: "ses-1" },
+    })
+
+    await handlePromise
+
+    const updates = (deps.feishuClient.updateMessage as any).mock.calls
+    const raw = JSON.stringify(updates.at(-1)?.[1] ?? "")
+    expect(raw).toContain("hello")
+    expect(raw).not.toContain("collapsible_panel")
+    expect(raw).not.toContain("已完成")
+  })
+
   it("logs info when streaming card starts", async () => {
     const deps = makeDeps({
       feishuClient: {

@@ -28,7 +28,13 @@ export interface SessionRef {
   parentID?: string
   location?: { directory?: string }
   time?: { created?: number; updated?: number; idle?: number; viewed?: number }
-  model?: { id?: string; providerID?: string }
+  model?: { id?: string; providerID?: string; variant?: string }
+  tokens?: {
+    input?: number
+    output?: number
+    reasoning?: number
+    cache?: { read?: number; write?: number }
+  }
   outcome?: string
 }
 
@@ -74,6 +80,17 @@ export interface ModelInfo {
   /** The context window in tokens. */
   context?: number
   enabled?: boolean
+  /** Reasoning-effort presets ("思考级别"). Empty when the model has none. */
+  variants?: Array<{ id: string; name?: string }>
+}
+
+/** An agent (mode) the server knows about. */
+export interface AgentInfo {
+  id: string
+  name: string
+  description?: string
+  mode?: string
+  hidden?: boolean
 }
 
 export type OpencodeEvent = {
@@ -96,6 +113,10 @@ export interface OpencodeGateway {
   sendCommand(sessionID: string, input: { command: string; arguments?: string }): Promise<void>
   /** The models available for this project. */
   listModels(): Promise<ModelInfo[]>
+  /** The agents the server can run ("模式"). */
+  listAgents(): Promise<AgentInfo[]>
+  /** Switch the agent used for the following turns. */
+  switchAgent(sessionID: string, agent: string): Promise<void>
   /** The context window of a model, in tokens (undefined if unknown). */
   modelContextLimit(providerID: string, modelID: string): Promise<number | undefined>
   /** Compact the conversation of a session (drops the old turns). */
@@ -103,7 +124,7 @@ export interface OpencodeGateway {
   /** Fetch the context windows of all models, so the first lookup is instant. */
   warmModelLimits(): Promise<void>
   /** Change the model of a session. */
-  switchModel(sessionID: string, model: { id: string; providerID: string }): Promise<void>
+  switchModel(sessionID: string, model: { id: string; providerID: string; variant?: string }): Promise<void>
   abort(sessionID: string): Promise<void>
   activeStatuses(): Promise<Record<string, { type: string }>>
 
@@ -245,7 +266,28 @@ export function createOpencodeGateway(options: OpencodeGatewayOptions): Opencode
         name: String(m.name ?? m.id ?? ""),
         context: typeof m.limit?.context === "number" ? m.limit.context : undefined,
         enabled: m.enabled !== false,
+        variants: Array.isArray(m.variants)
+          ? m.variants
+              .filter((v: any) => typeof v?.id === "string" && v.id)
+              .map((v: any) => ({ id: v.id, ...(typeof v.name === "string" ? { name: v.name } : {}) }))
+          : [],
       })) as ModelInfo[]
+    },
+    async listAgents() {
+      const res = await client.v2.agent.list({ location: { directory: dir() } })
+      const body = unwrap(res)
+      if (!Array.isArray(body)) return []
+      return body.map((a: any) => ({
+        id: String(a.id ?? ""),
+        name: String(a.name ?? a.id ?? ""),
+        ...(typeof a.description === "string" ? { description: a.description } : {}),
+        ...(typeof a.mode === "string" ? { mode: a.mode } : {}),
+        ...(typeof a.hidden === "boolean" ? { hidden: a.hidden } : {}),
+      })) as AgentInfo[]
+    },
+    async switchAgent(sessionID, agent) {
+      const res = await client.v2.session.switchAgent({ sessionID, agent })
+      throwIfError(res, "switchAgent")
     },
     async compactSession(sessionID) {
       // The generated wrapper declares no body, but opencode v2 requires a
@@ -266,7 +308,11 @@ export function createOpencodeGateway(options: OpencodeGatewayOptions): Opencode
     async switchModel(sessionID, model) {
       const res = await client.v2.session.switchModel({
         sessionID,
-        model: { id: model.id, providerID: model.providerID },
+        model: {
+          id: model.id,
+          providerID: model.providerID,
+          ...(model.variant ? { variant: model.variant } : {}),
+        },
       })
       throwIfError(res, "switchModel")
     },
