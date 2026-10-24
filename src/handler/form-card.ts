@@ -55,31 +55,91 @@ function controlFor(field: FormField): Record<string, unknown> {
   }
 }
 
+function questionMarkdown(field: FormField): Record<string, unknown> | null {
+  const heading = field.title?.trim()
+  const description = field.description?.trim()
+  if (!heading && !description) return null
+  const lines: string[] = []
+  if (heading) lines.push(`**${heading}**`)
+  if (description) lines.push(description)
+  // Buttons and dropdowns show labels only; list the option descriptions so
+  // the "why" the user sees in the TUI is not lost.
+  const explained = (field.options ?? []).filter((o) => o.description?.trim())
+  if (explained.length > 0) {
+    lines.push("")
+    for (const option of explained) {
+      lines.push(`- **${option.label}** — ${option.description!.trim()}`)
+    }
+  }
+  return { tag: "markdown", content: lines.join("\n") }
+}
+
 export function buildFormCard(form: FormInfo): Record<string, unknown> {
   const elements: Record<string, unknown>[] = []
-  const controls: Record<string, unknown>[] = []
+  const title = form.title?.trim()
+  const header = {
+    title: text(`❓ ${title && title !== "Questions" ? title : "需要你选择"}`),
+    template: "orange",
+  }
 
-  for (const field of form.fields) {
-    const heading = field.title?.trim()
-    const description = field.description?.trim()
-    if (heading || description) {
-      const lines: string[] = []
-      if (heading) lines.push(`**${heading}**`)
-      if (description) lines.push(description)
-      // A dropdown shows labels only; list the option descriptions so the
-      // "why" the user sees in the TUI is not lost.
-      const explained = (field.options ?? []).filter((o) => o.description?.trim())
-      if (explained.length > 0) {
-        lines.push("")
-        for (const option of explained) {
-          lines.push(`- **${option.label}** — ${option.description!.trim()}`)
-        }
-      }
-      elements.push({ tag: "markdown", content: lines.join("\n") })
+  // One single-choice question is the question tool's common shape: a row of
+  // buttons answers it in one click, like the TUI. A typed "other" answer
+  // needs its own submit, so it lives in a small form below.
+  const only = form.fields.length === 1 ? form.fields[0] : undefined
+  const singleChoice =
+    only !== undefined && only.type === "string" && (only.options?.length ?? 0) > 0
+
+  if (singleChoice && only) {
+    const md = questionMarkdown(only)
+    if (md) elements.push(md)
+
+    elements.push({
+      tag: "action",
+      actions: (only.options ?? []).map((option, index) => ({
+        tag: "button",
+        text: text(option.label),
+        type: index === 0 ? "primary" : "default",
+        value: {
+          action: "form_submit",
+          sessionId: form.sessionID,
+          formId: form.id,
+          field: only.key,
+          choice: option.value,
+        },
+      })),
+    })
+
+    if (only.custom) {
+      elements.push({
+        tag: "form",
+        name: `form_${form.id}`,
+        elements: [
+          {
+            tag: "input",
+            name: `${only.key}__other`,
+            placeholder: text("其他答案（可选）"),
+          },
+          {
+            tag: "button",
+            name: "submit",
+            text: text("提交"),
+            type: "default",
+            action_type: "form_submit",
+            value: { action: "form_submit", sessionId: form.sessionID, formId: form.id },
+          },
+        ],
+      })
     }
 
-    controls.push(controlFor(field))
+    return { config: { wide_screen_mode: true }, header, elements }
+  }
 
+  // Several questions (or a multi-select): collect everything in one form.
+  const controls: Record<string, unknown>[] = []
+  for (const field of form.fields) {
+    const md = questionMarkdown(field)
+    if (md) elements.push(md)
+    controls.push(controlFor(field))
     if (field.custom) {
       controls.push({
         tag: "input",
@@ -104,15 +164,7 @@ export function buildFormCard(form: FormInfo): Record<string, unknown> {
 
   elements.push({ tag: "form", name: `form_${form.id}`, elements: controls })
 
-  const title = form.title?.trim()
-  return {
-    config: { wide_screen_mode: true },
-    header: {
-      title: text(`❓ ${title && title !== "Questions" ? title : "需要你选择"}`),
-      template: "orange",
-    },
-    elements,
-  }
+  return { config: { wide_screen_mode: true }, header, elements }
 }
 
 export function buildAnsweredFormCard(): Record<string, unknown> {

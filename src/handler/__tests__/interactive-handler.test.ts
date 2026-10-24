@@ -244,6 +244,27 @@ describe("createInteractiveHandler: form_submit", () => {
     expect(mockInteractiveCardRegistry.clearFeishuResolving).toHaveBeenCalledWith("question", "frm_1")
   })
 
+  it("submits an option button without a form value", async () => {
+    const opencode = makeGateway({ getForm: vi.fn().mockResolvedValue(SAMPLE_FORM) })
+    const handler = createInteractiveHandler({ opencode, logger: mockLogger, interactiveCardRegistry: mockInteractiveCardRegistry })
+
+    await handler({
+      action: {
+        tag: "button",
+        value: {
+          action: "form_submit",
+          sessionId: "ses-1",
+          formId: "frm_1",
+          field: "q0",
+          choice: "A",
+        },
+      },
+      open_message_id: "msg-1", open_chat_id: "chat-1", operator: { open_id: "ou-1" },
+    })
+
+    expect(opencode.replyForm).toHaveBeenCalledWith("ses-1", "frm_1", { q0: "A" })
+  })
+
   it("prefers a typed answer over the dropdown", async () => {
     const opencode = makeGateway({ getForm: vi.fn().mockResolvedValue(SAMPLE_FORM) })
     const handler = createInteractiveHandler({ opencode, logger: mockLogger, interactiveCardRegistry: mockInteractiveCardRegistry })

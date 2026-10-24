@@ -89,7 +89,10 @@ export function createInteractiveHandler(deps: InteractiveHandlerDeps) {
       return
     }
 
-    const answer = formAnswer(form, action.action.form_value ?? {})
+    const answer =
+      value.field && value.choice
+        ? { [value.field]: value.choice }
+        : formAnswer(form, action.action.form_value ?? {})
     if (Object.keys(answer).length === 0) {
       await notifyUser(action, "还没有选择任何选项。")
       return

@@ -80,6 +80,47 @@ describe("buildFormCard", () => {
     ])
   })
 
+  it("uses one button per option for a single choice", () => {
+    const single: FormInfo = {
+      id: "frm_2",
+      sessionID: "ses_1",
+      title: "Questions",
+      fields: [
+        {
+          key: "q0",
+          type: "string",
+          title: "Pick",
+          description: "One",
+          custom: true,
+          options: [
+            { value: "A", label: "A", description: "why A" },
+            { value: "B", label: "B" },
+          ],
+        },
+      ],
+    }
+    const card = buildFormCard(single)
+
+    const action = (card.elements as Record<string, unknown>[]).find((e) => e.tag === "action")
+    const buttons = (action?.actions as Record<string, unknown>[]) ?? []
+    expect(buttons).toHaveLength(2)
+    expect(buttons[0]).toMatchObject({
+      tag: "button",
+      text: { tag: "plain_text", content: "A" },
+      value: { action: "form_submit", field: "q0", choice: "A" },
+    })
+    expect(JSON.stringify(card)).not.toContain("select_static")
+
+    // "Other" keeps its own input + submit, below the buttons.
+    const form = (card.elements as Record<string, unknown>[]).find((e) => e.tag === "form")
+    expect((form?.elements as Record<string, unknown>[]).map((c) => c.tag)).toEqual([
+      "input",
+      "button",
+    ])
+
+    expect((card.elements as any)[0].content).toContain("- **A** — why A")
+  })
+
   it("lists option descriptions, which the dropdown cannot show", () => {
     const card = buildFormCard({
       ...FORM,
