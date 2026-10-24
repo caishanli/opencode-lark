@@ -224,6 +224,37 @@ export function createStreamingBridge(
       const TEXT_PUSH_INTERVAL_MS = 350
       let lastTextPush = 0
       let textPushTimer: ReturnType<typeof setTimeout> | null = null
+      /** Tools currently running. A silent turn with one is not a dead turn:
+       *  a long command emits no events until it finishes. */
+      const runningToolIds = new Set<string>()
+      let toolWaitMs = 0
+      /** Even a wedged tool must not pin the card for ever. */
+      const MAX_TOOL_WAIT_MS = 30 * 60_000
+
+      const armIdleTimer = (): void => {
+        if (idleTimer) clearTimeout(idleTimer)
+        idleTimer = setTimeout(() => {
+          if (settled) return
+          if (runningToolIds.size > 0 && toolWaitMs < MAX_TOOL_WAIT_MS) {
+            toolWaitMs += idleCloseMs
+            logger.info(
+              `No events for ${idleCloseMs}ms, but ${runningToolIds.size} tool(s) still running — waiting`,
+            )
+            armIdleTimer()
+            return
+          }
+          logger.warn(
+            `No opencode events for ${idleCloseMs}ms — closing the card as interrupted`,
+          )
+          // The turn did not report an end: mark it interrupted, not
+          // succeeded, so the status line tells the truth.
+          myListener({
+            type: "session.execution.interrupted",
+            data: { sessionID: sessionId, reason: "inactivity" },
+          })
+        }, idleCloseMs)
+        idleTimer.unref?.()
+      }
 
       /** Push the accumulated agent text onto the card, throttled to avoid rate limits. */
       const pushText = (force = false): void => {
@@ -253,17 +284,9 @@ export function createStreamingBridge(
         gotFirstEvent = true
         // Safety net: if the turn-end event never arrives (lost, or swallowed
         // by an overlapping execution) the card must not stay on "running".
-        if (idleTimer) clearTimeout(idleTimer)
-        idleTimer = setTimeout(() => {
-          if (settled) return
-          logger.warn(
-            `No opencode events for ${IDLE_CLOSE_MS}ms — closing the card as finished`,
-          )
-          myListener({
-            type: "session.execution.succeeded",
-            data: { sessionID: sessionId },
-          })
-        }, idleCloseMs)
+        // The timer re-arms itself while a tool is running (see armIdleTimer).
+        toolWaitMs = 0
+        armIdleTimer()
 
         switch (action.type) {
           case "TextDelta": {
@@ -428,6 +451,11 @@ export function createStreamingBridge(
             // In concise mode the tool calls stay out of the card; don't
             // create an empty card just to report them.
             if (deps.replyMode?.(chatId) !== "concise") ensureCard()
+            {
+              const toolKey = action.callId ?? action.toolName
+              if (action.state === "running") runningToolIds.add(toolKey)
+              else runningToolIds.delete(toolKey)
+            }
             logger.info(
               `Tool status: ${action.toolName} -> ${action.state}` +
               (action.title ? ` · ${action.title}` : "") +
@@ -558,18 +586,19 @@ export function createStreamingBridge(
               logger.warn(`Turn failed: ${action.error ?? "unknown error"}`)
             }
             const hadCard = card !== null
-            // A tool that is still marked as running means the turn was cut
-            // short (the watchdog gave up, the server went away) — the card
-            // must not claim that it finished.
-            const unfinished = card?.hasRunningTool() ?? false
-            if (unfinished) {
-              logger.warn("Closing the card as interrupted — a tool was still running")
-            }
-            const closeStatus = failed ? "error" : unfinished || interrupted ? "interrupted" : "completed"
+            // Whether a tool is still marked running only affects the log:
+            // the close status follows what the server said. A turn that
+            // succeeded while a tool looked running lost that tool event;
+            // calling the whole turn interrupted would be worse. The
+            // watchdog (below) reports `interrupted` explicitly.
+            const closeStatus = failed ? "error" : interrupted ? "interrupted" : "completed"
             const closeCard = card
-              ? (cardStartPromise ?? Promise.resolve()).then(() =>
-                  card!.close(responseText, closeStatus),
-                )
+              ? (cardStartPromise ?? Promise.resolve()).then(() => {
+                  if (card!.hasRunningTool()) {
+                    logger.warn("Closing the card with a tool still marked running")
+                  }
+                  return card!.close(responseText, closeStatus)
+                })
               : Promise.resolve()
             closeCard
               .catch((err) => {

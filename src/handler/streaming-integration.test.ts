@@ -1324,7 +1324,60 @@ describe("createStreamingBridge", () => {
     await new Promise((r) => setTimeout(r, 250))
 
     const contents = (mockFeishu.updateMessage as any).mock.calls.map((c: any) => String(c[1]))
-    expect(contents.some((c) => c.includes("已完成"))).toBe(true)
+    // The turn never reported an end — the card must not claim success.
+    expect(contents.some((c) => c.includes("已中断"))).toBe(true)
+    expect(contents.some((c) => c.includes("已完成"))).toBe(false)
+  })
+
+  it("waits for a long-running tool instead of closing the turn", async () => {
+    const mockFeishu = {
+      ...createMockFeishuClient(),
+      sendMessage: vi.fn().mockResolvedValue({ code: 0, data: { message_id: "msg_456" } }),
+      replyMessage: vi.fn().mockResolvedValue({ code: 0 }),
+      updateMessage: vi.fn().mockResolvedValue({ code: 0, msg: "ok" }),
+    }
+    const deps = makeDeps({ feishuClient: mockFeishu, idleCloseMs: 60 } as any)
+    const bridge = createStreamingBridge(deps)
+
+    const handle = bridge.handleMessage(
+      "chat-1", "ses-1", eventListeners, eventProcessor, mockSendMessage, vi.fn(), "msg_original", null,
+    )
+    await waitFor(() => { expect(eventListeners.size).toBe(1) })
+    const listener = [...eventListeners.get("ses-1")!][0]!
+    listener({
+      type: "message.part.updated",
+      properties: {
+        part: {
+          sessionID: "ses-1", messageID: "m-1", type: "tool", tool: "bash",
+          state: { status: "running", title: "slow probe" },
+        },
+      },
+    })
+
+    // Several idle windows pass with no events — the tool is still running.
+    await new Promise((r) => setTimeout(r, 250))
+    const mid = (mockFeishu.updateMessage as any).mock.calls
+      .map((c: any) => String(c[1]))
+      .join("\n")
+    expect(mid).not.toContain("已完成")
+    expect(mid).not.toContain("已中断")
+
+    listener({
+      type: "message.part.updated",
+      properties: {
+        part: {
+          sessionID: "ses-1", messageID: "m-1", type: "tool", tool: "bash",
+          state: { status: "completed", title: "slow probe" },
+        },
+      },
+    })
+    listener({ type: "session.execution.succeeded", data: { sessionID: "ses-1" } })
+    await handle
+
+    const final = (mockFeishu.updateMessage as any).mock.calls
+      .map((c: any) => String(c[1]))
+      .join("\n")
+    expect(final).toContain("已完成")
   })
 
   it("serialises turns per chat: a second message waits for the first to finish", async () => {
