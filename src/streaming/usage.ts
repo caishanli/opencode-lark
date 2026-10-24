@@ -2,10 +2,12 @@
  * Formatting helpers for the token/rate line shown on the reply card.
  */
 
-/** 1234 -> "1.2k", 999 -> "999", 1_500_000 -> "1.5M" */
+/** 1234 -> "1.2k", 999 -> "999", 1_500_000 -> "1.5M", 1_004_600_000 -> "1.0B" */
 export function formatTokens(n: number): string {
   if (!Number.isFinite(n)) return "0"
   const abs = Math.abs(n)
+  // 999.95M would print as "1000.0M" — promote it to B instead.
+  if (abs >= 999_950_000) return `${(n / 1_000_000_000).toFixed(1)}B`
   if (abs >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
   if (abs >= 1_000) return `${(n / 1_000).toFixed(1)}k`
   return String(Math.round(n))
