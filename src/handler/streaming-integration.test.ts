@@ -77,9 +77,18 @@ function cardContent(feishuClient: any): string {
   if (!source) return ""
   try {
     const card = JSON.parse(source)
-    return (card.body?.elements ?? [])
-      .map((e: any) => e.content ?? (e.elements ?? []).map((x: any) => x.content).join("\n"))
-      .join("\n")
+    const collect = (node: any): string[] => {
+      if (!node || typeof node !== "object") return []
+      if (typeof node.content === "string") return [node.content]
+      const out: string[] = []
+      for (const key of ["elements", "columns"]) {
+        if (Array.isArray(node[key])) {
+          for (const child of node[key]) out.push(...collect(child))
+        }
+      }
+      return out
+    }
+    return collect(card.body ?? card).join("\n")
   } catch {
     return String(source)
   }
@@ -865,7 +874,8 @@ describe("createStreamingBridge", () => {
     expect(content).toContain("tok/s")
     expect(content).toContain("4.0k")
     // the hit rate comes from the counters the server reports
-    expect(content).toContain("4.1k tok · 缓存命中 75%")
+    expect(content).toContain("4.1k tok")
+    expect(content).toContain("缓存命中 75%")
     expect(content).toContain("Σ 4.1k tok")
   })
 
@@ -1057,7 +1067,8 @@ describe("createStreamingBridge", () => {
     // delta = input 100 + output 10 + cache.read 100
     expect(content).toContain("10 tok")      // generated only
     expect(content).toContain("200 · ")      // input + cache read
-    expect(content).toContain("210 tok · 缓存命中 75%")
+    expect(content).toContain("210 tok")
+    expect(content).toContain("缓存命中 75%")
     // the cumulative numbers must not show up as the turn's own numbers —
     // they are only reported as the session total, clearly labelled
     expect(content).toContain("Σ 4.1k tok")

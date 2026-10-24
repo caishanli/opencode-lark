@@ -144,26 +144,31 @@ export function createStreamingBridge(
      */
     const usageLine = (): string | null => {
       if (!lastUsage) return null
-      const { context, total, sessionTotal, rate, hit, cost, turnMs, rounds, steps } = lastUsage
-      // Same shorthand as the opencode status bar: a clock for time, a
-      // database for the stored (session) tokens — and a spelled-out label
-      // for the cache, because any icon there just invited a guess.
-      const hitPart = ` · 缓存命中 ${hit}%`
-      const timePart = turnMs > 0 ? `⏱ ${(turnMs / 1000).toFixed(1)}s · ` : ""
+      const { total, rate, turnMs, rounds, steps } = lastUsage
+      const timePart = turnMs > 0 ? `⏱ ${(turnMs / 1000).toFixed(1)}s` : ""
+      const workPart = steps > 0 ? `${rounds} 轮 ${steps} 步` : ""
+      return [timePart, workPart, `${formatTokens(total)} tok`, `${formatRate(rate)} tok/s`]
+        .filter(Boolean)
+        .join(" · ")
+    }
+
+    /**
+     * The right-hand column of the status row: the context gauge (its ring is
+     * the markdown icon), the cache hit rate and the whole session's tokens.
+     */
+    const usageRight = (): string | undefined => {
+      if (!lastUsage) return undefined
+      const { context, sessionTotal, hit, cost } = lastUsage
       const limit = turnContextLimit
-      const used =
-        limit && limit > 0 && context > 0 ? ` ${formatPercent(context / limit)}%` : ""
-      const contextPart = context > 0 ? ` · ${formatTokens(context)}${used}` : ""
-      // What the whole session has consumed so far — Σ, because the turn's
-      // own total above is only a part of it.
-      const sessionPart = sessionTotal > 0 ? ` · Σ ${formatTokens(sessionTotal)} tok` : ""
-      // How much work the agent did: the rounds it wrote in and the model
-      // calls it took.
-      const workPart = steps > 0 ? `${rounds} 轮 ${steps} 步 · ` : ""
-      return (
-        `${timePart}${workPart}${formatTokens(total)} tok${hitPart} · ` +
-        `${formatRate(rate)} tok/s${contextPart}${sessionPart}${cost}`
-      )
+      const parts: string[] = []
+      if (context > 0) {
+        const pct = limit && limit > 0 ? ` ${formatPercent(context / limit)}%` : ""
+        parts.push(`${formatTokens(context)}${pct}`)
+      }
+      parts.push(`缓存命中 ${hit}%`)
+      if (sessionTotal > 0) parts.push(`Σ ${formatTokens(sessionTotal)} tok`)
+      const right = parts.join(" · ")
+      return cost ? `${right}${cost}` : right
     }
 
     /** The context percentage as an integer, for the ring's image key. */
@@ -243,13 +248,17 @@ export function createStreamingBridge(
         if (!line) return
         const percent = contextPercent()
         const key = percent !== undefined ? deps.ringIcons?.get(percent) : undefined
-        writeToCard((c) => void c.setUsage(line, { icon: key }))
+        writeToCard((c) =>
+          void c.setUsage(line, { right: usageRight(), icon: key }),
+        )
         if (percent === undefined || !deps.ringIcons || key) return
         void deps.ringIcons.ensure(percent).then((newKey) => {
           if (!newKey) return
           const refreshed = usageLine()
           if (!refreshed) return
-          writeToCard((c) => void c.setUsage(refreshed, { icon: newKey }))
+          writeToCard((c) =>
+            void c.setUsage(refreshed, { right: usageRight(), icon: newKey }),
+          )
         })
       }
 

@@ -72,6 +72,8 @@ export interface OpenCardState {
   blocks?: Block[]
   /** The status line the card was showing. */
   usage?: string
+  /** The right-hand column of the status row (context, cache, session total). */
+  usageRight?: string
   /** Feishu image key of the ring icon. */
   usageIcon?: string
   hasRealUsage?: boolean
@@ -163,9 +165,11 @@ export class StreamingCardSession {
   private lastStateWrite = 0
 
   private blocks: Block[] = []
-  /** Token/rate summary shown in the head line. */
+  /** Left column of the status row: time, rounds/steps, tokens, rate. */
   private usageText = ""
-  /** Feishu image key of the ring shown as the status line's icon. */
+  /** Right column: context + cache hit + session total (with the ring icon). */
+  private usageRight = ""
+  /** Feishu image key of the ring shown in the right column. */
   private usageIcon = ""
   /** True once the server reported a real usage — the live estimate must
    *  never replace it. */
@@ -238,6 +242,7 @@ export class StreamingCardSession {
     session.assignedLength =
       last && last.kind === "message" ? last.start + last.text.length : 0
     session.usageText = options.state.usage ?? ""
+    session.usageRight = options.state.usageRight ?? ""
     session.usageIcon = options.state.usageIcon ?? ""
     session.hasRealUsage = options.state.hasRealUsage ?? false
     return session
@@ -285,7 +290,7 @@ export class StreamingCardSession {
   /** The real usage the server reported for the last step. */
   async setUsage(
     text: string,
-    extra: { icon?: string } = {},
+    extra: { right?: string; icon?: string } = {},
   ): Promise<void> {
     await this.applyUsage(text, true, extra)
   }
@@ -303,14 +308,18 @@ export class StreamingCardSession {
   private async applyUsage(
     text: string,
     real: boolean,
-    extra: { icon?: string } = {},
+    extra: { right?: string; icon?: string } = {},
   ): Promise<void> {
     if (this.closed) return
+    const right = extra.right ?? ""
     const icon = extra.icon ?? ""
-    if (text === this.usageText && icon === this.usageIcon) return
+    if (text === this.usageText && right === this.usageRight && icon === this.usageIcon) {
+      return
+    }
     // Record it even if the card has no message id yet: the usage event can
     // arrive before the card is created, and the line must not be lost.
     this.usageText = text
+    this.usageRight = right
     this.usageIcon = icon
     if (real) this.hasRealUsage = true
     if (!this.messageId) return
@@ -463,13 +472,47 @@ export class StreamingCardSession {
       elements.push({ tag: "markdown", content: " " })
     }
     if (!sealed && !this.concise) {
-      elements.push({
-        tag: "markdown",
-        content: this.statusLine(),
-        ...(this.usageIcon
-          ? { icon: { tag: "custom_icon", img_key: this.usageIcon } }
-          : {}),
-      })
+      if (this.usageRight) {
+        // Two columns keep the status on the left and the context gauge,
+        // cache rate and session total on the right. The ring can only be an
+        // icon of a markdown block, so this is the only way to place it next
+        // to those numbers.
+        elements.push({
+          tag: "column_set",
+          flex_mode: "none",
+          horizontal_spacing: "4px",
+          columns: [
+            {
+              tag: "column",
+              width: "weighted",
+              weight: 1,
+              vertical_align: "center",
+              elements: [
+                {
+                  tag: "markdown",
+                  content: [this.baseStatus(), this.usageText].filter(Boolean).join(" · "),
+                },
+              ],
+            },
+            {
+              tag: "column",
+              width: "auto",
+              vertical_align: "center",
+              elements: [
+                {
+                  tag: "markdown",
+                  content: this.usageRight,
+                  ...(this.usageIcon
+                    ? { icon: { tag: "custom_icon", img_key: this.usageIcon } }
+                    : {}),
+                },
+              ],
+            },
+          ],
+        })
+      } else {
+        elements.push({ tag: "markdown", content: this.statusLine() })
+      }
     }
     return {
       schema: "2.0",
@@ -531,6 +574,7 @@ export class StreamingCardSession {
             },
       ),
       ...(this.usageText ? { usage: this.usageText } : {}),
+      ...(this.usageRight ? { usageRight: this.usageRight } : {}),
       ...(this.usageIcon ? { usageIcon: this.usageIcon } : {}),
       ...(this.hasRealUsage ? { hasRealUsage: true } : {}),
     }
@@ -571,6 +615,7 @@ export class StreamingCardSession {
             messageId: entry.messageId,
             ...(Array.isArray(entry.blocks) ? { blocks: entry.blocks } : {}),
             ...(typeof entry.usage === "string" ? { usage: entry.usage } : {}),
+            ...(typeof entry.usageRight === "string" ? { usageRight: entry.usageRight } : {}),
             ...(typeof entry.usageIcon === "string" ? { usageIcon: entry.usageIcon } : {}),
             ...(entry.hasRealUsage ? { hasRealUsage: true } : {}),
           }
@@ -583,13 +628,15 @@ export class StreamingCardSession {
     return {}
   }
 
-  private statusLine(): string {
-    const base =
-      this.status === "completed" ? "✅ 已完成"
+  private baseStatus(): string {
+    return this.status === "completed" ? "✅ 已完成"
       : this.status === "interrupted" ? "⚠️ 已中断（服务重启、连接断开或长时间无响应）"
       : this.status === "error" ? "❌ 失败"
       : "⏳ 运行中…"
-    return this.usageText ? `${base} · ${this.usageText}` : base
+  }
+
+  private statusLine(): string {
+    return [this.baseStatus(), this.usageText, this.usageRight].filter(Boolean).join(" · ")
   }
 
   private countElements(card: Record<string, unknown>): number {
