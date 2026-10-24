@@ -920,6 +920,55 @@ describe("createStreamingBridge", () => {
     expect(modelContextLimit).toHaveBeenCalledWith("p1", "m1")
   })
 
+  it("uses the uploaded ring image for the context percentage", async () => {
+    const mockFeishu = {
+      ...createMockFeishuClient(),
+      sendMessage: vi.fn().mockResolvedValue({ code: 0, data: { message_id: "msg_456" } }),
+      replyMessage: vi.fn().mockResolvedValue({ code: 0 }),
+    }
+    const ringIcons = {
+      get: vi.fn((pct: number) => (pct === 40 ? "img_key_40" : undefined)),
+      ensure: vi.fn().mockResolvedValue("img_key_40"),
+    }
+    const deps = makeDeps({
+      feishuClient: mockFeishu,
+      opencode: { modelContextLimit: vi.fn().mockResolvedValue(10000) } as any,
+      ringIcons,
+    })
+    const bridge = createStreamingBridge(deps)
+
+    const handlePromise = bridge.handleMessage(
+      "chat-1", "ses-1", eventListeners, eventProcessor, mockSendMessage, vi.fn(), "msg_original", null,
+    )
+    await waitFor(() => {
+      expect(eventListeners.size).toBe(1)
+    })
+
+    const emit = (ev: unknown) => {
+      ;[...(eventListeners.get("ses-1") ?? [])].forEach((fn) => fn(ev))
+    }
+
+    emit({ type: "session.step.started", data: { sessionID: "ses-1", model: { id: "m1", providerID: "p1" } } })
+    await new Promise((r) => setTimeout(r, 0))
+    emit({ type: "session.text.delta", data: { sessionID: "ses-1", assistantMessageID: "m-1", delta: "hello" } })
+    emit({
+      type: "session.usage.updated",
+      data: {
+        sessionID: "ses-1",
+        cost: 0,
+        tokens: { input: 1000, output: 100, reasoning: 0, cache: { read: 3000, write: 0 } },
+      },
+    })
+    emit({ type: "session.execution.succeeded", data: { sessionID: "ses-1" } })
+
+    await handlePromise
+
+    const raw = JSON.stringify((mockFeishu.updateMessage as any).mock.calls.at(-1)?.[1] ?? "")
+    expect(raw).toContain("![40%](img_key_40)")
+    expect(raw).not.toContain("◔")
+    expect(ringIcons.ensure).not.toHaveBeenCalled()
+  })
+
   it("counts at least one round, even without any text", async () => {
     const mockFeishu = {
       ...createMockFeishuClient(),
