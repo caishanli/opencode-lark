@@ -11,9 +11,9 @@
  */
 
 import { spawn, type ChildProcess } from "node:child_process"
-import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { homedir } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import type { Logger } from "../utils/logger.js"
 import type { OpencodeGateway } from "./gateway.js"
 
@@ -110,6 +110,7 @@ export function createServerSupervisor(options: ServerSupervisorOptions): Server
   function writeIdleTimeoutMinutes(minutes: number): void {
     if (!options.stateFile) return
     try {
+      ensureParent(options.stateFile)
       writeFileSync(
         options.stateFile,
         JSON.stringify({ idleTimeoutMinutes: minutes }, null, 2),
@@ -143,9 +144,15 @@ export function createServerSupervisor(options: ServerSupervisorOptions): Server
     }
   }
 
+  /** The data directory may not exist yet on the first start. */
+  const ensureParent = (file: string): void => {
+    mkdirSync(dirname(file), { recursive: true })
+  }
+
   const writePid = (pid: number): void => {
     if (!options.pidFile) return
     try {
+      ensureParent(options.pidFile)
       writeFileSync(options.pidFile, String(pid))
     } catch (err) {
       logger.warn(`Could not remember the server pid: ${err}`)

@@ -71,6 +71,34 @@ describe("server supervisor", () => {
     expect(Number(readFileSync(PID_FILE, "utf-8"))).toBe(FAKE_PID)
   })
 
+  it("creates the pid directory when the data dir does not exist yet", async () => {
+    const dir = join("/tmp/opencode", `pid-dir-${Date.now()}`)
+    const pidFile = join(dir, "nested", "server.pid")
+    const gateway = createMockGateway()
+    const logger = createMockLogger()
+    let up = false
+    ;(gateway.ping as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      if (!up) throw new Error("connection refused")
+    })
+
+    const supervisor = createServerSupervisor({
+      command: "opencode",
+      args: ["serve"],
+      pidFile,
+      idleTimeoutMs: 0,
+      opencode: gateway,
+      logger,
+      spawnProcess: () => {
+        up = true
+        return { pid: FAKE_PID, unref: () => {} }
+      },
+    })
+
+    expect(await supervisor.ensureRunning()).toBe(true)
+    expect(existsSync(pidFile)).toBe(true)
+    rmSync(dir, { recursive: true, force: true })
+  })
+
   it("starts the server only once for a burst of requests", async () => {
     const { supervisor, spawned } = makeSupervisor()
 
