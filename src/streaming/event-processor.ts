@@ -44,6 +44,10 @@ export interface SubtaskDiscovered {
 export interface SessionIdle {
   readonly type: "SessionIdle"
   readonly sessionId: string
+  /** How the turn ended (`session.execution.*`). Absent for a plain idle status. */
+  readonly outcome?: "succeeded" | "failed" | "interrupted"
+  /** Why it failed — opencode reports this on `session.execution.failed`. */
+  readonly error?: string
 }
 
 export interface QuestionAsked {
@@ -204,6 +208,17 @@ type KnownEvent =
 
 function isObject(v: unknown): v is Record<string, unknown> {
   return v !== null && typeof v === "object"
+}
+
+/** A one-line, user-facing reason from an opencode error payload. */
+function sessionErrorText(error: unknown): string | undefined {
+  if (typeof error === "string" && error.trim()) return error.trim()
+  if (!isObject(error)) return undefined
+  const message = error.message
+  if (typeof message === "string" && message.trim()) return message.trim()
+  const type = error.type
+  if (typeof type === "string" && type.trim()) return type.trim()
+  return undefined
 }
 
 /** Best-effort one-line summary of a tool call, for the Feishu status card.
@@ -625,7 +640,26 @@ export class EventProcessor {
     if (typeof sessionId !== "string") return null
     if (!this.ownedSessions.has(sessionId)) return null
 
-    return { type: "SessionIdle", sessionId }
+    const type = (event as { type?: unknown }).type
+    const outcome =
+      type === "session.execution.failed"
+        ? "failed"
+        : type === "session.execution.interrupted"
+          ? "interrupted"
+          : undefined
+    // A failed turn still ends the stream — but the reason matters: without
+    // it the card can only say "（无回复）" and claim the turn succeeded.
+    const error =
+      outcome === "failed"
+        ? sessionErrorText((props as Record<string, unknown>).error)
+        : undefined
+
+    return {
+      type: "SessionIdle",
+      sessionId,
+      ...(outcome ? { outcome } : {}),
+      ...(error ? { error } : {}),
+    }
   }
 
   private processQuestionAsked(

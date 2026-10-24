@@ -1186,7 +1186,13 @@ export function createMessageHandler(
             settled = true
             cleanup()
 
-            const responseText = textBuffer.trim() || "（无回复）"
+            const responseText =
+              textBuffer.trim() ||
+              (action.outcome === "failed"
+                ? `❌ 本轮失败：${action.error || "未知错误"}`
+                : action.outcome === "interrupted"
+                  ? "⚠️ 本轮已中断"
+                  : "（无回复）")
 
             // Send response
 

@@ -594,6 +594,117 @@ describe("createStreamingBridge", () => {
     expect((deps.feishuClient as any).updateMessage).toHaveBeenCalled()
   })
 
+  it("shows the failure reason instead of 无回复 when the turn fails", async () => {
+    const deps = makeDeps({
+      feishuClient: {
+        ...createMockFeishuClient(),
+        sendMessage: vi.fn().mockResolvedValue({
+          code: 0,
+          data: { message_id: "msg_456" },
+        }),
+        replyMessage: vi.fn().mockResolvedValue({ code: 0 }),
+      },
+    })
+    const bridge = createStreamingBridge(deps)
+
+    const onComplete = vi.fn()
+    const handlePromise = bridge.handleMessage(
+      "chat-1",
+      "ses-1",
+      eventListeners,
+      eventProcessor,
+      mockSendMessage,
+      onComplete,
+      "msg_original",
+      null,
+    )
+
+    await waitFor(() => {
+      expect(eventListeners.size).toBe(1)
+    })
+
+    const listener = [...eventListeners.get("ses-1")!][0]!
+
+    // A tool already ran, so the turn has a card.
+    listener({
+      type: "message.part.updated",
+      properties: {
+        part: {
+          sessionID: "ses-1",
+          messageID: "m-1",
+          type: "tool",
+          tool: "bash",
+          state: { status: "completed", title: "List files" },
+        },
+      },
+    })
+    await new Promise((r) => setTimeout(r, 10))
+
+    listener({
+      type: "session.execution.failed",
+      data: {
+        sessionID: "ses-1",
+        error: {
+          type: "provider.free-limit",
+          message: "Free usage limit reached. Connect a provider.",
+          status: 429,
+        },
+      },
+    })
+
+    await handlePromise
+
+    const text = cardContent(deps.feishuClient as any)
+    expect(text).toContain("Free usage limit reached")
+    expect(text).not.toContain("（无回复）")
+    // The card must not claim the turn succeeded.
+    expect(text).toContain("❌ 失败")
+    expect(onComplete).toHaveBeenCalledWith(expect.stringContaining("Free usage limit reached"))
+  })
+
+  it("reports a failed turn in the reply when no card was created", async () => {
+    const deps = makeDeps({
+      feishuClient: {
+        ...createMockFeishuClient(),
+        replyMessage: vi.fn().mockResolvedValue({ code: 0 }),
+      },
+    })
+    const bridge = createStreamingBridge(deps)
+
+    const onComplete = vi.fn()
+    const handlePromise = bridge.handleMessage(
+      "chat-1",
+      "ses-1",
+      eventListeners,
+      eventProcessor,
+      mockSendMessage,
+      onComplete,
+      "msg_original",
+      null,
+    )
+
+    await waitFor(() => {
+      expect(eventListeners.size).toBe(1)
+    })
+
+    const listener = [...eventListeners.get("ses-1")!][0]!
+    listener({
+      type: "session.execution.failed",
+      data: {
+        sessionID: "ses-1",
+        error: { type: "provider.free-limit", message: "Free usage limit reached." },
+      },
+    })
+
+    await handlePromise
+
+    const call = (deps.feishuClient.replyMessage as any).mock.calls.at(-1)
+    const content = JSON.stringify(call?.[1])
+    expect(content).toContain("Free usage limit reached")
+    expect(content).not.toContain("（无回复）")
+    expect(onComplete).toHaveBeenCalledWith(expect.stringContaining("Free usage limit reached"))
+  })
+
   it("logs info when streaming card starts", async () => {
     const deps = makeDeps({
       feishuClient: {

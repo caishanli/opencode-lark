@@ -411,6 +411,42 @@ describe("EventProcessor", () => {
 
 
   describe("SessionIdle", () => {
+    it("carries the failure opencode reported on session.execution.failed", () => {
+      const proc = makeProcessor()
+      const result = proc.processEvent({
+        type: "session.execution.failed",
+        data: {
+          sessionID: "ses-1",
+          error: {
+            type: "provider.free-limit",
+            message: "Free usage limit reached. Connect a provider.",
+            status: 429,
+          },
+        },
+      })
+
+      expect(result).toEqual<SessionIdle>({
+        type: "SessionIdle",
+        sessionId: "ses-1",
+        outcome: "failed",
+        error: "Free usage limit reached. Connect a provider.",
+      })
+    })
+
+    it("marks session.execution.interrupted as interrupted", () => {
+      const proc = makeProcessor()
+      const result = proc.processEvent({
+        type: "session.execution.interrupted",
+        data: { sessionID: "ses-1", reason: "shutdown" },
+      })
+
+      expect(result).toEqual<SessionIdle>({
+        type: "SessionIdle",
+        sessionId: "ses-1",
+        outcome: "interrupted",
+      })
+    })
+
     it("extracts SessionIdle from session.status with idle type", () => {
       const proc = makeProcessor()
       const result = proc.processEvent({
@@ -636,9 +672,9 @@ describe("EventProcessor — v2 turn-end signals (captured from live server)", (
   it("treats session.execution.failed and .interrupted as SessionIdle", () => {
     const proc = makeProcessor()
     expect(proc.processEvent({ type: "session.execution.failed", data: { sessionID: "ses-1" } }))
-      .toEqual<SessionIdle>({ type: "SessionIdle", sessionId: "ses-1" })
+      .toEqual<SessionIdle>({ type: "SessionIdle", sessionId: "ses-1", outcome: "failed" })
     expect(proc.processEvent({ type: "session.execution.interrupted", data: { sessionID: "ses-1" } }))
-      .toEqual<SessionIdle>({ type: "SessionIdle", sessionId: "ses-1" })
+      .toEqual<SessionIdle>({ type: "SessionIdle", sessionId: "ses-1", outcome: "interrupted" })
   })
 
   it("does not treat session.execution.started as idle", () => {

@@ -531,7 +531,22 @@ export function createStreamingBridge(
             clearTimeout(firstEventTimer)
             if (idleTimer) clearTimeout(idleTimer)
             removeListener(eventListeners, sessionId, myListener)
-            const responseText = textBuffer.trim() || "（无回复）"
+            // A failed turn used to end with no text and the card claimed
+            // "（无回复）" + "✅ 已完成". The failure reason is in the event;
+            // show it (and mark the card failed) instead of inventing an
+            // empty success.
+            const failed = action.outcome === "failed"
+            const interrupted = action.outcome === "interrupted"
+            const responseText =
+              textBuffer.trim() ||
+              (failed
+                ? `❌ 本轮失败：${action.error || "未知错误"}`
+                : interrupted
+                  ? "⚠️ 本轮已中断"
+                  : "（无回复）")
+            if (failed) {
+              logger.warn(`Turn failed: ${action.error ?? "unknown error"}`)
+            }
             const hadCard = card !== null
             // A tool that is still marked as running means the turn was cut
             // short (the watchdog gave up, the server went away) — the card
@@ -540,9 +555,10 @@ export function createStreamingBridge(
             if (unfinished) {
               logger.warn("Closing the card as interrupted — a tool was still running")
             }
+            const closeStatus = failed ? "error" : unfinished || interrupted ? "interrupted" : "completed"
             const closeCard = card
               ? (cardStartPromise ?? Promise.resolve()).then(() =>
-                  card!.close(responseText, unfinished ? "interrupted" : "completed"),
+                  card!.close(responseText, closeStatus),
                 )
               : Promise.resolve()
             closeCard
