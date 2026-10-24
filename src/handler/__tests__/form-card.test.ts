@@ -80,6 +80,19 @@ describe("buildFormCard", () => {
     ])
   })
 
+  it("lists option descriptions, which the dropdown cannot show", () => {
+    const card = buildFormCard({
+      ...FORM,
+      fields: [
+        {
+          ...FORM.fields[0]!,
+          options: [{ value: "A", label: "A", description: "why A" }],
+        },
+      ],
+    })
+    expect((card.elements as any)[0].content).toContain("- **A** — why A")
+  })
+
   it("uses the form title when it is not the generic one", () => {
     const card = buildFormCard({ ...FORM, title: "Pick a database" })
     expect((card.header as any).title.content).toBe("❓ Pick a database")

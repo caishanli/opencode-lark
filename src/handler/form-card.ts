@@ -63,12 +63,19 @@ export function buildFormCard(form: FormInfo): Record<string, unknown> {
     const heading = field.title?.trim()
     const description = field.description?.trim()
     if (heading || description) {
-      elements.push({
-        tag: "markdown",
-        content: [heading ? `**${heading}**` : "", description ?? ""]
-          .filter(Boolean)
-          .join("\n"),
-      })
+      const lines: string[] = []
+      if (heading) lines.push(`**${heading}**`)
+      if (description) lines.push(description)
+      // A dropdown shows labels only; list the option descriptions so the
+      // "why" the user sees in the TUI is not lost.
+      const explained = (field.options ?? []).filter((o) => o.description?.trim())
+      if (explained.length > 0) {
+        lines.push("")
+        for (const option of explained) {
+          lines.push(`- **${option.label}** — ${option.description!.trim()}`)
+        }
+      }
+      elements.push({ tag: "markdown", content: lines.join("\n") })
     }
 
     controls.push(controlFor(field))

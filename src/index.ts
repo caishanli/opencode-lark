@@ -358,7 +358,11 @@ async function main(): Promise<void> {
     if (actionType === "view_subagent") {
       return subAgentCardHandler(action)
     }
-    if (actionType === "question_answer" || actionType === "permission_reply") {
+    if (
+      actionType === "question_answer" ||
+      actionType === "permission_reply" ||
+      actionType === "form_submit"
+    ) {
       return interactiveHandler(action)
     }
     // A button that carries a menu id navigates inside the card it was drawn
