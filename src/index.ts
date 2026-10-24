@@ -188,6 +188,36 @@ async function main(): Promise<void> {
     logger.warn(`Failed to fetch bot info — group @mention filtering disabled: ${err}`)
   }
 
+  // The restart script is killed together with the old service's cgroup, so it
+  // can only announce the *start* of a restart. The marker it leaves behind is
+  // the new process's cue to post the "done" half.
+  const restartMarker = path.join(config.dataDir, "restart-pending.json")
+  if (existsSync(restartMarker)) {
+    try {
+      const pending = JSON.parse(readFileSync(restartMarker, "utf-8")) as {
+        chatId?: unknown
+        startedAt?: unknown
+      }
+      rmSync(restartMarker, { force: true })
+      if (typeof pending.chatId === "string" && pending.chatId) {
+        const seconds =
+          typeof pending.startedAt === "number"
+            ? Math.max(0, Math.round((Date.now() - pending.startedAt) / 1000))
+            : undefined
+        feishuClient
+          .sendMessage(pending.chatId, {
+            msg_type: "text",
+            content: JSON.stringify({
+              text: `✅ opencode-lark 已重启完成${seconds !== undefined ? `（${seconds}s）` : ""}`,
+            }),
+          })
+          .catch((err) => logger.warn(`Could not announce the restart: ${err}`))
+      }
+    } catch (err) {
+      logger.warn(`Could not read the restart marker: ${err}`)
+    }
+  }
+
 
   const sessionManager = createSessionManager({
     opencode: gateway,

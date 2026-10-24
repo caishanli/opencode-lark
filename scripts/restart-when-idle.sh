@@ -58,19 +58,17 @@ while :; do
 done
 
 notify "🔄 opencode-lark 即将重启（本轮已结束），稍等…"
-started=$(date +%s)
+
+# The script dies when systemd tears down the service cgroup, so the "done"
+# message is sent by the new process: leave it a marker to read.
+chat=""
+if [ -f "$REPO/data/notify-chat.json" ]; then
+  chat=$(sed -n 's/.*"chatId":"\([^"]*\)".*/\1/p' "$REPO/data/notify-chat.json")
+fi
+if [ -n "$chat" ]; then
+  printf '{"chatId":"%s","startedAt":%s}' "$chat" "$(( $(date +%s) * 1000 ))" \
+    > "$REPO/data/restart-pending.json"
+fi
 
 systemctl --user restart opencode-lark.service
-
-# Wait for the bridge's webhook server: any HTTP answer means it is up.
-tries=0
-while [ "$tries" -lt 60 ]; do
-  code=$(curl -s -o /dev/null -m 2 -w '%{http_code}' http://127.0.0.1:3001/ 2>/dev/null || echo "000")
-  [ "$code" != "000" ] && break
-  sleep 1
-  tries=$((tries + 1))
-done
-
-took=$(( $(date +%s) - started ))
-notify "✅ opencode-lark 已重启完成（${took}s）"
-echo "restart-when-idle: restarted after ${waited}s (startup ${took}s)"
+echo "restart-when-idle: restarted after ${waited}s"
