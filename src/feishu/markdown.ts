@@ -17,6 +17,38 @@ const TASK_RE = /^(\s*)[-*+]\s+\[([ xX])\]\s+(.*)$/
 const QUOTE_RE = /^>\s?(.*)$/
 const RULE_RE = /^\s*(?:-\s*){3,}$|^\s*(?:\*\s*){3,}$|^\s*(?:_\s*){3,}$/
 const TABLE_DELIM_RE = /^\s*\|?\s*:?-{1,}:?\s*(\|\s*:?-{1,}:?\s*)*\|?\s*$/
+const IMAGE_RE = /!\[([^\]]*)\]\(([^)]*)\)/g
+
+/**
+ * Feishu treats every `![alt](target)` as an image and validates the target
+ * as an image_key; one bad key makes it reject the whole card (230099). Agent
+ * text never carries Feishu image keys — the context ring is built by the
+ * bridge and does not pass through here — so render images as links (http) or
+ * plain text instead. Fenced code is safe: Feishu does not parse images there.
+ */
+function neutralizeImages(line: string): string {
+  return line.replace(IMAGE_RE, (_match, alt: string, raw: string) => {
+    const target = raw.trim().split(/\s+/)[0] ?? ""
+    const label = alt.trim() || "图片"
+    if (!target) return label
+    if (/^https?:\/\//i.test(target)) return `[${label}](${target})`
+    return `${label}（${target}）`
+  })
+}
+
+function neutralizeImagesOutsideFences(markdown: string): string {
+  let inFence = false
+  return markdown
+    .split("\n")
+    .map((line) => {
+      if (FENCE_RE.test(line)) {
+        inFence = !inFence
+        return line
+      }
+      return inFence ? line : neutralizeImages(line)
+    })
+    .join("\n")
+}
 
 function splitRow(line: string): string[] {
   let s = line.trim()
@@ -121,5 +153,5 @@ export function toFeishuMarkdown(text: string): string {
     out.push(line)
   }
 
-  return out.join("\n")
+  return neutralizeImagesOutsideFences(out.join("\n"))
 }

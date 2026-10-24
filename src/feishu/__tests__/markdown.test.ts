@@ -51,6 +51,19 @@ describe("toFeishuMarkdown", () => {
     expect(toFeishuMarkdown(md)).toBe(md)
   })
 
+  it("neutralises image syntax Feishu would reject", () => {
+    // Feishu parses image syntax even inside inline code and then validates
+    // the target as an image_key — one bad key fails the whole card.
+    expect(toFeishuMarkdown("用 `![pct](img_key)` 内嵌")).toBe("用 `pct（img_key）` 内嵌")
+    expect(toFeishuMarkdown("![截图](https://x.dev/a.png)")).toBe("[截图](https://x.dev/a.png)")
+    expect(toFeishuMarkdown("![只有说明]()")).toBe("只有说明")
+  })
+
+  it("leaves images inside fenced code blocks alone", () => {
+    const md = ["```md", "![pct](img_key)", "```"].join("\n")
+    expect(toFeishuMarkdown(md)).toBe(md)
+  })
+
   it("leaves supported syntax and plain prose alone", () => {
     const md = "**bold** *italic* ~~strike~~ [link](https://x.dev)\n\n- item\n1. one"
     expect(toFeishuMarkdown(md)).toBe(md)
