@@ -144,12 +144,16 @@ export function createStreamingBridge(
      */
     const usageLine = (): string | null => {
       if (!lastUsage) return null
-      const { total, sessionTotal, rate, hit, cost, turnMs, rounds, steps } = lastUsage
+      const { context, total, sessionTotal, rate, hit, cost, turnMs, rounds, steps } = lastUsage
       // Same shorthand as the opencode status bar: a clock for time, a
       // database for the stored (session) tokens — and a spelled-out label
       // for the cache, because any icon there just invited a guess.
       const hitPart = ` · 缓存命中 ${hit}%`
       const timePart = turnMs > 0 ? `⏱ ${(turnMs / 1000).toFixed(1)}s · ` : ""
+      const limit = turnContextLimit
+      const used =
+        limit && limit > 0 && context > 0 ? ` ${formatPercent(context / limit)}%` : ""
+      const contextPart = context > 0 ? ` · ${formatTokens(context)}${used}` : ""
       // What the whole session has consumed so far — Σ, because the turn's
       // own total above is only a part of it.
       const sessionPart = sessionTotal > 0 ? ` · Σ ${formatTokens(sessionTotal)} tok` : ""
@@ -158,7 +162,7 @@ export function createStreamingBridge(
       const workPart = steps > 0 ? `${rounds} 轮 ${steps} 步 · ` : ""
       return (
         `${timePart}${workPart}${formatTokens(total)} tok${hitPart} · ` +
-        `${formatRate(rate)} tok/s${sessionPart}${cost}`
+        `${formatRate(rate)} tok/s${contextPart}${sessionPart}${cost}`
       )
     }
 
@@ -168,19 +172,6 @@ export function createStreamingBridge(
       const limit = turnContextLimit
       if (!limit || limit <= 0 || context <= 0) return undefined
       return Math.round((context / limit) * 100)
-    }
-
-    /**
-     * The context window. The ring icon in front of the line is its gauge, so
-     * the numbers carry no label and no parentheses.
-     */
-    const contextLine = (): string | undefined => {
-      const context = lastUsage?.context ?? 0
-      if (context <= 0) return undefined
-      const limit = turnContextLimit
-      const used =
-        limit && limit > 0 ? ` ${formatPercent(context / limit)}%` : ""
-      return `${formatTokens(context)}${used}`
     }
     let stepStartedAt = 0
     /** How many model calls this turn took. */
@@ -252,20 +243,13 @@ export function createStreamingBridge(
         if (!line) return
         const percent = contextPercent()
         const key = percent !== undefined ? deps.ringIcons?.get(percent) : undefined
-        writeToCard((c) =>
-          void c.setUsage(line, { context: contextLine(), icon: key }),
-        )
+        writeToCard((c) => void c.setUsage(line, { icon: key }))
         if (percent === undefined || !deps.ringIcons || key) return
         void deps.ringIcons.ensure(percent).then((newKey) => {
           if (!newKey) return
           const refreshed = usageLine()
           if (!refreshed) return
-          writeToCard((c) =>
-            void c.setUsage(refreshed, {
-              context: contextLine(),
-              icon: newKey,
-            }),
-          )
+          writeToCard((c) => void c.setUsage(refreshed, { icon: newKey }))
         })
       }
 
