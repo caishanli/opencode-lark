@@ -43,11 +43,6 @@ export interface StreamingBridgeDeps {
   /** The reply detail for this chat (`/回复`) — concise hides the tool panels
    *  and the status line. */
   replyMode?: (chatId: string) => "standard" | "concise"
-  /** Uploaded context-window rings, one image per percentage. */
-  ringIcons?: {
-    get(percent: number): string | undefined
-    ensure(percent: number): Promise<string | undefined>
-  }
 }
 
 export interface StreamingBridge {
@@ -146,7 +141,7 @@ export function createStreamingBridge(
       if (!lastUsage) return null
       const { context, total, sessionTotal, rate, hit, cost, turnMs, rounds, steps } = lastUsage
       // Same shorthand as the opencode status bar: a clock for time, a
-      // database for the stored (session) tokens, a pie for the context
+      // database for the stored (session) tokens, `ctx` for the context
       // window — and a spelled-out label for the cache, because any icon
       // there just invited a guess.
       const hitPart = ` · 缓存命中 ${hit}%`
@@ -154,16 +149,7 @@ export function createStreamingBridge(
       const limit = turnContextLimit
       const used =
         limit && limit > 0 && context > 0 ? ` (${formatPercent(context / limit)}%)` : ""
-      // The context gauge is a small uploaded ring (light = free, dark =
-      // used). Before the upload lands — and when there is no ring service —
-      // a quarter-circle glyph keeps the line readable.
-      const percent =
-        limit && limit > 0 && context > 0
-          ? Math.round((context / limit) * 100)
-          : undefined
-      const ringKey = percent !== undefined ? deps.ringIcons?.get(percent) : undefined
-      const gauge = ringKey ? `![${percent}%](${ringKey})` : "◔"
-      const contextPart = context > 0 ? ` · ${gauge} ${formatTokens(context)}${used}` : ""
+      const contextPart = context > 0 ? ` · ctx ${formatTokens(context)}${used}` : ""
       // What the whole session has consumed so far — the turn's own total
       // above is only a part of it.
       const sessionPart = sessionTotal > 0 ? ` · 🗄 ${formatTokens(sessionTotal)} tok` : ""
@@ -453,19 +439,6 @@ export function createStreamingBridge(
             }
             const line = usageLine()
             if (line) writeToCard((c) => void c.setUsage(line))
-            // The ring for this percentage may not exist yet: upload it and
-            // refresh the line when it lands.
-            const percent =
-              turnContextLimit && turnContextLimit > 0 && context > 0
-                ? Math.round((context / turnContextLimit) * 100)
-                : undefined
-            if (percent !== undefined && deps.ringIcons && !deps.ringIcons.get(percent)) {
-              void deps.ringIcons.ensure(percent).then((key) => {
-                if (!key) return
-                const refreshed = usageLine()
-                if (refreshed) writeToCard((c) => void c.setUsage(refreshed))
-              })
-            }
             // `session.usage.updated` fires after EVERY step, not once per
             // turn — closing the card here cut the reply off after the first
             // tool call. The turn ends with `session.execution.succeeded`.
