@@ -143,6 +143,8 @@ export interface OpencodeGateway {
   switchAgent(sessionID: string, agent: string): Promise<void>
   /** The context window of a model, in tokens (undefined if unknown). */
   modelContextLimit(providerID: string, modelID: string): Promise<number | undefined>
+  /** The model's display name ("DeepSeek V4.1 Flash"), when the server lists it. */
+  modelName(providerID: string, modelID: string): Promise<string | undefined>
   /** Compact the conversation of a session (drops the old turns). */
   compactSession(sessionID: string): Promise<void>
   /** Fetch the context windows of all models, so the first lookup is instant. */
@@ -218,21 +220,28 @@ export function createOpencodeGateway(options: OpencodeGatewayOptions): Opencode
 
   // The context window of every model — the list changes rarely, so it is
   // cached instead of being fetched on every usage event.
-  let modelLimits: { at: number; limits: Map<string, number> } | null = null
+  let modelCatalog: {
+    at: number
+    limits: Map<string, number>
+    names: Map<string, string>
+  } | null = null
 
-  /** Fetch the context window of every model (cached). */
-  const loadModelLimits = async (): Promise<void> => {
+  /** Fetch the context window and display name of every model (cached). */
+  const loadModelCatalog = async (): Promise<void> => {
     const now = Date.now()
-    if (modelLimits && now - modelLimits.at <= MODEL_LIMITS_TTL_MS) return
+    if (modelCatalog && now - modelCatalog.at <= MODEL_LIMITS_TTL_MS) return
     try {
       const models = await gw.listModels()
       const limits = new Map<string, number>()
+      const names = new Map<string, string>()
       for (const m of models) {
-        if (m.context && m.context > 0) limits.set(`${m.providerID}/${m.id}`, m.context)
+        const key = `${m.providerID}/${m.id}`
+        if (m.context && m.context > 0) limits.set(key, m.context)
+        if (m.name) names.set(key, m.name)
       }
-      modelLimits = { at: now, limits }
+      modelCatalog = { at: now, limits, names }
     } catch (err) {
-      // Keep the stale limits rather than losing the percentage.
+      // Keep the stale catalog rather than losing the percentage.
       options.logger?.warn?.(`Could not fetch the model limits: ${err}`)
     }
   }
@@ -343,11 +352,15 @@ export function createOpencodeGateway(options: OpencodeGatewayOptions): Opencode
       throwIfError(res, "compact")
     },
     async warmModelLimits() {
-      await loadModelLimits()
+      await loadModelCatalog()
     },
     async modelContextLimit(providerID, modelID) {
-      await loadModelLimits()
-      return modelLimits?.limits.get(`${providerID}/${modelID}`)
+      await loadModelCatalog()
+      return modelCatalog?.limits.get(`${providerID}/${modelID}`)
+    },
+    async modelName(providerID, modelID) {
+      await loadModelCatalog()
+      return modelCatalog?.names.get(`${providerID}/${modelID}`)
     },
     async switchModel(sessionID, model) {
       const res = await client.v2.session.switchModel({

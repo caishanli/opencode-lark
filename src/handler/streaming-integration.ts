@@ -119,6 +119,8 @@ export function createStreamingBridge(
     // The model of this turn and its context window — the card shows how
     // much of the window is in use.
     let turnModel: { id: string; providerID: string } | undefined
+    /** "command-code/DeepSeek V4.1 Flash" — shown at the end of the status line. */
+    let turnModelLabel: string | undefined
     let turnContextLimit: number | undefined
     let lastUsage: {
       context: number
@@ -134,6 +136,8 @@ export function createStreamingBridge(
       rounds: number
       /** How many model calls the turn took. */
       steps: number
+      /** The model that ran the turn, "provider/name". */
+      model?: string
     } | null = null
 
     /**
@@ -142,7 +146,8 @@ export function createStreamingBridge(
      */
     const usageLine = (): string | null => {
       if (!lastUsage) return null
-      const { context, total, sessionTotal, rate, hit, cost, turnMs, rounds, steps } = lastUsage
+      const { context, total, sessionTotal, rate, hit, cost, turnMs, rounds, steps, model } =
+        lastUsage
       const pieces: string[] = []
       // The rate comes first: it sits between the "已完成" label and the
       // elapsed time, so the headline reads speed → duration → work.
@@ -167,6 +172,7 @@ export function createStreamingBridge(
       // turn's own total above is only a part of it.
       if (sessionTotal > 0) pieces.push(`总 ${formatTokens(sessionTotal)} tok`)
       if (cost) pieces.push(cost)
+      if (model) pieces.push(model)
       return pieces.join(" · ")
     }
     let stepStartedAt = 0
@@ -345,6 +351,22 @@ export function createStreamingBridge(
               stepCount += 1
               if (action.model && action.model.id) {
                 turnModel = action.model
+                const model = action.model
+                // The provider's display name is nicer than the id; fall back
+                // to the id's last segment until it arrives.
+                turnModelLabel =
+                  `${model.providerID}/${model.id.split("/").pop() ?? model.id}`
+                const lookupName = deps.opencode?.modelName
+                if (lookupName) {
+                  void lookupName
+                    .call(deps.opencode, model.providerID, model.id)
+                    .then((name) => {
+                      if (!name) return
+                      turnModelLabel = `${model.providerID}/${name}`
+                      publishUsage()
+                    })
+                    .catch(() => {})
+                }
                 // The window limit is fetched in the background: the usage
                 // event of this step may arrive before it is known.
                 if (!turnContextLimit) {
@@ -453,6 +475,7 @@ export function createStreamingBridge(
               // How many model calls the turn took — at least one, like the
               // rounds.
               steps: Math.max(1, stepCount),
+              model: turnModelLabel,
             }
             publishUsage()
             // `session.usage.updated` fires after EVERY step, not once per

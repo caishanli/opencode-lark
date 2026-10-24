@@ -888,6 +888,57 @@ describe("createStreamingBridge", () => {
     expect(content).toMatch(/✅ 已完成 · [\d.]+k? tok\/s · (?:⏱ [\d.]+s · )?1 轮 1 步/)
   })
 
+  it("puts the model at the end of the status line", async () => {
+    const mockFeishu = {
+      ...createMockFeishuClient(),
+      sendMessage: vi.fn().mockResolvedValue({ code: 0, data: { message_id: "msg_456" } }),
+      replyMessage: vi.fn().mockResolvedValue({ code: 0 }),
+    }
+    const opencode = {
+      getSession: vi.fn().mockResolvedValue({
+        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+      }),
+      modelContextLimit: vi.fn().mockResolvedValue(1_000_000),
+      modelName: vi.fn().mockResolvedValue("DeepSeek V4.1 Flash"),
+    }
+    const deps = makeDeps({ feishuClient: mockFeishu, opencode } as any)
+    const bridge = createStreamingBridge(deps)
+
+    const handlePromise = bridge.handleMessage(
+      "chat-1", "ses-1", eventListeners, eventProcessor, mockSendMessage, vi.fn(), "msg_original", null,
+    )
+    await waitFor(() => {
+      expect(eventListeners.size).toBe(1)
+    })
+
+    const emit = (ev: unknown) => {
+      ;[...(eventListeners.get("ses-1") ?? [])].forEach((fn) => fn(ev))
+    }
+
+    emit({
+      type: "session.step.started",
+      data: {
+        sessionID: "ses-1",
+        model: { id: "deepseek/deepseek-v4.1-flash", providerID: "command-code" },
+      },
+    })
+    // let the (async) display-name lookup land before the turn closes
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    emit({ type: "session.text.delta", data: { sessionID: "ses-1", assistantMessageID: "m-1", delta: "hello" } })
+    emit({
+      type: "session.usage.updated",
+      data: {
+        sessionID: "ses-1",
+        tokens: { input: 1000, output: 100, reasoning: 0, cache: { read: 3000, write: 0 } },
+      },
+    })
+    emit({ type: "session.execution.succeeded", data: { sessionID: "ses-1" } })
+
+    await handlePromise
+    expect(cardContent(mockFeishu)).toContain("command-code/DeepSeek V4.1 Flash")
+  })
+
   it("shows how much of the context window is in use", async () => {
     const mockFeishu = {
       ...createMockFeishuClient(),
