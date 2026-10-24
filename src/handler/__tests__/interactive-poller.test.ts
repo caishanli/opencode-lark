@@ -82,13 +82,21 @@ function createMockLogger() {
 }
 
 // Shapes below mirror the gateway contract:
-//   QuestionRequest  = { id, sessionID, questions: [{ question, header, options, multiple?, custom? }] }
+//   FormInfo         = { id, sessionID, title, fields: [{ key, type, title, description, options, custom }] }
 //   PermissionRequest = { id, sessionID, action, resources, save?, metadata? }
-const SAMPLE_QUESTION = {
+const SAMPLE_FORM = {
   id: "q_1",
   sessionID: "ses_abc",
-  questions: [
-    { question: "Pick one", header: "Choice", options: [{ label: "A", description: "Option A" }] },
+  title: "Questions",
+  fields: [
+    {
+      key: "q0",
+      type: "string",
+      title: "Choice",
+      description: "Pick one",
+      options: [{ value: "A", label: "A", description: "Option A" }],
+      custom: true,
+    },
   ],
 }
 
@@ -157,7 +165,7 @@ describe("interactive-poller", () => {
       poller.start()
       await advanceTimers(0)
 
-      expect(deps.opencode.listQuestions).toHaveBeenCalled()
+      expect(deps.opencode.listForms).toHaveBeenCalled()
       expect(deps.opencode.listPermissions).toHaveBeenCalled()
     })
 
@@ -191,11 +199,11 @@ describe("interactive-poller", () => {
 
   // ── Question polling ──
 
-  describe("pollQuestions", () => {
-    it("sends card for pending question", async () => {
+  describe("pollForms", () => {
+    it("sends card for a pending form", async () => {
       const deps = createDeps({
         opencode: createMockGateway({
-          listQuestions: vi.fn().mockResolvedValue([SAMPLE_QUESTION]),
+          listForms: vi.fn().mockResolvedValue([SAMPLE_FORM]),
         }),
       })
       const poller = createInteractivePoller(deps)
@@ -207,14 +215,14 @@ describe("interactive-poller", () => {
         expect.objectContaining({ msg_type: "interactive" }),
       )
       expect(deps.logger.info).toHaveBeenCalledWith(
-        expect.stringContaining("pending question q_1"),
+        expect.stringContaining("pending form q_1"),
       )
     })
 
-    it("deduplicates already-seen question IDs", async () => {
+    it("deduplicates already-seen form IDs", async () => {
       const deps = createDeps({
         opencode: createMockGateway({
-          listQuestions: vi.fn().mockResolvedValue([SAMPLE_QUESTION]),
+          listForms: vi.fn().mockResolvedValue([SAMPLE_FORM]),
         }),
       })
       deps.seenInteractiveIds.add(interactiveCardKey("question", "q_1"))
@@ -225,10 +233,10 @@ describe("interactive-poller", () => {
       expect(deps.feishuClient.sendMessage).not.toHaveBeenCalled()
     })
 
-    it("skips question when no chatId for session", async () => {
+    it("skips a form when no chatId for session", async () => {
       const deps = createDeps({
         opencode: createMockGateway({
-          listQuestions: vi.fn().mockResolvedValue([SAMPLE_QUESTION]),
+          listForms: vi.fn().mockResolvedValue([SAMPLE_FORM]),
         }),
         getChatForSession: vi.fn().mockReturnValue(undefined),
       })
@@ -239,13 +247,13 @@ describe("interactive-poller", () => {
       expect(deps.feishuClient.sendMessage).not.toHaveBeenCalled()
     })
 
-    it("skips question missing required fields", async () => {
+    it("skips forms missing required fields", async () => {
       const deps = createDeps({
         opencode: createMockGateway({
-          listQuestions: vi.fn().mockResolvedValue([
-            { id: "", sessionID: "ses_abc", questions: [] },
-            { id: "q_2", sessionID: "", questions: [] },
-            { id: "q_3", sessionID: "ses_abc", questions: "not_array" },
+          listForms: vi.fn().mockResolvedValue([
+            { id: "", sessionID: "ses_abc", fields: [] },
+            { id: "q_2", sessionID: "", fields: [] },
+            { id: "q_3", sessionID: "ses_abc", fields: "not_array" },
           ]),
         }),
       })
@@ -256,12 +264,12 @@ describe("interactive-poller", () => {
       expect(deps.feishuClient.sendMessage).not.toHaveBeenCalled()
     })
 
-    it("handles non-ok question response degrading to an empty list", async () => {
+    it("handles an empty form response", async () => {
       // The gateway maps any non-ok HTTP response (404/500) to [] rather than
       // rejecting, so this must be expressed as a RESOLVING [].
       const deps = createDeps({
         opencode: createMockGateway({
-          listQuestions: vi.fn().mockResolvedValue([]),
+          listForms: vi.fn().mockResolvedValue([]),
         }),
       })
       const poller = createInteractivePoller(deps)
@@ -271,10 +279,10 @@ describe("interactive-poller", () => {
       expect(deps.feishuClient.sendMessage).not.toHaveBeenCalled()
     })
 
-    it("handles listQuestions network failure", async () => {
+    it("handles listForms network failure", async () => {
       const deps = createDeps({
         opencode: createMockGateway({
-          listQuestions: vi.fn().mockRejectedValue(new Error("ECONNREFUSED")),
+          listForms: vi.fn().mockRejectedValue(new Error("ECONNREFUSED")),
         }),
       })
       const poller = createInteractivePoller(deps)
@@ -287,7 +295,7 @@ describe("interactive-poller", () => {
     it("handles non-array question response", async () => {
       const deps = createDeps({
         opencode: createMockGateway({
-          listQuestions: vi.fn().mockResolvedValue({ not: "array" }),
+          listForms: vi.fn().mockResolvedValue({ not: "array" }),
         }),
       })
       const poller = createInteractivePoller(deps)
@@ -300,7 +308,7 @@ describe("interactive-poller", () => {
     it("handles malformed question response", async () => {
       const deps = createDeps({
         opencode: createMockGateway({
-          listQuestions: vi.fn().mockRejectedValue(new Error("parse error")),
+          listForms: vi.fn().mockRejectedValue(new Error("parse error")),
         }),
       })
       const poller = createInteractivePoller(deps)
@@ -310,10 +318,10 @@ describe("interactive-poller", () => {
       expect(deps.feishuClient.sendMessage).not.toHaveBeenCalled()
     })
 
-    it("logs warning when sendMessage fails for question", async () => {
+    it("logs warning when sendMessage fails for a form", async () => {
       const deps = createDeps({
         opencode: createMockGateway({
-          listQuestions: vi.fn().mockResolvedValue([SAMPLE_QUESTION]),
+          listForms: vi.fn().mockResolvedValue([SAMPLE_FORM]),
         }),
       })
       deps.feishuClient.sendMessage.mockRejectedValue(new Error("send failed"))
@@ -322,7 +330,7 @@ describe("interactive-poller", () => {
       await advanceTimers(10)
 
       expect(deps.logger.warn).toHaveBeenCalledWith(
-        expect.stringContaining("Poller question card send failed"),
+        expect.stringContaining("Poller form card send failed"),
       )
     })
   })
@@ -493,7 +501,7 @@ describe("interactive-poller", () => {
     it("adds processed IDs to seenInteractiveIds", async () => {
       const deps = createDeps({
         opencode: createMockGateway({
-          listQuestions: vi.fn().mockResolvedValue([SAMPLE_QUESTION]),
+          listForms: vi.fn().mockResolvedValue([SAMPLE_FORM]),
           listPermissions: vi.fn().mockResolvedValue([SAMPLE_PERMISSION]),
         }),
       })
@@ -510,10 +518,10 @@ describe("interactive-poller", () => {
       const poller = createInteractivePoller(deps)
       poller.start()
       await advanceTimers(0)
-      const callsAfterFirst = (deps.opencode.listQuestions as ReturnType<typeof vi.fn>).mock.calls.length
+      const callsAfterFirst = (deps.opencode.listForms as ReturnType<typeof vi.fn>).mock.calls.length
 
       await advanceTimers(3000)
-      expect((deps.opencode.listQuestions as ReturnType<typeof vi.fn>).mock.calls.length)
+      expect((deps.opencode.listForms as ReturnType<typeof vi.fn>).mock.calls.length)
         .toBeGreaterThan(callsAfterFirst)
 
       poller.stop()
@@ -526,16 +534,16 @@ describe("interactive-poller", () => {
       await advanceTimers(0)
       poller.stop()
 
-      const callsAtStop = (deps.opencode.listQuestions as ReturnType<typeof vi.fn>).mock.calls.length
+      const callsAtStop = (deps.opencode.listForms as ReturnType<typeof vi.fn>).mock.calls.length
       await advanceTimers(10000)
-      expect((deps.opencode.listQuestions as ReturnType<typeof vi.fn>).mock.calls.length)
+      expect((deps.opencode.listForms as ReturnType<typeof vi.fn>).mock.calls.length)
         .toBe(callsAtStop)
     })
 
-    it("updates tracked question cards once answered in TUI", async () => {
+    it("updates tracked form cards once answered in TUI", async () => {
       const deps = createDeps({
         opencode: createMockGateway({
-          listQuestions: vi.fn().mockResolvedValue([SAMPLE_QUESTION]),
+          listForms: vi.fn().mockResolvedValue([SAMPLE_FORM]),
         }),
       })
       const poller = createInteractivePoller(deps)
@@ -543,7 +551,7 @@ describe("interactive-poller", () => {
       poller.start()
       await advanceTimers(0)
 
-      deps.opencode.listQuestions.mockResolvedValue([])
+      deps.opencode.listForms.mockResolvedValue([])
       await advanceTimers(3000)
 
       expect(deps.feishuClient.updateMessage).toHaveBeenCalledWith(
@@ -553,14 +561,14 @@ describe("interactive-poller", () => {
       const updatedCard = JSON.parse(
         (deps.feishuClient.updateMessage as ReturnType<typeof vi.fn>).mock.calls[0][1],
       )
-      expect(updatedCard.header.title.content).toContain("Already Answered")
-      expect(updatedCard.elements[0].text.content).toContain("opencode TUI")
+      expect(updatedCard.header.title.content).toContain("已回答")
+      expect(updatedCard.elements[0].content).toContain("问题已在飞书回答")
     })
 
     it("does not overwrite cards while a Feishu reply is resolving", async () => {
       const deps = createDeps({
         opencode: createMockGateway({
-          listQuestions: vi.fn().mockResolvedValue([SAMPLE_QUESTION]),
+          listForms: vi.fn().mockResolvedValue([SAMPLE_FORM]),
         }),
       })
       const poller = createInteractivePoller(deps)
@@ -569,7 +577,7 @@ describe("interactive-poller", () => {
       await advanceTimers(0)
 
       deps.interactiveCardRegistry.markFeishuResolving("question", "q_1")
-      deps.opencode.listQuestions.mockResolvedValue([])
+      deps.opencode.listForms.mockResolvedValue([])
       await advanceTimers(3000)
 
       expect(deps.feishuClient.updateMessage).not.toHaveBeenCalled()
@@ -600,10 +608,10 @@ describe("interactive-poller", () => {
       expect(updatedCard.elements[0].text.content).toContain("opencode TUI")
     })
 
-    it("does not resolve question cards when the question endpoint failed", async () => {
+    it("does not resolve form cards when the form list failed", async () => {
       const deps = createDeps({
         opencode: createMockGateway({
-          listQuestions: vi.fn().mockResolvedValue([SAMPLE_QUESTION]),
+          listForms: vi.fn().mockResolvedValue([SAMPLE_FORM]),
         }),
       })
       const poller = createInteractivePoller(deps)
@@ -611,7 +619,7 @@ describe("interactive-poller", () => {
       poller.start()
       await advanceTimers(0)
 
-      deps.opencode.listQuestions.mockRejectedValue(new Error("ECONNREFUSED"))
+      deps.opencode.listForms.mockRejectedValue(new Error("ECONNREFUSED"))
       await advanceTimers(3000)
 
       expect(deps.feishuClient.updateMessage).not.toHaveBeenCalled()

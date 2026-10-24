@@ -41,7 +41,7 @@ SSE-to-Feishu-card bridge (also called `StreamingBridge` in the root docs).
 - On `ToolStart`/`ToolEnd`: updates the progress card via `ProgressTracker`
 
 ### `interactive-handler.ts`
-Handles card action callbacks (button clicks). Currently serves permission approval cards and question/clarification cards. Receives POSTs from the webhook server and translates them into opencode API calls or session commands.
+Handles card action callbacks (button clicks). Currently serves permission approval cards, form submissions (the question tool's multiple-choice form) and question/clarification cards. Receives POSTs from the webhook server and translates them into opencode API calls or session commands.
 
 ## Gotchas
 

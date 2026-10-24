@@ -17,11 +17,34 @@ function createMockInteractiveCardRegistry() {
   }
 }
 
-function makeGateway(overrides: { replyQuestion?: any; replyPermission?: any } = {}) {
+function makeGateway(overrides: {
+  replyQuestion?: any
+  replyPermission?: any
+  getForm?: any
+  replyForm?: any
+} = {}) {
   return {
     replyQuestion: overrides.replyQuestion ?? vi.fn().mockResolvedValue(undefined),
     replyPermission: overrides.replyPermission ?? vi.fn().mockResolvedValue(undefined),
+    getForm: overrides.getForm ?? vi.fn().mockResolvedValue(null),
+    replyForm: overrides.replyForm ?? vi.fn().mockResolvedValue(undefined),
   } as any
+}
+
+const SAMPLE_FORM = {
+  id: "frm_1",
+  sessionID: "ses-1",
+  title: "Questions",
+  fields: [
+    {
+      key: "q0",
+      type: "string",
+      title: "Choice",
+      description: "Pick one",
+      options: [{ value: "A", label: "A" }],
+      custom: true,
+    },
+  ],
 }
 
 describe("createInteractiveHandler", () => {
@@ -187,5 +210,92 @@ describe("createInteractiveHandler", () => {
     await handler(action)
     expect(opencode.replyQuestion).not.toHaveBeenCalled()
     expect(opencode.replyPermission).not.toHaveBeenCalled()
+  })
+})
+
+describe("createInteractiveHandler: form_submit", () => {
+  let mockLogger: ReturnType<typeof createMockLogger>
+  let mockInteractiveCardRegistry: ReturnType<typeof createMockInteractiveCardRegistry>
+
+  beforeEach(() => {
+    mockLogger = createMockLogger()
+    mockInteractiveCardRegistry = createMockInteractiveCardRegistry()
+    vi.clearAllMocks()
+  })
+
+  function actionOf(formValue: Record<string, unknown>): FeishuCardAction {
+    return {
+      action: {
+        tag: "button",
+        value: { action: "form_submit", sessionId: "ses-1", formId: "frm_1" },
+        form_value: formValue,
+      },
+      open_message_id: "msg-1", open_chat_id: "chat-1", operator: { open_id: "ou-1" },
+    }
+  }
+
+  it("submits the selected option", async () => {
+    const opencode = makeGateway({ getForm: vi.fn().mockResolvedValue(SAMPLE_FORM) })
+    const handler = createInteractiveHandler({ opencode, logger: mockLogger, interactiveCardRegistry: mockInteractiveCardRegistry })
+
+    await handler(actionOf({ q0: "A" }))
+
+    expect(opencode.replyForm).toHaveBeenCalledWith("ses-1", "frm_1", { q0: "A" })
+    expect(mockInteractiveCardRegistry.clearFeishuResolving).toHaveBeenCalledWith("question", "frm_1")
+  })
+
+  it("prefers a typed answer over the dropdown", async () => {
+    const opencode = makeGateway({ getForm: vi.fn().mockResolvedValue(SAMPLE_FORM) })
+    const handler = createInteractiveHandler({ opencode, logger: mockLogger, interactiveCardRegistry: mockInteractiveCardRegistry })
+
+    await handler(actionOf({ q0: "A", q0__other: "custom" }))
+
+    expect(opencode.replyForm).toHaveBeenCalledWith("ses-1", "frm_1", { q0: "custom" })
+  })
+
+  it("asks for a choice instead of submitting an empty answer", async () => {
+    const opencode = makeGateway({ getForm: vi.fn().mockResolvedValue(SAMPLE_FORM) })
+    const replyMessage = vi.fn().mockResolvedValue({ code: 0 })
+    const handler = createInteractiveHandler({
+      opencode,
+      logger: mockLogger,
+      interactiveCardRegistry: mockInteractiveCardRegistry,
+      feishuClient: { replyMessage } as any,
+    })
+
+    await handler(actionOf({}))
+
+    expect(opencode.replyForm).not.toHaveBeenCalled()
+    expect(replyMessage).toHaveBeenCalled()
+  })
+
+  it("reports a form that is no longer pending", async () => {
+    const opencode = makeGateway({ getForm: vi.fn().mockResolvedValue(null) })
+    const replyMessage = vi.fn().mockResolvedValue({ code: 0 })
+    const handler = createInteractiveHandler({
+      opencode,
+      logger: mockLogger,
+      interactiveCardRegistry: mockInteractiveCardRegistry,
+      feishuClient: { replyMessage } as any,
+    })
+
+    await handler(actionOf({ q0: "A" }))
+
+    expect(opencode.replyForm).not.toHaveBeenCalled()
+    const text = JSON.parse((replyMessage as any).mock.calls[0][1].content).text
+    expect(text).toContain("已经结束")
+  })
+
+  it("clears the resolving state when the reply fails", async () => {
+    const opencode = makeGateway({
+      getForm: vi.fn().mockResolvedValue(SAMPLE_FORM),
+      replyForm: vi.fn().mockRejectedValue(new Error("Expected string array for form field: q0")),
+    })
+    const handler = createInteractiveHandler({ opencode, logger: mockLogger, interactiveCardRegistry: mockInteractiveCardRegistry })
+
+    await handler(actionOf({ q0: "A" }))
+
+    expect(mockInteractiveCardRegistry.clearFeishuResolving).toHaveBeenCalledWith("question", "frm_1")
+    expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining("Form reply request failed"))
   })
 })

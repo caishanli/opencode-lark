@@ -130,6 +130,46 @@ describe("gateway: interactive", () => {
   })
 })
 
+describe("gateway: forms", () => {
+  it("listForms queries /api/form with the directory and unwraps data", async () => {
+    const fetchImpl = makeFetch({
+      location: { directory: "/tmp" },
+      data: [{ id: "frm_1", sessionID: "s", title: "Questions", fields: [] }],
+    })
+    const gw = createOpencodeGateway({ baseUrl: "http://x", password: "pw", fetch: fetchImpl as any, directory: "/tmp" })
+    const forms = await gw.listForms()
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe("http://x/api/form?location%5Bdirectory%5D=%2Ftmp")
+    expect(new Headers(init.headers).get("authorization")).toBe("Basic " + btoa("opencode:pw"))
+    expect(forms).toHaveLength(1)
+  })
+
+  it("getForm returns null on 404", async () => {
+    const fetchImpl = makeFetch({ _tag: "FormNotFoundError" }, 404)
+    const gw = createOpencodeGateway({ baseUrl: "http://x", password: "pw", fetch: fetchImpl as any })
+    expect(await gw.getForm("s", "frm_x")).toBeNull()
+  })
+
+  it("replyForm posts the answer", async () => {
+    const fetchImpl = vi.fn(async () => new Response(null, { status: 204 }))
+    const gw = createOpencodeGateway({ baseUrl: "http://x", password: "pw", fetch: fetchImpl as any })
+    await gw.replyForm("s", "frm_1", { q0: "A", q1: ["X", "Y"] })
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe("http://x/api/session/s/form/frm_1/reply")
+    expect(init.method).toBe("POST")
+    expect(JSON.parse(String(init.body))).toEqual({ answer: { q0: "A", q1: ["X", "Y"] } })
+  })
+
+  it("replyForm surfaces the server's rejection", async () => {
+    const fetchImpl = vi.fn(async () => new Response(
+      JSON.stringify({ _tag: "FormInvalidAnswerError", message: "Expected string array for form field: q0" }),
+      { status: 400, headers: { "content-type": "application/json" } },
+    ))
+    const gw = createOpencodeGateway({ baseUrl: "http://x", password: "pw", fetch: fetchImpl as any })
+    await expect(gw.replyForm("s", "frm_1", { q0: "A" })).rejects.toThrow(/q0/)
+  })
+})
+
 describe("gateway: events + ping", () => {
   it("subscribeEvents yields parsed frames", async () => {
     const fetchImpl = sseFetch("data: {\"type\":\"server.connected\",\"data\":{}}\n\n")

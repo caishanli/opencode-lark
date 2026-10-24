@@ -67,6 +67,30 @@ export interface QuestionRequest {
   questions: QuestionInfo[]
 }
 
+/** A field of an opencode form (the 2.1+ replacement for questions). */
+export interface FormOption {
+  value: string
+  label: string
+  description?: string
+}
+
+export interface FormField {
+  key: string
+  type: string
+  title?: string
+  description?: string
+  required?: boolean
+  options?: FormOption[]
+  custom?: boolean
+}
+
+export interface FormInfo {
+  id: string
+  sessionID: string
+  title: string
+  fields: FormField[]
+}
+
 export interface CommandRef { name: string; description?: string }
 
 /** How long the model limits (context windows) are cached. */
@@ -133,6 +157,15 @@ export interface OpencodeGateway {
   listQuestions(): Promise<QuestionRequest[]>
   replyQuestion(sessionID: string, requestID: string, answers: string[][]): Promise<void>
 
+  /** Pending forms (opencode 2.1+): the question tool creates one. */
+  listForms(): Promise<FormInfo[]>
+  getForm(sessionID: string, formID: string): Promise<FormInfo | null>
+  replyForm(
+    sessionID: string,
+    formID: string,
+    answer: Record<string, string | string[]>,
+  ): Promise<void>
+
   commands(): Promise<CommandRef[]>
 
   subscribeEvents(signal?: AbortSignal): AsyncIterable<OpencodeEvent>
@@ -141,14 +174,25 @@ export interface OpencodeGateway {
 }
 
 export function createOpencodeGateway(options: OpencodeGatewayOptions): OpencodeGateway {
+  const auth = "Basic " + btoa(`${options.username ?? "opencode"}:${options.password}`)
   const client = createOpencodeClient({
     baseUrl: options.baseUrl,
-    headers: { Authorization: "Basic " + btoa(`${options.username ?? "opencode"}:${options.password}`) },
+    headers: { Authorization: auth },
     ...(options.fetch ? { fetch: options.fetch } : {}),
   }) as any
 
   const dir = () => options.directory ?? process.cwd()
   let warnedQuestion = false
+
+  // The SDK predates the form endpoints (opencode 2.1), so they are called
+  // directly. This is still the only module that talks to the server.
+  const apiBase = options.baseUrl.replace(/\/+$/, "")
+  const apiFetch = options.fetch ?? fetch
+  const rawRequest = (path: string, init: RequestInit = {}): Promise<Response> => {
+    const headers = new Headers(init.headers)
+    headers.set("Authorization", auth)
+    return apiFetch(`${apiBase}${path}`, { ...init, headers })
+  }
 
   const httpStatus = (res: any): number | undefined => res?.response?.status
 
@@ -362,6 +406,39 @@ export function createOpencodeGateway(options: OpencodeGatewayOptions): Opencode
         $body_answers: answers,
       })
       throwIfError(res, "replyQuestion")
+    },
+
+    async listForms() {
+      const query = new URLSearchParams({ "location[directory]": dir() })
+      const res = await rawRequest(`/api/form?${query}`)
+      if (!res.ok) throw new Error(`listForms failed: HTTP ${res.status}`)
+      const body = (await res.json()) as { data?: unknown }
+      return Array.isArray(body?.data) ? (body.data as FormInfo[]) : []
+    },
+    async getForm(sessionID, formID) {
+      const res = await rawRequest(
+        `/api/session/${encodeURIComponent(sessionID)}/form/${encodeURIComponent(formID)}`,
+      )
+      if (res.status === 404) return null
+      if (!res.ok) throw new Error(`getForm failed: HTTP ${res.status}`)
+      const body = (await res.json()) as { data?: unknown }
+      return (body?.data as FormInfo) ?? null
+    },
+    async replyForm(sessionID, formID, answer) {
+      const res = await rawRequest(
+        `/api/session/${encodeURIComponent(sessionID)}/form/${encodeURIComponent(formID)}/reply`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ answer }),
+        },
+      )
+      if (!res.ok) {
+        const detail = await res.text().catch(() => "")
+        throw new Error(
+          `replyForm failed: HTTP ${res.status}${detail ? `: ${detail.slice(0, 300)}` : ""}`,
+        )
+      }
     },
 
     async commands() {

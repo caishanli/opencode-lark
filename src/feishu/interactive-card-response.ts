@@ -28,6 +28,12 @@ export function buildInteractiveCallbackResponse(
     }
   }
 
+  if (actionType === "form_submit") {
+    return {
+      toast: { type: "info", content: "正在提交选择…" },
+    }
+  }
+
   if (actionType === "permission_reply") {
     const reply = value.reply ?? "unknown"
     const label = PERMISSION_LABELS[reply] ?? reply

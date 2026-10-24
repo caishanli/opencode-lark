@@ -181,8 +181,11 @@ opencode SSE stream (/api/event)
   it goes on a card.
 - **The SDK does not throw on 4xx.** A wrong `OPENCODE_SERVER_PASSWORD` looks
   like "the server returned no data" unless the gateway checks `res.error`.
-- **opencode v2.0.29 has no question endpoints** (`/api/question/*` → 404) and
-  no question events; the question card is disabled and one warning is logged.
+- **Questions are forms since opencode 2.1.** `/api/question/*` still 404s and
+  no question events are emitted; the `question` tool creates a **form**
+  (`/api/session/{id}/form/{frm}/reply`). `interactive-poller.ts` polls
+  `/api/form`, sends a Feishu form card (select / multi-select / input +
+  submit) and posts the answer back as `form_value`.
 - **`bun` may not be on `PATH`.** The npm scripts go through `scripts/run.sh`,
   which resolves bun from `~/.bun/bin` as a fallback.
 ---

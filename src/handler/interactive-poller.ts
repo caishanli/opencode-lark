@@ -1,24 +1,22 @@
 // ═══════════════════════════════════════════
 // Interactive Poller
-// Polls opencode for pending questions/permissions
+// Polls opencode for pending forms/permissions
 // as a reliable fallback when SSE events don't arrive.
 // ═══════════════════════════════════════════
 
 import type { FeishuApiClient } from "../feishu/api-client.js"
 import type { Logger } from "../utils/logger.js"
-import type { OpencodeGateway } from "../opencode/gateway.js"
-import type { QuestionAsked, PermissionRequested } from "../streaming/event-processor.js"
-import { buildQuestionCard, buildPermissionCard } from "./streaming-integration.js"
+import type { FormInfo, OpencodeGateway } from "../opencode/gateway.js"
+import type { PermissionRequested } from "../streaming/event-processor.js"
+import { buildPermissionCard } from "./streaming-integration.js"
+import { buildAnsweredFormCard, buildFormCard } from "./form-card.js"
 import type { ExpiringSet } from "../utils/expiring-set.js"
 import type { InteractiveCardRegistry } from "../feishu/interactive-card-registry.js"
 import {
   extractFeishuMessageId,
   interactiveCardKey,
 } from "../feishu/interactive-card-registry.js"
-import {
-  buildAnsweredPermissionCard,
-  buildAnsweredQuestionCard,
-} from "../feishu/interactive-card-response.js"
+import { buildAnsweredPermissionCard } from "../feishu/interactive-card-response.js"
 
 // ---------------------------------------------------------------------------
 // Types
@@ -39,18 +37,8 @@ export interface InteractivePoller {
   stop(): void
 }
 
-/** Shape returned by GET /question */
-interface PendingQuestion {
-  id: string
-  sessionID: string
-  questions: Array<{
-    question: string
-    header: string
-    options: Array<{ label: string; description: string }>
-    multiple?: boolean
-    custom?: boolean
-  }>
-}
+/** Shape returned by GET /api/form (opencode 2.1+). */
+type PendingForm = FormInfo
 
 /** Shape returned by gateway listPermissions */
 interface PendingPermission {
@@ -80,48 +68,42 @@ export function createInteractivePoller(
 
   async function poll(): Promise<void> {
     try {
-      const [pendingQuestions, pendingPermissions] = await Promise.all([
-        pollQuestions(),
+      const [pendingForms, pendingPermissions] = await Promise.all([
+        pollForms(),
         pollPermissions(),
       ])
-      await resolveAnsweredCards(pendingQuestions, pendingPermissions)
+      await resolveAnsweredCards(pendingForms, pendingPermissions)
     } catch {
       // Individual poll methods handle their own errors
     }
   }
 
-  async function pollQuestions(): Promise<Set<string> | null> {
-    let questions: unknown
+  async function pollForms(): Promise<Set<string> | null> {
+    let forms: unknown
     try {
-      questions = await opencode.listQuestions()
+      forms = await opencode.listForms()
     } catch {
       return null
     }
-    if (!Array.isArray(questions)) return null
+    if (!Array.isArray(forms)) return null
 
     const pendingIds = new Set<string>()
 
-    for (const q of questions as PendingQuestion[]) {
-      if (!q.id || !q.sessionID || !Array.isArray(q.questions)) continue
-      pendingIds.add(q.id)
-      const cardKey = interactiveCardKey("question", q.id)
+    for (const form of forms as PendingForm[]) {
+      if (!form.id || !form.sessionID || !Array.isArray(form.fields)) continue
+      pendingIds.add(form.id)
+      const cardKey = interactiveCardKey("question", form.id)
       if (seenInteractiveIds.has(cardKey)) continue
 
-      const chatId = getChatForSession(q.sessionID)
+      const chatId = getChatForSession(form.sessionID)
       if (!chatId) continue
-      if (deps.interactiveCardRegistry && !deps.interactiveCardRegistry.beginDispatch("question", q.id)) continue
+      if (deps.interactiveCardRegistry && !deps.interactiveCardRegistry.beginDispatch("question", form.id)) continue
 
       logger.info(
-        `Poller: pending question ${q.id} for session ${q.sessionID}`,
+        `Poller: pending form ${form.id} for session ${form.sessionID}`,
       )
 
-      const action: QuestionAsked = {
-        type: "QuestionAsked",
-        sessionId: q.sessionID,
-        requestId: q.id,
-        questions: q.questions,
-      }
-      const card = buildQuestionCard(action)
+      const card = buildFormCard(form)
       feishuClient
         .sendMessage(chatId, {
           msg_type: "interactive",
@@ -130,20 +112,20 @@ export function createInteractivePoller(
         .then((response) => {
           const messageId = extractFeishuMessageId(response)
           if (!messageId) {
-            deps.interactiveCardRegistry?.failDispatch("question", q.id)
+            deps.interactiveCardRegistry?.failDispatch("question", form.id)
             return
           }
           seenInteractiveIds.add(cardKey)
           deps.interactiveCardRegistry?.track({
-            requestId: q.id,
+            requestId: form.id,
             kind: "question",
             chatId,
             messageId,
           })
         })
         .catch((err) => {
-          deps.interactiveCardRegistry?.failDispatch("question", q.id)
-          logger.warn(`Poller question card send failed: ${err}`)
+          deps.interactiveCardRegistry?.failDispatch("question", form.id)
+          logger.warn(`Poller form card send failed: ${err}`)
         })
     }
 
@@ -232,7 +214,7 @@ export function createInteractivePoller(
       }
 
       const resolvedCard = card.kind === "question"
-        ? buildAnsweredQuestionCard()
+        ? buildAnsweredFormCard()
         : buildAnsweredPermissionCard()
 
       try {
