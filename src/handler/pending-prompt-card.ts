@@ -42,8 +42,8 @@ export function buildPendingPromptCard(pending: PendingPrompt): Record<string, u
       {
         tag: "action",
         actions: [
-          button("⚡ 立即插入", "primary", pending, "steer"),
-          button("⏳ 排队执行", "default", pending, "queue"),
+          button("⏳ 本轮结束后发送", "primary", pending, "queue"),
+          button("⚡ 强制中断并发送", "default", pending, "interrupt"),
           button("✖ 取消", "danger", pending, "cancel"),
         ],
       },
@@ -52,8 +52,8 @@ export function buildPendingPromptCard(pending: PendingPrompt): Record<string, u
 }
 
 const RESULT_TEXT: Record<PendingPromptChoice, string> = {
-  steer: "已插入当前回合，模型会接着处理这条消息。",
-  queue: "已排队，等这一轮结束后执行。",
+  queue: "已排队，等这一轮结束后发送。",
+  interrupt: "已打断这一轮，正在发送新消息。",
   cancel: "已取消这条消息。",
 }
 

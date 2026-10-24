@@ -417,9 +417,9 @@ async function main(): Promise<void> {
         logger.warn("The pending prompt expired before the choice arrived")
         return
       }
-      // Old cards carried `interrupt`; it now means "steer into the turn".
-      const choice = rawChoice === "interrupt" ? "steer" : rawChoice
-      if (choice === "steer" || choice === "queue" || choice === "cancel") {
+      // Old cards carried `steer`; it now means "send after this turn".
+      const choice = rawChoice === "steer" ? "queue" : rawChoice
+      if (choice === "queue" || choice === "interrupt" || choice === "cancel") {
         void pending.onChoose(choice).catch((err) =>
           logger.warn(`Pending prompt delivery failed: ${err}`),
         )

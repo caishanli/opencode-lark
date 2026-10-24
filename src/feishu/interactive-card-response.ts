@@ -32,10 +32,12 @@ export function buildInteractiveCallbackResponse(
 
   if (actionType === "pending_prompt") {
     const rawChoice = value.choice ?? "cancel"
-    const choice = (rawChoice === "interrupt" ? "steer" : rawChoice) as PendingPromptChoice
+    // Old cards carried `steer` (and older ones `interrupt`); both now mean
+    // "send it after this turn".
+    const choice = (rawChoice === "steer" ? "queue" : rawChoice) as PendingPromptChoice
     const label =
-      choice === "steer" ? "已插入当前回合…"
-      : choice === "queue" ? "已排队…"
+      choice === "queue" ? "已排队…"
+      : choice === "interrupt" ? "已打断，正在发送…"
       : "已取消"
     return {
       toast: { type: choice === "cancel" ? "info" : "success", content: label },

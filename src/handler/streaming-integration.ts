@@ -7,7 +7,6 @@ import type { QuestionAsked, PermissionRequested } from "../streaming/event-proc
 import type { EventListenerMap } from "../utils/event-listeners.js"
 import { addListener, removeListener } from "../utils/event-listeners.js"
 import { StreamingCardSession } from "../streaming/streaming-card.js"
-import { consumeSteering } from "../streaming/steering.js"
 import { toFeishuMarkdown } from "../feishu/markdown.js"
 import { cacheHitRate, formatPercent, formatRate, formatTokens, totalTokens } from "../streaming/usage.js"
 import type { OpencodeGateway } from "../opencode/gateway.js"
@@ -568,15 +567,6 @@ export function createStreamingBridge(
 
           case "SessionIdle": {
             if (settled) return
-            // A steer (mid-turn message) interrupts the execution on purpose;
-            // opencode resumes the same turn with the new input right after.
-            // Closing here would truncate the reply and start a second card.
-            if (action.outcome === "interrupted" && consumeSteering(sessionId)) {
-              logger.info(
-                `Session ${sessionId} interrupted for a steer — keeping the card open`,
-              )
-              return
-            }
             settled = true
             clearTimeout(firstEventTimer)
             if (idleTimer) clearTimeout(idleTimer)
