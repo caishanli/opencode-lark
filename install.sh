@@ -201,7 +201,15 @@ run_wizard() {
   server_up() {
     curl -sf -u "opencode:${OPENCODE_SERVER_PASSWORD}" "${SERVER_URL}/api/session/active" >/dev/null 2>&1
   }
-  if ! server_up; then
+  # Distinguish "nothing there" from "a server with another password": the
+  # latter cannot be fixed by starting a second server on the same port.
+  local code
+  code="$(curl -s -o /dev/null -m 3 -w '%{http_code}' \
+    -u "opencode:${OPENCODE_SERVER_PASSWORD}" "${SERVER_URL}/api/session/active" 2>/dev/null || true)"
+  if [ "$code" = "401" ]; then
+    die "已经有 opencode server 在 ${SERVER_URL}，但密码不对。请输入它启动时的 OPENCODE_SERVER_PASSWORD，或先停掉它再重试"
+  fi
+  if [ -z "$code" ] || [ "$code" = "000" ]; then
     local port
     port="$(printf '%s' "$SERVER_URL" | sed -E 's#^.*:([0-9]+).*$#\1#')"
     note "临时启动 opencode server（端口 $port），配置完成后会自动关掉"
