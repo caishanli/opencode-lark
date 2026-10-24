@@ -6,7 +6,7 @@ describe("usage helpers", () => {
     expect(formatTokens(999)).toBe("999")
     expect(formatTokens(1234)).toBe("1.2k")
     expect(formatTokens(1_500_000)).toBe("1.5M")
-    expect(formatTokens(1_004_600_000)).toBe("1.0B")
+    expect(formatTokens(1_004_600_000)).toBe("1.00B")
     expect(formatTokens(0)).toBe("0")
   })
 

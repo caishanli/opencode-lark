@@ -9,9 +9,11 @@ describe("formatTokens", () => {
     expect(formatTokens(219_200)).toBe("219.2k")
     expect(formatTokens(1_400_000)).toBe("1.4M")
     expect(formatTokens(999_900_000)).toBe("999.9M")
-    // Past a billion the session total reads as B, not 1004.6M.
-    expect(formatTokens(1_004_600_000)).toBe("1.0B")
-    expect(formatTokens(2_345_000_000)).toBe("2.3B")
+    // Past a billion the session total reads as B with two decimals — at
+    // this scale one decimal would not move for millions of tokens.
+    expect(formatTokens(1_004_600_000)).toBe("1.00B")
+    expect(formatTokens(1_234_000_000)).toBe("1.23B")
+    expect(formatTokens(2_345_000_000)).toBe("2.35B")
   })
 })
 
