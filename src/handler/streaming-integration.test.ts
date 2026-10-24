@@ -925,57 +925,8 @@ describe("createStreamingBridge", () => {
 
     const content = cardContent(mockFeishu)
     // 4000 of 10000 tokens = 40%
-    expect(content).toContain("4.0k")
+    expect(content).toContain("ctx 4.0k (40%)")
     expect(modelContextLimit).toHaveBeenCalledWith("p1", "m1")
-  })
-
-  it("uses the uploaded ring icon for the context window", async () => {
-    const mockFeishu = {
-      ...createMockFeishuClient(),
-      sendMessage: vi.fn().mockResolvedValue({ code: 0, data: { message_id: "msg_456" } }),
-      replyMessage: vi.fn().mockResolvedValue({ code: 0 }),
-    }
-    const deps = makeDeps({
-      feishuClient: mockFeishu,
-      opencode: { modelContextLimit: vi.fn().mockResolvedValue(10000) } as any,
-      ringIcons: {
-        get: vi.fn((pct: number) => (pct === 40 ? "img_key_40" : undefined)),
-        ensure: vi.fn().mockResolvedValue("img_key_40"),
-      },
-    })
-    const bridge = createStreamingBridge(deps)
-
-    const handlePromise = bridge.handleMessage(
-      "chat-1", "ses-1", eventListeners, eventProcessor, mockSendMessage, vi.fn(), "msg_original", null,
-    )
-    await waitFor(() => {
-      expect(eventListeners.size).toBe(1)
-    })
-
-    const emit = (ev: unknown) => {
-      ;[...(eventListeners.get("ses-1") ?? [])].forEach((fn) => fn(ev))
-    }
-
-    emit({ type: "session.step.started", data: { sessionID: "ses-1", model: { id: "m1", providerID: "p1" } } })
-    await new Promise((r) => setTimeout(r, 0))
-    emit({ type: "session.text.delta", data: { sessionID: "ses-1", assistantMessageID: "m-1", delta: "hello" } })
-    emit({
-      type: "session.usage.updated",
-      data: {
-        sessionID: "ses-1",
-        cost: 0,
-        tokens: { input: 1000, output: 100, reasoning: 0, cache: { read: 3000, write: 0 } },
-      },
-    })
-    emit({ type: "session.execution.succeeded", data: { sessionID: "ses-1" } })
-
-    await handlePromise
-
-    const raw = JSON.stringify((mockFeishu.updateMessage as any).mock.calls.at(-1)?.[1] ?? "")
-    expect(raw).toContain("4.0k")
-    expect(raw).not.toContain("ctx")
-    expect(raw).toContain("img_key_40")
-    expect(raw).toContain("custom_icon")
   })
 
   it("counts at least one round, even without any text", async () => {
@@ -1066,7 +1017,7 @@ describe("createStreamingBridge", () => {
     const content = cardContent(mockFeishu)
     // delta = input 100 + output 10 + cache.read 100
     expect(content).toContain("10 tok")      // generated only
-    expect(content).toContain("200 · ")      // input + cache read
+    expect(content).toContain("ctx 200")      // input + cache read
     expect(content).toContain("210 tok")
     expect(content).toContain("缓存命中 75%")
     // the cumulative numbers must not show up as the turn's own numbers —
@@ -1166,8 +1117,8 @@ describe("createStreamingBridge", () => {
 
     const content = cardContent(mockFeishu)
     // the last step's context (6000) — not the sum over both steps (18000)
-    expect(content).toContain("6.0k")
-    expect(content).not.toContain("18.0k")
+    expect(content).toContain("ctx 6.0k")
+    expect(content).not.toContain("ctx 18.0k")
   })
 
   it("closes the turn on session.execution.succeeded", async () => {

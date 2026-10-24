@@ -40,7 +40,6 @@ import {
 } from "./streaming/streaming-card.js"
 import { createCommandHandler } from "./handler/command-handler.js"
 import { ReplyModeStore } from "./handler/reply-mode.js"
-import { FeishuRingIcons } from "./handler/ring-icons.js"
 import { createOutboundMediaHandler } from "./handler/outbound-media.js"
 import { createSessionObserver } from "./streaming/session-observer.js"
 import { addListener, removeListener } from "./utils/event-listeners.js"
@@ -229,7 +228,6 @@ async function main(): Promise<void> {
   const cardStateFile = path.join(config.dataDir, "open-card.json")
   logger.info(`Open card state file: ${path.resolve(cardStateFile)}`)
   const replyModes = new ReplyModeStore(path.join(config.dataDir, "reply-mode.json"))
-  const ringIcons = new FeishuRingIcons(feishuClient, logger)
 
   // A card left open by a previous process (crash, restart) would stay on
   // "running" for ever: close it before starting a new one. The state file
@@ -293,7 +291,6 @@ async function main(): Promise<void> {
     outboundMedia,
     observer,
     replyMode: (chatId) => replyModes.get(chatId),
-    ringIcons,
   })
 
 

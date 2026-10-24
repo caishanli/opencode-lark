@@ -72,10 +72,6 @@ export interface OpenCardState {
   blocks?: Block[]
   /** The status line the card was showing. */
   usage?: string
-  /** The right-hand column of the status row (context, cache, session total). */
-  usageRight?: string
-  /** Feishu image key of the ring icon. */
-  usageIcon?: string
   hasRealUsage?: boolean
 }
 
@@ -165,12 +161,8 @@ export class StreamingCardSession {
   private lastStateWrite = 0
 
   private blocks: Block[] = []
-  /** Left column of the status row: time, rounds/steps, tokens, rate. */
+  /** Token/rate summary shown in the status line. */
   private usageText = ""
-  /** Right column: context + cache hit + session total (with the ring icon). */
-  private usageRight = ""
-  /** Feishu image key of the ring shown in the right column. */
-  private usageIcon = ""
   /** True once the server reported a real usage — the live estimate must
    *  never replace it. */
   private hasRealUsage = false
@@ -242,8 +234,6 @@ export class StreamingCardSession {
     session.assignedLength =
       last && last.kind === "message" ? last.start + last.text.length : 0
     session.usageText = options.state.usage ?? ""
-    session.usageRight = options.state.usageRight ?? ""
-    session.usageIcon = options.state.usageIcon ?? ""
     session.hasRealUsage = options.state.hasRealUsage ?? false
     return session
   }
@@ -288,11 +278,8 @@ export class StreamingCardSession {
 
   /** Show a token/rate summary next to the status line. */
   /** The real usage the server reported for the last step. */
-  async setUsage(
-    text: string,
-    extra: { right?: string; icon?: string } = {},
-  ): Promise<void> {
-    await this.applyUsage(text, true, extra)
+  async setUsage(text: string): Promise<void> {
+    await this.applyUsage(text, true)
   }
 
   /**
@@ -305,22 +292,12 @@ export class StreamingCardSession {
     await this.applyUsage(text, false)
   }
 
-  private async applyUsage(
-    text: string,
-    real: boolean,
-    extra: { right?: string; icon?: string } = {},
-  ): Promise<void> {
+  private async applyUsage(text: string, real: boolean): Promise<void> {
     if (this.closed) return
-    const right = extra.right ?? ""
-    const icon = extra.icon ?? ""
-    if (text === this.usageText && right === this.usageRight && icon === this.usageIcon) {
-      return
-    }
     // Record it even if the card has no message id yet: the usage event can
     // arrive before the card is created, and the line must not be lost.
+    if (text === this.usageText) return
     this.usageText = text
-    this.usageRight = right
-    this.usageIcon = icon
     if (real) this.hasRealUsage = true
     if (!this.messageId) return
     await this.sync()
@@ -472,47 +449,7 @@ export class StreamingCardSession {
       elements.push({ tag: "markdown", content: " " })
     }
     if (!sealed && !this.concise) {
-      if (this.usageRight) {
-        // Two columns keep the status on the left and the context gauge,
-        // cache rate and session total on the right. The ring can only be an
-        // icon of a markdown block, so this is the only way to place it next
-        // to those numbers.
-        elements.push({
-          tag: "column_set",
-          flex_mode: "none",
-          horizontal_spacing: "4px",
-          columns: [
-            {
-              tag: "column",
-              width: "weighted",
-              weight: 1,
-              vertical_align: "center",
-              elements: [
-                {
-                  tag: "markdown",
-                  content: [this.baseStatus(), this.usageText].filter(Boolean).join(" · "),
-                },
-              ],
-            },
-            {
-              tag: "column",
-              width: "auto",
-              vertical_align: "center",
-              elements: [
-                {
-                  tag: "markdown",
-                  content: this.usageRight,
-                  ...(this.usageIcon
-                    ? { icon: { tag: "custom_icon", img_key: this.usageIcon } }
-                    : {}),
-                },
-              ],
-            },
-          ],
-        })
-      } else {
-        elements.push({ tag: "markdown", content: this.statusLine() })
-      }
+      elements.push({ tag: "markdown", content: this.statusLine() })
     }
     return {
       schema: "2.0",
@@ -574,8 +511,6 @@ export class StreamingCardSession {
             },
       ),
       ...(this.usageText ? { usage: this.usageText } : {}),
-      ...(this.usageRight ? { usageRight: this.usageRight } : {}),
-      ...(this.usageIcon ? { usageIcon: this.usageIcon } : {}),
       ...(this.hasRealUsage ? { hasRealUsage: true } : {}),
     }
   }
@@ -615,8 +550,6 @@ export class StreamingCardSession {
             messageId: entry.messageId,
             ...(Array.isArray(entry.blocks) ? { blocks: entry.blocks } : {}),
             ...(typeof entry.usage === "string" ? { usage: entry.usage } : {}),
-            ...(typeof entry.usageRight === "string" ? { usageRight: entry.usageRight } : {}),
-            ...(typeof entry.usageIcon === "string" ? { usageIcon: entry.usageIcon } : {}),
             ...(entry.hasRealUsage ? { hasRealUsage: true } : {}),
           }
         }
@@ -636,7 +569,9 @@ export class StreamingCardSession {
   }
 
   private statusLine(): string {
-    return [this.baseStatus(), this.usageText, this.usageRight].filter(Boolean).join(" · ")
+    return this.usageText
+      ? `${this.baseStatus()} · ${this.usageText}`
+      : this.baseStatus()
   }
 
   private countElements(card: Record<string, unknown>): number {
