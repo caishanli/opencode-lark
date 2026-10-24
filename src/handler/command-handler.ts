@@ -999,7 +999,6 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
   const pendingCompactions = new Map<string, PendingCompaction>()
   /** Status / mode / thinking / reply cards, all updatable in place. */
   const simpleMenus = new Map<string, SimpleMenuEntry>()
-  const latestSimpleByChat = new Map<string, string>()
   /** Fallback when no persistent store was injected (tests, embedded use). */
   const localReplyModes = new Map<string, ReplyMode>()
 
@@ -1710,12 +1709,10 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
     menuId: string | undefined,
     render: (menuId: string) => Record<string, unknown>,
   ): Promise<void> {
-    const latest = latestSimpleByChat.get(chatId)
-    const existing = menuId
-      ? simpleMenus.get(menuId)
-      : latest
-        ? simpleMenus.get(latest)
-        : undefined
+    // Only a click (which carries the card's menu id) updates a card in
+    // place. A typed command gets a visible reply: patching a card from
+    // minutes ago looks like the bot never answered.
+    const existing = menuId ? simpleMenus.get(menuId) : undefined
     const id = existing?.id ?? menuId ?? newMenuId()
     const card = render(id)
     if (existing) {
@@ -1733,7 +1730,6 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
       return
     }
     simpleMenus.set(id, { id, messageId: cardMessageId, chatId, createdAt: Date.now() })
-    latestSimpleByChat.set(chatId, id)
   }
 
   const boundSessionId = async (feishuKey: string): Promise<string | null> =>

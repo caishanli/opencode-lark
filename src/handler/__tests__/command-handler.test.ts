@@ -1081,6 +1081,24 @@ describe("createCommandHandler", () => {
   })
 
   describe("/状态", () => {
+    it("posts a new card for a typed command instead of updating an old one", async () => {
+      const replyMessage = vi
+        .fn()
+        .mockResolvedValueOnce({ code: 0, msg: "ok", data: { message_id: "card-1" } })
+        .mockResolvedValueOnce({ code: 0, msg: "ok", data: { message_id: "card-2" } })
+      mockFeishuClient.replyMessage = replyMessage
+      mockFeishuClient.updateMessage = vi.fn().mockResolvedValue({ code: 0, msg: "ok" })
+
+      const handler = createHandler()
+      await handler("chat-1", "chat-1", "msg-1", "/状态")
+      await handler("chat-1", "chat-1", "msg-2", "/状态")
+
+      // A typed command should be visible in the conversation; reusing an old
+      // card looks like the bot never answered.
+      expect(replyMessage).toHaveBeenCalledTimes(2)
+      expect(mockFeishuClient.updateMessage).not.toHaveBeenCalled()
+    })
+
     it("shows the workspace, model, mode, task and context", async () => {
       mockGateway.getSession.mockResolvedValue({
         id: "ses-123",
