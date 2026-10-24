@@ -104,8 +104,13 @@ restarted (use `scripts/restart-when-idle.sh` after changing code).
 | Command | What it does |
 |---|---|
 | `install.sh` *(default)* | install/update everything; on **Ubuntu** it also enables boot start (systemd user + `loginctl enable-linger`) |
+| `install.sh config` | re-run the Feishu setup (new app or new credentials); the old app's config is removed |
 | `install.sh update` | `git pull`, `bun install`, then restart the service once the running turn is idle |
 | `install.sh remove [--purge]` | stop and remove the service; `--purge` also deletes the configuration and `data/` |
+
+The QR flow creates the app with the bot scopes and the `card.action.trigger`
+callback already provisioned; after saving the credentials the installer reads
+them back from Feishu and reports anything that is missing.
 
 ### Manual
 

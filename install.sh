@@ -52,6 +52,7 @@ usage() {
 用法: install.sh [命令]
 
   install            安装：依赖 + 飞书配置 + systemd 服务 + 开机自启（默认）
+  config             重新配置飞书应用（换应用 / 换凭据）并重启服务
   update             拉取最新代码、更新依赖，空闲时重启服务
   remove [--purge]   停止并移除服务；--purge 同时删除配置和 data
 
@@ -142,36 +143,31 @@ find_env_file() {
 }
 
 # ── Feishu credentials ───────────────────────────────────────────────────────
-configure() {
-  local existing_env
-  existing_env="$(find_env_file)"
-  if [ -n "$existing_env" ]; then
-    ok "已存在配置: $existing_env"
-    return 0
-  fi
+write_env_from_environment() {
+  [ -n "${FEISHU_APP_ID:-}" ] && [ -n "${FEISHU_APP_SECRET:-}" ] || return 1
+  [ -n "${OPENCODE_SERVER_PASSWORD:-}" ] || die "请同时设置 OPENCODE_SERVER_PASSWORD"
+  say "写入飞书配置"
+  mkdir -p "$CONFIG_DIR"
+  local env_file="$CONFIG_DIR/.env.$FEISHU_APP_ID"
+  {
+    printf 'FEISHU_APP_ID=%s\n' "$FEISHU_APP_ID"
+    printf 'FEISHU_APP_SECRET=%s\n' "$FEISHU_APP_SECRET"
+    printf 'OPENCODE_SERVER_URL=%s\n' "$SERVER_URL"
+    printf 'OPENCODE_SERVER_USERNAME=opencode\n'
+    printf 'OPENCODE_SERVER_PASSWORD=%s\n' "$OPENCODE_SERVER_PASSWORD"
+  } > "$env_file"
+  chmod 600 "$env_file"
+  ok "配置已写入 $env_file"
+}
 
-  if [ -n "${FEISHU_APP_ID:-}" ] && [ -n "${FEISHU_APP_SECRET:-}" ]; then
-    [ -n "${OPENCODE_SERVER_PASSWORD:-}" ] || die "请同时设置 OPENCODE_SERVER_PASSWORD"
-    say "写入飞书配置"
-    mkdir -p "$CONFIG_DIR"
-    local env_file="$CONFIG_DIR/.env.$FEISHU_APP_ID"
-    {
-      printf 'FEISHU_APP_ID=%s\n' "$FEISHU_APP_ID"
-      printf 'FEISHU_APP_SECRET=%s\n' "$FEISHU_APP_SECRET"
-      printf 'OPENCODE_SERVER_URL=%s\n' "$SERVER_URL"
-      printf 'OPENCODE_SERVER_USERNAME=opencode\n'
-      printf 'OPENCODE_SERVER_PASSWORD=%s\n' "$OPENCODE_SERVER_PASSWORD"
-    } > "$env_file"
-    chmod 600 "$env_file"
-    ok "配置已写入 $env_file"
-    return 0
-  fi
-
+# The wizard creates (or connects) the Feishu app through the QR flow, which
+# also provisions the bot scopes and the card callback.
+run_wizard() {
   if ! [ -t 0 ] && ! [ -r /dev/tty ]; then
-    die "没有终端可交互：请设置 FEISHU_APP_ID / FEISHU_APP_SECRET / OPENCODE_SERVER_PASSWORD"
+    return 1
   fi
 
-  say "配置飞书应用（扫码创建，或手动输入 App ID / App Secret）"
+  say "配置飞书应用（扫码自动创建并授权，或手动输入 App ID / App Secret）"
   if [ -z "${OPENCODE_SERVER_PASSWORD:-}" ]; then
     read -rsp "  opencode server 密码（Basic auth）: " OPENCODE_SERVER_PASSWORD
     printf '\n'
@@ -202,6 +198,81 @@ configure() {
 
   chmod 600 "$CONFIG_DIR"/.env.* 2>/dev/null || true
   ok "飞书配置完成"
+}
+
+configure() {
+  local existing_env
+  existing_env="$(find_env_file)"
+  if [ -n "$existing_env" ]; then
+    ok "已存在配置: $existing_env"
+    return 0
+  fi
+  if write_env_from_environment; then
+    return 0
+  fi
+  if ! [ -t 0 ] && ! [ -r /dev/tty ]; then
+    die "没有终端可交互：请设置 FEISHU_APP_ID / FEISHU_APP_SECRET / OPENCODE_SERVER_PASSWORD"
+  fi
+  run_wizard
+}
+
+# Read the app's scopes and callback subscriptions back from Feishu, so a
+# half-configured app is reported instead of failing later as "no reply".
+check_feishu() {
+  local env_file app_id="" app_secret="" domain="feishu"
+  env_file="$(find_env_file)"
+  app_id="${FEISHU_APP_ID:-}"
+  app_secret="${FEISHU_APP_SECRET:-}"
+  if [ -n "$env_file" ]; then
+    [ -n "$app_id" ] || app_id="$(sed -n 's/^FEISHU_APP_ID=//p' "$env_file" | tail -1 | tr -d '"\r')"
+    [ -n "$app_secret" ] || app_secret="$(sed -n 's/^FEISHU_APP_SECRET=//p' "$env_file" | tail -1 | tr -d '"\r')"
+    domain="$(sed -n 's/^FEISHU_DOMAIN=//p' "$env_file" | tail -1 | tr -d '"\r')"
+    [ -n "$domain" ] || domain="feishu"
+  fi
+  [ -n "$app_id" ] && [ -n "$app_secret" ] || return 0
+
+  local base="https://open.feishu.cn"
+  [ "$domain" = "lark" ] && base="https://open.larksuite.com"
+
+  say "检查飞书应用配置"
+  local token
+  token="$(curl -s -m 10 -X POST "$base/open-apis/auth/v3/tenant_access_token/internal" \
+    -H 'Content-Type: application/json' \
+    -d "{\"app_id\":\"$app_id\",\"app_secret\":\"$app_secret\"}" \
+    | grep -o '"tenant_access_token":"[^"]*"' | cut -d'"' -f4 || true)"
+  if [ -z "$token" ]; then
+    warn "读不到 tenant token（凭据或网络问题），跳过检查"
+    return 0
+  fi
+
+  local info
+  info="$(curl -s -m 10 "$base/open-apis/application/v6/applications/$app_id?lang=zh_cn" \
+    -H "Authorization: Bearer $token" || true)"
+  if printf '%s' "$info" | grep -q '"code":[1-9]'; then
+    warn "读不到应用配置（应用可能缺少 application:application:self_manage），跳过检查"
+    return 0
+  fi
+
+  local scopes callbacks missing="" scope
+  scopes="$(printf '%s' "$info" | grep -o '"scope":"[^"]*"' | cut -d'"' -f4 || true)"
+  callbacks="$(printf '%s' "$info" | grep -o '"subscribed_callbacks":\[[^]]*\]' || true)"
+  for scope in \
+    im:message:send_as_bot im:message:update im:message.p2p_msg:readonly \
+    im:message.group_at_msg:readonly im:resource cardkit:card:write; do
+    printf '%s\n' "$scopes" | grep -qx "$scope" || missing="$missing $scope"
+  done
+  if [ -n "$missing" ]; then
+    warn "缺少权限:$missing"
+    note "  开发配置 → 权限管理 里添加后，重新发布版本"
+  else
+    ok "应用权限齐全"
+  fi
+  if printf '%s' "$callbacks" | grep -q 'card.action.trigger'; then
+    ok "卡片回调已订阅（card.action.trigger）"
+  else
+    warn "未订阅卡片回调 card.action.trigger（点按钮会报 200340）"
+  fi
+  note "事件订阅 im.message.receive_v1（长连接）无法通过 API 检查，请在后台确认"
 }
 
 # ── systemd service (Ubuntu: additionally starts at boot) ────────────────────
@@ -246,6 +317,7 @@ do_install() {
   require_opencode
   install_deps
   configure
+  check_feishu
   install_service
 
   printf '\n'
@@ -253,13 +325,70 @@ do_install() {
   printf '  日志:  %s\n' "$STATE_DIR/bridge.log"
   printf '  状态:  systemctl --user status opencode-lark\n'
   printf '  重启:  %s/scripts/restart-when-idle.sh\n' "$REPO"
+  printf '  重配:  bash %s/install.sh config\n' "$REPO"
   printf '  更新:  bash %s/install.sh update\n' "$REPO"
   printf '  卸载:  bash %s/install.sh remove\n\n' "$REPO"
   printf '%s\n' "${BOLD}飞书后台还需要（一次性）：${NC}"
-  printf '  1. 权限: im:message / im:message.p2p_msg:readonly / im:message.group_msg / im:resource / cardkit:card:write\n'
-  printf '  2. 事件订阅（长连接）: im.message.receive_v1\n'
-  printf '  3. 回调订阅（长连接）: card.action.trigger   ← 少了它卡片按钮会报 200340\n'
-  printf '%s\n' "${DIM}  保存长连接设置前服务必须在跑；应用发布后把机器人拉进群。${NC}"
+  printf '  1. 事件订阅（长连接）: im.message.receive_v1\n'
+  printf '  2. 发布版本，并把机器人拉进群\n'
+  printf '%s\n' "${DIM}  保存长连接设置前服务必须在跑。${NC}"
+}
+
+do_config() {
+  if ! resolve_repo || [ ! -f "$REPO/src/index.ts" ]; then
+    die "找不到仓库（${REPO:-$HOME/opencode-lark}），先运行 install.sh install"
+  fi
+  require_bun
+  require_opencode
+
+  local existing_env before="" new_file new_name old
+  existing_env="$(find_env_file)"
+  if [ -n "$existing_env" ]; then
+    if [ -t 0 ]; then
+      local answer
+      read -rp "重新配置会替换现有飞书凭据（$existing_env），继续？[y/N]: " answer
+      case "$answer" in y|Y|yes|YES) ;; *) die "已取消" ;; esac
+    fi
+    # Remember what is there; only the file the wizard writes survives, so a
+    # cancelled wizard changes nothing at all.
+    before="$(cd "$CONFIG_DIR" && ls -1 .env.* 2>/dev/null || true)"
+  fi
+
+  if ! run_wizard; then
+    die "配置向导没有完成"
+  fi
+
+  new_file="$(ls -t "$CONFIG_DIR"/.env.* 2>/dev/null | head -1 || true)"
+  [ -n "$new_file" ] || die "向导结束了，但没有生成配置文件"
+  new_name="$(basename "$new_file")"
+  for old in $before; do
+    if [ "$old" != "$new_name" ]; then
+      rm -f "$CONFIG_DIR/$old"
+      note "已删除旧应用的配置: $old"
+    fi
+  done
+
+  check_feishu
+
+  if [ "${OPENCODE_LARK_NO_SERVICE:-0}" = "1" ] || ! has_systemd; then
+    note "跳过服务重启；手动重启：cd $REPO && $BUN run src/index.ts"
+    return 0
+  fi
+  if systemctl --user is-active --quiet opencode-lark; then
+    local env_file
+    env_file="$(find_env_file)"
+    if [ -n "$env_file" ]; then
+      set -a
+      # shellcheck disable=SC1090
+      . "$env_file"
+      set +a
+    fi
+    say "重启服务以加载新配置"
+    ( cd "$REPO" && scripts/restart-when-idle.sh )
+  else
+    systemctl --user start opencode-lark
+    ok "服务已启动"
+  fi
 }
 
 do_update() {
@@ -335,6 +464,7 @@ do_remove() {
 
 case "${1:-install}" in
   install) do_install ;;
+  config)  do_config ;;
   update)  do_update ;;
   remove)  do_remove "$@" ;;
   help|-h|--help) usage ;;

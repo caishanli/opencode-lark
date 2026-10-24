@@ -101,8 +101,11 @@ FEISHU_APP_ID=cli_xxx FEISHU_APP_SECRET=xxx OPENCODE_SERVER_PASSWORD=xxx bash in
 | 命令 | 作用 |
 |---|---|
 | `install.sh`（默认） | 安装/更新全部内容；在 **Ubuntu** 上还会开启开机自启（systemd user + `loginctl enable-linger`） |
+| `install.sh config` | 重新配置飞书应用（换应用 / 换凭据），旧应用的配置会被删除 |
 | `install.sh update` | `git pull`、`bun install`，然后等当前回合结束后重启服务 |
 | `install.sh remove [--purge]` | 停止并移除服务；`--purge` 同时删除配置和 `data/` |
+
+扫码流程创建的应用本身已经带好机器人权限和 `card.action.trigger` 回调；保存凭据后安装脚本会从飞书读回配置，缺什么就提示什么。
 
 ### 手动安装
 
