@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
 # opencode-lark installer / updater / remover.
 #
-#   bash install.sh            install everything (also the default)
-#   bash install.sh update     pull the code and restart when the turn is idle
-#   bash install.sh remove     stop and remove the service
+#   bash manage.sh            install everything (also the default)
+#   bash manage.sh update     pull the code and restart when the turn is idle
+#   bash manage.sh remove     stop and remove the service
+#   bash manage.sh help       this list
 #
 # One-liner on a fresh Ubuntu machine:
-#   curl -fsSL https://raw.githubusercontent.com/caishanli/opencode-lark/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/caishanli/opencode-lark/main/manage.sh | bash
 #
 # Reusing an existing Feishu app (no prompts at all):
-#   FEISHU_APP_ID=cli_xxx FEISHU_APP_SECRET=xxx OPENCODE_SERVER_PASSWORD=xxx bash install.sh
+#   FEISHU_APP_ID=cli_xxx FEISHU_APP_SECRET=xxx OPENCODE_SERVER_PASSWORD=xxx bash manage.sh
 #
 # Environment:
 #   OPENCODE_LARK_DIR          where to clone/install        (default ~/opencode-lark)
@@ -49,12 +50,13 @@ trap cleanup EXIT
 
 usage() {
   cat <<'EOF'
-用法: install.sh [命令]
+用法: manage.sh [命令]
 
   install            安装：依赖 + 飞书配置 + systemd 服务 + 开机自启（默认）
   config             重新配置飞书应用（换应用 / 换凭据）并重启服务
   update             拉取最新代码、更新依赖，空闲时重启服务
   remove [--purge]   停止并移除服务；--purge 同时删除配置和 data
+  help               显示这段说明
 
 环境变量见脚本头部注释。
 EOF
@@ -325,9 +327,9 @@ do_install() {
   printf '  日志:  %s\n' "$STATE_DIR/bridge.log"
   printf '  状态:  systemctl --user status opencode-lark\n'
   printf '  重启:  %s/scripts/restart-when-idle.sh\n' "$REPO"
-  printf '  重配:  bash %s/install.sh config\n' "$REPO"
-  printf '  更新:  bash %s/install.sh update\n' "$REPO"
-  printf '  卸载:  bash %s/install.sh remove\n\n' "$REPO"
+  printf '  重配:  bash %s/manage.sh config\n' "$REPO"
+  printf '  更新:  bash %s/manage.sh update\n' "$REPO"
+  printf '  卸载:  bash %s/manage.sh remove\n\n' "$REPO"
   printf '%s\n' "${BOLD}飞书后台还需要（一次性）：${NC}"
   printf '  1. 事件订阅（长连接）: im.message.receive_v1\n'
   printf '  2. 发布版本，并把机器人拉进群\n'
@@ -336,7 +338,7 @@ do_install() {
 
 do_config() {
   if ! resolve_repo || [ ! -f "$REPO/src/index.ts" ]; then
-    die "找不到仓库（${REPO:-$HOME/opencode-lark}），先运行 install.sh install"
+    die "找不到仓库（${REPO:-$HOME/opencode-lark}），先运行 manage.sh install"
   fi
   require_bun
   require_opencode
@@ -393,7 +395,7 @@ do_config() {
 
 do_update() {
   if ! resolve_repo || [ ! -f "$REPO/src/index.ts" ]; then
-    die "找不到仓库（${REPO:-$HOME/opencode-lark}），先运行 install.sh install"
+    die "找不到仓库（${REPO:-$HOME/opencode-lark}），先运行 manage.sh install"
   fi
   require_bun
 
