@@ -150,9 +150,9 @@ export function createStreamingBridge(
       const used =
         limit && limit > 0 && context > 0 ? ` (${formatPercent(context / limit)}%)` : ""
       const contextPart = context > 0 ? ` · ctx ${formatTokens(context)}${used}` : ""
-      // What the whole session has consumed so far — the turn's own total
-      // above is only a part of it.
-      const sessionPart = sessionTotal > 0 ? ` · 🗄 ${formatTokens(sessionTotal)} tok` : ""
+      // What the whole session has consumed so far — Σ, because the turn's
+      // own total above is only a part of it.
+      const sessionPart = sessionTotal > 0 ? ` · Σ ${formatTokens(sessionTotal)} tok` : ""
       // How much work the agent did: the rounds it wrote in and the model
       // calls it took.
       const workPart = steps > 0 ? `${rounds} 轮 ${steps} 步 · ` : ""
