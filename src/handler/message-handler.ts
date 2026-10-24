@@ -83,6 +83,9 @@ export interface HandlerDeps {
   botOpenId?: string
   outboundMedia?: OutboundMediaHandler
   debounceMs?: number
+  /** Called for every accepted message, so the bridge can remember where to
+   *  send service notifications (restart started / finished). */
+  onChatSeen?: (chatId: string) => void
   /**
    * Makes sure the opencode server is running before a prompt is sent — it
    * may have been stopped while it was idle.
@@ -475,6 +478,10 @@ export function createMessageHandler(
     if (dedup.isDuplicate(event.event_id) || dedup.isDuplicateMessage(event.message_id)) {
       return
     }
+
+    // Remember the chat for restart notifications — even before the message is
+    // validated, because the last chat is all we need.
+    if (event.chat_id) deps.onChatSeen?.(event.chat_id)
 
     // ── 1b. Skip group messages that don't @mention the bot ──
     if (event.chat_type === "group") {

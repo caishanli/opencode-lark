@@ -15,7 +15,7 @@
  *   9. Graceful shutdown
  */
 
-import { existsSync, readFileSync, rmSync } from "node:fs"
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import { createOpencodeGateway } from "./opencode/gateway.js"
 import { eventPayload } from "./opencode/events.js"
@@ -327,6 +327,16 @@ async function main(): Promise<void> {
     debounceMs: config.messageDebounceMs,
     ensureServer,
     larkSignature: config.larkSignature,
+    onChatSeen: (chatId) => {
+      try {
+        writeFileSync(
+          path.join(config.dataDir, "notify-chat.json"),
+          JSON.stringify({ chatId }),
+        )
+      } catch (err) {
+        logger.warn(`Could not remember the notify chat: ${err}`)
+      }
+    },
   })
 
   // Create card action handlers
