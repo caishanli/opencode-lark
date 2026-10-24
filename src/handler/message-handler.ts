@@ -850,6 +850,16 @@ export function createMessageHandler(
     // ── 9. Try streaming bridge (registers listener BEFORE POST) → sync fallback ──
     async function deliver(mode: "interrupt" | "queue"): Promise<void> {
       deliveryMode = mode
+      if (mode === "interrupt") {
+        // Stop the running turn *before* the new streaming bridge registers:
+        // the old execution's interrupted event would otherwise arrive at the
+        // new listener and close the new card before its first token.
+        await interruptRunningTurn(currentSessionId)
+        for (let i = 0; i < 25; i++) {
+          if (!(await isSessionRunning(currentSessionId))) break
+          await new Promise((resolve) => setTimeout(resolve, 200))
+        }
+      }
       if (deps.streamingBridge) {
       // Helper: run streaming bridge for a given session, with proper listener lifecycle
       const runStreamingBridge = async (sid: string): Promise<void> => {
