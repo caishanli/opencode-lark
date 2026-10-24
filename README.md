@@ -87,7 +87,7 @@ Downloaded files are saved to `${OPENCODE_CWD}/.opencode-lark/attachments/` (fal
 ### One-shot (new machine)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/caishanli/opencode-lark/main/opencode-lark.sh | bash
+curl -fsSL https://raw.githubusercontent.com/caishanli/opencode-lark/main/install.sh | bash
 ```
 
 It installs Bun and opencode when they are missing, clones the repo, installs
@@ -95,7 +95,7 @@ the dependencies, runs the setup wizard (QR code → Feishu app) and installs th
 systemd user service. Reusing an existing Feishu app skips the wizard:
 
 ```bash
-FEISHU_APP_ID=cli_xxx FEISHU_APP_SECRET=xxx OPENCODE_SERVER_PASSWORD=xxx bash opencode-lark.sh
+FEISHU_APP_ID=cli_xxx FEISHU_APP_SECRET=xxx OPENCODE_SERVER_PASSWORD=xxx bash install.sh
 ```
 
 Re-running is safe: the configuration is kept and a running service is not
@@ -103,11 +103,11 @@ restarted (use `scripts/restart-when-idle.sh` after changing code).
 
 | Command | What it does |
 |---|---|
-| `opencode-lark.sh` *(default)* | install/update everything; on **Ubuntu** it also enables boot start (systemd user + `loginctl enable-linger`) |
-| `opencode-lark.sh config` | re-run the Feishu setup (new app or new credentials); the old app's config is removed |
-| `opencode-lark.sh update` | `git pull`, `bun install`, then restart the service once the running turn is idle |
-| `opencode-lark.sh remove [--purge]` | stop and remove the service; `--purge` also deletes the configuration and `data/` |
-| `opencode-lark.sh help` | show the commands |
+| `install.sh` *(default)* | install/update everything; on **Ubuntu** it also enables boot start (systemd user + `loginctl enable-linger`) |
+| `install.sh config` | re-run the Feishu setup (new app or new credentials); the old app's config is removed |
+| `install.sh update` | `git pull`, `bun install`, then restart the service once the running turn is idle |
+| `install.sh remove [--purge]` | stop and remove the service; `--purge` also deletes the configuration and `data/` |
+| `install.sh help` | show the commands |
 
 The QR flow creates the app with the bot scopes and the `card.action.trigger`
 callback already provisioned; after saving the credentials the installer reads

@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 # opencode-lark installer / updater / remover.
 #
-#   bash opencode-lark.sh            install everything (also the default)
-#   bash opencode-lark.sh update     pull the code and restart when the turn is idle
-#   bash opencode-lark.sh remove     stop and remove the service
-#   bash opencode-lark.sh help       this list
+#   bash install.sh            install everything (also the default)
+#   bash install.sh update     pull the code and restart when the turn is idle
+#   bash install.sh remove     stop and remove the service
+#   bash install.sh help       this list
 #
 # One-liner on a fresh Ubuntu machine:
-#   curl -fsSL https://raw.githubusercontent.com/caishanli/opencode-lark/main/opencode-lark.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/caishanli/opencode-lark/main/install.sh | bash
 #
 # Reusing an existing Feishu app (no prompts at all):
-#   FEISHU_APP_ID=cli_xxx FEISHU_APP_SECRET=xxx OPENCODE_SERVER_PASSWORD=xxx bash opencode-lark.sh
+#   FEISHU_APP_ID=cli_xxx FEISHU_APP_SECRET=xxx OPENCODE_SERVER_PASSWORD=xxx bash install.sh
 #
 # Environment:
 #   OPENCODE_LARK_DIR          where to clone/install        (default ~/opencode-lark)
@@ -50,7 +50,7 @@ trap cleanup EXIT
 
 usage() {
   cat <<'EOF'
-用法: opencode-lark.sh [命令]
+用法: install.sh [命令]
 
   install            安装：依赖 + 飞书配置 + systemd 服务 + 开机自启（默认）
   config             重新配置飞书应用（换应用 / 换凭据）并重启服务
@@ -95,12 +95,19 @@ resolve_repo() {
 }
 
 ensure_repo() {
-  if resolve_repo && [ -f "$REPO/src/index.ts" ]; then
+  # resolve_repo returns non-zero when the script is not inside the repository,
+  # but it still fills REPO with the default location — which may already be a
+  # clone from an earlier run.
+  resolve_repo || true
+  if [ -f "$REPO/src/index.ts" ]; then
+    REPO="$(cd "$REPO" && pwd)"
     ok "仓库: $REPO"
     return 0
   fi
+  if [ -e "$REPO" ] && [ -n "$(ls -A "$REPO" 2>/dev/null)" ]; then
+    die "目录 $REPO 已存在但不是 opencode-lark 仓库；删掉它，或用 OPENCODE_LARK_DIR 指定别的目录"
+  fi
   command -v git >/dev/null 2>&1 || die "git is required to clone the repository"
-  REPO="${OPENCODE_LARK_DIR:-$HOME/opencode-lark}"
   say "克隆 opencode-lark 到 $REPO"
   local url="${OPENCODE_LARK_REPO_URL:-git@github.com:caishanli/opencode-lark.git}"
   if ! git clone --depth 1 "$url" "$REPO"; then
@@ -340,9 +347,9 @@ do_install() {
   printf '  日志:  %s\n' "$STATE_DIR/bridge.log"
   printf '  状态:  systemctl --user status opencode-lark\n'
   printf '  重启:  %s/scripts/restart-when-idle.sh\n' "$REPO"
-  printf '  重配:  bash %s/opencode-lark.sh config\n' "$REPO"
-  printf '  更新:  bash %s/opencode-lark.sh update\n' "$REPO"
-  printf '  卸载:  bash %s/opencode-lark.sh remove\n\n' "$REPO"
+  printf '  重配:  bash %s/install.sh config\n' "$REPO"
+  printf '  更新:  bash %s/install.sh update\n' "$REPO"
+  printf '  卸载:  bash %s/install.sh remove\n\n' "$REPO"
   printf '%s\n' "${BOLD}飞书后台还需要（一次性）：${NC}"
   printf '  1. 事件订阅（长连接）: im.message.receive_v1\n'
   printf '  2. 发布版本，并把机器人拉进群\n'
@@ -350,8 +357,9 @@ do_install() {
 }
 
 do_config() {
-  if ! resolve_repo || [ ! -f "$REPO/src/index.ts" ]; then
-    die "找不到仓库（${REPO:-$HOME/opencode-lark}），先运行 opencode-lark.sh install"
+  resolve_repo || true
+  if [ ! -f "$REPO/src/index.ts" ]; then
+    die "找不到仓库（$REPO），先运行 install.sh install"
   fi
   require_bun
   require_opencode
@@ -407,8 +415,9 @@ do_config() {
 }
 
 do_update() {
-  if ! resolve_repo || [ ! -f "$REPO/src/index.ts" ]; then
-    die "找不到仓库（${REPO:-$HOME/opencode-lark}），先运行 opencode-lark.sh install"
+  resolve_repo || true
+  if [ ! -f "$REPO/src/index.ts" ]; then
+    die "找不到仓库（$REPO），先运行 install.sh install"
   fi
   require_bun
 
@@ -462,13 +471,15 @@ do_remove() {
   if [ "$purge" = "1" ]; then
     say "删除配置和数据"
     rm -rf "$CONFIG_DIR"
-    if resolve_repo && [ -d "$REPO/data" ]; then
+    resolve_repo || true
+    if [ -d "$REPO/data" ]; then
       rm -rf "$REPO/data"
     fi
     ok "配置和数据已删除"
   else
     note "配置保留在 $CONFIG_DIR（加 --purge 一并删除）"
-    if resolve_repo && [ -d "$REPO/data" ]; then
+    resolve_repo || true
+    if [ -d "$REPO/data" ]; then
       note "会话映射保留在 $REPO/data"
     fi
   fi
