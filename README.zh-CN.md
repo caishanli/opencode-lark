@@ -98,6 +98,21 @@ FEISHU_APP_ID=cli_xxx FEISHU_APP_SECRET=xxx OPENCODE_SERVER_PASSWORD=xxx bash in
 
 重复执行是安全的：会先 `git pull` 更新代码、保留已有配置；只有代码真的变了才重启服务，而且会等当前回合结束。
 
+**走代理**（国内网络）：安装脚本的所有下载（curl、git、bun、opencode）都会用标准代理变量。如果连 GitHub 都访问不了，先设好代理再取脚本：
+
+```bash
+export https_proxy=http://127.0.0.1:7890
+curl -fsSL https://raw.githubusercontent.com/caishanli/opencode-lark/main/install.sh | bash
+```
+
+也可以先下载脚本，再让它自己走代理：
+
+```bash
+bash install.sh --proxy http://127.0.0.1:7890
+```
+
+代理会写进 `~/.config/opencode-lark/.env.<appId>`，并带上 `NO_PROXY=127.0.0.1,localhost`，这样桥拉起的 opencode server 调模型也走代理；不需要就删掉那几行。
+
 | 命令 | 作用 |
 |---|---|
 | `install.sh`（默认） | 安装/更新全部内容；在 **Ubuntu** 上还会开启开机自启（systemd user + `loginctl enable-linger`） |

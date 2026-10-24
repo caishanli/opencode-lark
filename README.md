@@ -105,6 +105,25 @@ Re-running is safe: it pulls the latest code (`git pull --ff-only`), keeps the
 configuration, and restarts the service only when the code actually changed
 (and only once the running turn is idle).
 
+**Behind a proxy** (needed in some networks): every download the installer
+makes (curl, git, bun, opencode) uses the standard proxy variables. Export
+them before fetching the script when GitHub itself is out of reach:
+
+```bash
+export https_proxy=http://127.0.0.1:7890
+curl -fsSL https://raw.githubusercontent.com/caishanli/opencode-lark/main/install.sh | bash
+```
+
+Or download the script first and let it apply the proxy:
+
+```bash
+bash install.sh --proxy http://127.0.0.1:7890
+```
+
+The proxy is saved to `~/.config/opencode-lark/.env.<appId>` together with
+`NO_PROXY=127.0.0.1,localhost`, so the opencode server the bridge starts uses
+it for model calls; delete those lines to turn that off.
+
 | Command | What it does |
 |---|---|
 | `install.sh` *(default)* | install/update everything; on **Ubuntu** it also enables boot start (systemd user + `loginctl enable-linger`) |

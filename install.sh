@@ -49,9 +49,53 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# ── Arguments ────────────────────────────────────────────────────────────────
+CMD="install"
+PURGE=0
+PROXY="${PROXY:-}"
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --proxy=*) PROXY="${1#*=}"; shift ;;
+    --proxy)   PROXY="${2:-}"; shift 2 ;;
+    --purge)   PURGE=1; shift ;;
+    install|config|update|remove|help|-h|--help)
+      CMD="$1"; shift ;;
+    *) CMD="$1"; shift ;;
+  esac
+done
+
+# ── Proxy ────────────────────────────────────────────────────────────────────
+proxy_active() {
+  [ -n "${HTTP_PROXY:-}${HTTPS_PROXY:-}${ALL_PROXY:-}${http_proxy:-}${https_proxy:-}${all_proxy:-}" ]
+}
+
+setup_proxy() {
+  if [ -n "$PROXY" ]; then
+    export HTTP_PROXY="$PROXY" HTTPS_PROXY="$PROXY" ALL_PROXY="$PROXY"
+    export http_proxy="$PROXY" https_proxy="$PROXY" all_proxy="$PROXY"
+    # npm/bun look at these as well.
+    export npm_config_proxy="$PROXY" npm_config_https_proxy="$PROXY"
+  fi
+  proxy_active || return 0
+  # The bridge talks to 127.0.0.1 — that must never go through the proxy.
+  local current="${NO_PROXY:-${no_proxy:-}}"
+  case ",$current," in
+    *,127.0.0.1,*) ;;
+    *) current="${current:+$current,}127.0.0.1,localhost" ;;
+  esac
+  export NO_PROXY="$current" no_proxy="$current"
+  say "使用代理: ${HTTPS_PROXY:-${https_proxy:-${ALL_PROXY:-${all_proxy:-}}}}"
+}
+setup_proxy
+
 usage() {
   cat <<'EOF'
-用法: install.sh [命令]
+用法: install.sh [命令] [--proxy <url>]
+
+  --proxy <url>      所有下载走这个代理（也可用 HTTPS_PROXY 等环境变量）
+
+命令:
 
   install            安装：依赖 + 飞书配置 + systemd 服务 + 开机自启（默认）
   config             重新配置飞书应用（换应用 / 换凭据）并重启服务
@@ -153,10 +197,22 @@ ensure_repo() {
   fi
   command -v git >/dev/null 2>&1 || die "git is required to clone the repository"
   say "克隆 opencode-lark 到 $REPO"
-  local url="${OPENCODE_LARK_REPO_URL:-git@github.com:caishanli/opencode-lark.git}"
+  local url="$OPENCODE_LARK_REPO_URL"
+  if [ -z "$url" ]; then
+    # SSH cannot use an HTTP proxy — go straight to HTTPS when one is set.
+    if proxy_active; then
+      url="https://github.com/caishanli/opencode-lark.git"
+    else
+      url="git@github.com:caishanli/opencode-lark.git"
+    fi
+  fi
   if ! git clone --depth 1 "$url" "$REPO"; then
-    warn "SSH 克隆失败，改用 HTTPS"
-    git clone --depth 1 https://github.com/caishanli/opencode-lark.git "$REPO"
+    if [ "$url" != "https://github.com/caishanli/opencode-lark.git" ]; then
+      warn "SSH 克隆失败，改用 HTTPS"
+      git clone --depth 1 https://github.com/caishanli/opencode-lark.git "$REPO"
+    else
+      die "克隆失败（检查代理 / 网络）"
+    fi
   fi
   REPO="$(cd "$REPO" && pwd)"
   ok "仓库: $REPO"
@@ -216,7 +272,27 @@ write_env_from_environment() {
     printf 'OPENCODE_SERVER_PASSWORD=%s\n' "$OPENCODE_SERVER_PASSWORD"
   } > "$env_file"
   chmod 600 "$env_file"
+  save_proxy_env "$env_file"
   ok "配置已写入 $env_file"
+}
+
+# Remember the proxy so the opencode server the bridge starts uses it too.
+save_proxy_env() {
+  local file="$1"
+  proxy_active || return 0
+  local tmp="$file.tmp"
+  grep -v -E '^(HTTPS?_PROXY|ALL_PROXY|NO_PROXY|https?_proxy|all_proxy|no_proxy)=' "$file" > "$tmp" || true
+  local https_proxy_value="${HTTPS_PROXY:-${https_proxy:-}}"
+  local http_proxy_value="${HTTP_PROXY:-${http_proxy:-}}"
+  local all_proxy_value="${ALL_PROXY:-${all_proxy:-}}"
+  {
+    if [ -n "$https_proxy_value" ]; then printf 'HTTPS_PROXY=%s\n' "$https_proxy_value"; fi
+    if [ -n "$http_proxy_value" ]; then printf 'HTTP_PROXY=%s\n' "$http_proxy_value"; fi
+    if [ -n "$all_proxy_value" ]; then printf 'ALL_PROXY=%s\n' "$all_proxy_value"; fi
+    printf 'NO_PROXY=%s\n' "${NO_PROXY:-127.0.0.1,localhost}"
+  } >> "$tmp"
+  mv "$tmp" "$file"
+  chmod 600 "$file"
 }
 
 # The wizard creates (or connects) the Feishu app through the QR flow, which
@@ -302,6 +378,7 @@ run_wizard() {
       printf 'OPENCODE_SERVER_PASSWORD=%s\n' "$OPENCODE_SERVER_PASSWORD"
     } >> "$tmp"
     mv "$tmp" "$env_file"
+    save_proxy_env "$env_file"
     chmod 600 "$env_file"
     ok "已保存: $SERVER_URL（密码已写入 $(basename "$env_file")）"
   fi
@@ -524,8 +601,7 @@ do_update() {
 }
 
 do_remove() {
-  local purge=0
-  [ "${2:-}" = "--purge" ] && purge=1
+  local purge="$PURGE"
 
   if has_systemd; then
     say "停止并移除服务"
@@ -557,11 +633,11 @@ do_remove() {
   note "如果不再需要，注销后自启也一并失效（loginctl disable-linger $USER 可立即关闭）"
 }
 
-case "${1:-install}" in
+case "$CMD" in
   install) do_install ;;
   config)  do_config ;;
   update)  do_update ;;
-  remove)  do_remove "$@" ;;
+  remove)  do_remove ;;
   help|-h|--help) usage ;;
   *) usage; exit 1 ;;
 esac
