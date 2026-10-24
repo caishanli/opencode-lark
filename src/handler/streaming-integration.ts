@@ -171,17 +171,16 @@ export function createStreamingBridge(
     }
 
     /**
-     * The context window, shown first because the ring icon in front of the
-     * line is its gauge. Without an uploaded ring the label `ctx` keeps the
-     * numbers meaningful.
+     * The context window. The ring icon in front of the line is its gauge, so
+     * the numbers carry no label and no parentheses.
      */
-    const contextLine = (iconKey?: string): string | undefined => {
+    const contextLine = (): string | undefined => {
       const context = lastUsage?.context ?? 0
       if (context <= 0) return undefined
       const limit = turnContextLimit
       const used =
-        limit && limit > 0 ? ` (${formatPercent(context / limit)}%)` : ""
-      return `${iconKey ? "" : "ctx "}${formatTokens(context)}${used}`
+        limit && limit > 0 ? ` ${formatPercent(context / limit)}%` : ""
+      return `${formatTokens(context)}${used}`
     }
     let stepStartedAt = 0
     /** How many model calls this turn took. */
@@ -254,7 +253,7 @@ export function createStreamingBridge(
         const percent = contextPercent()
         const key = percent !== undefined ? deps.ringIcons?.get(percent) : undefined
         writeToCard((c) =>
-          void c.setUsage(line, { context: contextLine(key), icon: key }),
+          void c.setUsage(line, { context: contextLine(), icon: key }),
         )
         if (percent === undefined || !deps.ringIcons || key) return
         void deps.ringIcons.ensure(percent).then((newKey) => {
@@ -263,7 +262,7 @@ export function createStreamingBridge(
           if (!refreshed) return
           writeToCard((c) =>
             void c.setUsage(refreshed, {
-              context: contextLine(newKey),
+              context: contextLine(),
               icon: newKey,
             }),
           )

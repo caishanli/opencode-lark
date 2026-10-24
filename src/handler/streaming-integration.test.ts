@@ -863,7 +863,7 @@ describe("createStreamingBridge", () => {
     // the token count is the turn's total (input 1000 + output 100 + cache 3000)
     expect(content).toContain("4.1k tok")
     expect(content).toContain("tok/s")
-    expect(content).toContain("ctx 4.0k")
+    expect(content).toContain("4.0k")
     // the hit rate comes from the counters the server reports
     expect(content).toContain("4.1k tok · 缓存命中 75%")
     expect(content).toContain("Σ 4.1k tok")
@@ -915,11 +915,11 @@ describe("createStreamingBridge", () => {
 
     const content = cardContent(mockFeishu)
     // 4000 of 10000 tokens = 40%
-    expect(content).toContain("ctx 4.0k (40%)")
+    expect(content).toContain("4.0k 40%")
     expect(modelContextLimit).toHaveBeenCalledWith("p1", "m1")
   })
 
-  it("replaces the ctx label with the uploaded ring icon", async () => {
+  it("uses the uploaded ring icon for the context window", async () => {
     const mockFeishu = {
       ...createMockFeishuClient(),
       sendMessage: vi.fn().mockResolvedValue({ code: 0, data: { message_id: "msg_456" } }),
@@ -962,8 +962,8 @@ describe("createStreamingBridge", () => {
     await handlePromise
 
     const raw = JSON.stringify((mockFeishu.updateMessage as any).mock.calls.at(-1)?.[1] ?? "")
-    expect(raw).toContain("4.0k (40%)")
-    expect(raw).not.toContain("ctx 4.0k")
+    expect(raw).toContain("4.0k 40%")
+    expect(raw).not.toContain("ctx")
     expect(raw).toContain("img_key_40")
     expect(raw).toContain("custom_icon")
   })
@@ -1056,12 +1056,12 @@ describe("createStreamingBridge", () => {
     const content = cardContent(mockFeishu)
     // delta = input 100 + output 10 + cache.read 100
     expect(content).toContain("10 tok")      // generated only
-    expect(content).toContain("ctx 200")      // input + cache read
+    expect(content).toContain("200 · ")      // input + cache read
     expect(content).toContain("210 tok · 缓存命中 75%")
     // the cumulative numbers must not show up as the turn's own numbers —
     // they are only reported as the session total, clearly labelled
     expect(content).toContain("Σ 4.1k tok")
-    expect(content).not.toContain("ctx 4.0k")
+    expect(content).not.toContain("4.0k")
   })
 
   it("times the rate against model time (step span), not the whole turn", async () => {
@@ -1155,8 +1155,8 @@ describe("createStreamingBridge", () => {
 
     const content = cardContent(mockFeishu)
     // the last step's context (6000) — not the sum over both steps (18000)
-    expect(content).toContain("ctx 6.0k")
-    expect(content).not.toContain("ctx 18.0k")
+    expect(content).toContain("6.0k")
+    expect(content).not.toContain("18.0k")
   })
 
   it("closes the turn on session.execution.succeeded", async () => {
