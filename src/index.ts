@@ -40,6 +40,7 @@ import {
 } from "./streaming/streaming-card.js"
 import { createCommandHandler } from "./handler/command-handler.js"
 import { ReplyModeStore } from "./handler/reply-mode.js"
+import { createPendingPromptStore } from "./handler/pending-prompts.js"
 import { createOutboundMediaHandler } from "./handler/outbound-media.js"
 import { createSessionObserver } from "./streaming/session-observer.js"
 import { addListener, removeListener } from "./utils/event-listeners.js"
@@ -258,6 +259,7 @@ async function main(): Promise<void> {
   const cardStateFile = path.join(config.dataDir, "open-card.json")
   logger.info(`Open card state file: ${path.resolve(cardStateFile)}`)
   const replyModes = new ReplyModeStore(path.join(config.dataDir, "reply-mode.json"))
+  const pendingPrompts = createPendingPromptStore()
 
   // A card left open by a previous process (crash, restart) would stay on
   // "running" for ever: close it before starting a new one. The state file
@@ -357,6 +359,7 @@ async function main(): Promise<void> {
     debounceMs: config.messageDebounceMs,
     ensureServer,
     larkSignature: config.larkSignature,
+    pendingPrompts,
     onChatSeen: (chatId) => {
       try {
         writeFileSync(
@@ -404,6 +407,22 @@ async function main(): Promise<void> {
       actionType === "form_submit"
     ) {
       return interactiveHandler(action)
+    }
+    if (actionType === "pending_prompt") {
+      const pendingId = action.action.value.pendingId
+      const choice = action.action.value.choice
+      if (!pendingId) return
+      const pending = pendingPrompts.take(pendingId)
+      if (!pending) {
+        logger.warn("The pending prompt expired before the choice arrived")
+        return
+      }
+      if (choice === "interrupt" || choice === "queue" || choice === "cancel") {
+        void pending.onChoose(choice).catch((err) =>
+          logger.warn(`Pending prompt delivery failed: ${err}`),
+        )
+      }
+      return
     }
     // A button that carries a menu id navigates inside the card it was drawn
     // on — the card is patched in place, never replaced by a new message.

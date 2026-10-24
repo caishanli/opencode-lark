@@ -1,4 +1,6 @@
 import type { FeishuCardAction } from "../types.js"
+import { buildPendingResolvedCard } from "../handler/pending-prompt-card.js"
+import type { PendingPromptChoice } from "../handler/pending-prompts.js"
 
 export const PERMISSION_LABELS: Record<string, string> = {
   once: "Allowed (once)",
@@ -25,6 +27,18 @@ export function buildInteractiveCallbackResponse(
         type: "raw",
         data: buildAnsweredQuestionCard(answerLabel),
       },
+    }
+  }
+
+  if (actionType === "pending_prompt") {
+    const choice = (value.choice ?? "cancel") as PendingPromptChoice
+    const label =
+      choice === "interrupt" ? "已打断，正在发送…"
+      : choice === "queue" ? "已排队…"
+      : "已取消"
+    return {
+      toast: { type: choice === "cancel" ? "info" : "success", content: label },
+      card: { type: "raw", data: buildPendingResolvedCard(choice) },
     }
   }
 

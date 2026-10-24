@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
 import type { EventListenerMap } from "../utils/event-listeners.js"
+import { createPendingPromptStore } from "./pending-prompts.js"
 import { createMessageHandler, type HandlerDeps } from "./message-handler.js"
 import { EventProcessor } from "../streaming/event-processor.js"
 import { createMockLogger, createMockFeishuClient, waitFor } from "../__tests__/setup.js"
@@ -270,6 +271,30 @@ describe("createMessageHandler", () => {
     const abortOrder = (deps.opencode.abort as any).mock.invocationCallOrder[0]
     const sendOrder = (deps.opencode.sendPrompt as any).mock.invocationCallOrder[0]
     expect(abortOrder).toBeLessThan(sendOrder)
+  })
+
+  it("asks interrupt-or-queue when the session is still running", async () => {
+    const store = createPendingPromptStore()
+    const deps = makeDeps({
+      pendingPrompts: store,
+      opencode: createMockGateway({
+        activeStatuses: vi.fn().mockResolvedValue({ "ses-1": { type: "running" } }),
+      }),
+    })
+    const { handleMessage: handler } = createMessageHandler(deps)
+
+    await handler(makeEvent())
+
+    expect(deps.opencode.sendPrompt).not.toHaveBeenCalled()
+    expect(deps.feishuClient.replyMessage).toHaveBeenCalled()
+    const pending = store.list()
+    expect(pending).toHaveLength(1)
+    const card = JSON.parse((deps.feishuClient.replyMessage as any).mock.calls[0][1].content)
+    expect(JSON.stringify(card)).toContain("打断并发送")
+    expect(JSON.stringify(card)).toContain("排队执行")
+
+    await pending[0]!.onChoose("cancel")
+    store.close()
   })
 
   it("ignores a redelivered message (same message_id, new event_id)", async () => {

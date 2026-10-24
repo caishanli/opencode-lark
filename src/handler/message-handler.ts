@@ -17,6 +17,8 @@ import type { Logger } from "../utils/logger.js"
 import type { FeishuMessageEvent, FileAttachment } from "../types.js"
 import type { StreamingBridge } from "./streaming-integration.js"
 import { buildFinalResponseCard } from "./streaming-integration.js"
+import { buildPendingPromptCard } from "./pending-prompt-card.js"
+import type { PendingPromptStore } from "./pending-prompts.js"
 import type { SessionObserver } from "../streaming/session-observer.js"
 import type { EventListenerMap } from "../utils/event-listeners.js"
 import { addListener, removeListener } from "../utils/event-listeners.js"
@@ -86,6 +88,8 @@ export interface HandlerDeps {
   /** Called for every accepted message, so the bridge can remember where to
    *  send service notifications (restart started / finished). */
   onChatSeen?: (chatId: string) => void
+  /** Set when a message should ask interrupt-or-queue while a turn is running. */
+  pendingPrompts?: PendingPromptStore
   /**
    * Makes sure the opencode server is running before a prompt is sent — it
    * may have been stopped while it was idle.
@@ -479,6 +483,16 @@ export function createMessageHandler(
     }
   }
 
+  /** Whether the session currently has an active execution. */
+  async function isSessionRunning(sessionId: string): Promise<boolean> {
+    try {
+      const active = await opencode.activeStatuses()
+      return Object.prototype.hasOwnProperty.call(active, sessionId)
+    } catch {
+      return false
+    }
+  }
+
   // ── Debouncer (opt-in via debounceMs > 0) ──
   const debouncer = deps.debounceMs && deps.debounceMs > 0
     ? new MessageDebouncer(deps.debounceMs, handleBatchFlush, logger)
@@ -731,6 +745,7 @@ export function createMessageHandler(
 
     // ── 8. Build the POST-to-opencode function ──
     let currentSessionId = sessionId
+    let deliveryMode: "interrupt" | "queue" = "interrupt"
     // Build text + files for v2 prompt body
     const textParts = parts
       .filter((p: any) => p.type === "text")
@@ -746,13 +761,21 @@ export function createMessageHandler(
         const command = await matchOpencodeCommand(opencode, textParts, logger)
         if (command) {
           logger.info(`Running opencode command: /${command.command}`)
-          await interruptRunningTurn(currentSessionId)
+          if (deliveryMode === "interrupt") await interruptRunningTurn(currentSessionId)
           await opencode.sendCommand(currentSessionId, command)
           return ""
         }
         await deps.ensureServer?.()
-        await interruptRunningTurn(currentSessionId)
-        await opencode.sendPrompt(currentSessionId, { text: textParts, files: fileParts.length ? fileParts : undefined })
+        if (deliveryMode === "interrupt") await interruptRunningTurn(currentSessionId)
+        const prompt = {
+          text: textParts,
+          files: fileParts.length ? fileParts : undefined,
+        }
+        if (deliveryMode === "queue") {
+          await opencode.sendPrompt(currentSessionId, prompt, { delivery: "queue" })
+        } else {
+          await opencode.sendPrompt(currentSessionId, prompt)
+        }
         return ""
       } catch (err) {
         if (err instanceof SessionGoneError) throw err
@@ -781,8 +804,53 @@ export function createMessageHandler(
       }
     }
 
+    // ── 8b. Busy? Ask before preempting the running turn. ──
+    if (deps.pendingPrompts && (await isSessionRunning(currentSessionId))) {
+      const pending = deps.pendingPrompts.add({
+        chatId: event.chat_id,
+        sessionId: currentSessionId,
+        preview: userText.length > 160 ? `${userText.slice(0, 160)}…` : userText,
+        onChoose: async (choice) => {
+          if (choice === "cancel") {
+            if (reactionId) {
+              await feishuClient
+                .deleteReaction(event.message_id, reactionId)
+                .catch(() => {})
+            }
+            return
+          }
+          if (choice === "queue") {
+            // Do not hand it to the server's queue: the running bridge would
+            // still be attached to the old turn. Wait for idle, then deliver.
+            const sid = currentSessionId
+            for (let i = 0; i < 900; i++) {
+              if (!(await isSessionRunning(sid))) break
+              await new Promise((resolve) => setTimeout(resolve, 2_000))
+            }
+          }
+          await deliver("interrupt")
+        },
+      })
+      try {
+        await feishuClient.replyMessage(event.message_id, {
+          msg_type: "interactive",
+          content: JSON.stringify(buildPendingPromptCard(pending)),
+        })
+      } catch (err) {
+        // Without the card the user cannot choose: deliver immediately.
+        deps.pendingPrompts.take(pending.id)
+        logger.warn(`Could not send the interrupt-or-queue card: ${err}`)
+        await deliver("interrupt")
+      }
+      return
+    }
+
+    await deliver("interrupt")
+
     // ── 9. Try streaming bridge (registers listener BEFORE POST) → sync fallback ──
-    if (deps.streamingBridge) {
+    async function deliver(mode: "interrupt" | "queue"): Promise<void> {
+      deliveryMode = mode
+      if (deps.streamingBridge) {
       // Helper: run streaming bridge for a given session, with proper listener lifecycle
       const runStreamingBridge = async (sid: string): Promise<void> => {
         if (deps.observer) deps.observer.markSessionBusy(sid)
@@ -932,6 +1000,7 @@ export function createMessageHandler(
       if (deps.observer) deps.observer.markSessionFree(sessionId)
     }
     logger.info(`Response sent for session ${sessionId}`)
+    }
   }
 
   // ── Debounce flush handler ──
@@ -1006,6 +1075,7 @@ export function createMessageHandler(
 
     // Build POST function
     let currentSessionId = sessionId
+    let deliveryMode: "interrupt" | "queue" = "interrupt"
     // Build text + files for v2 prompt body
     const textParts = parts
       .filter((p: any) => p.type === "text")
@@ -1023,13 +1093,21 @@ export function createMessageHandler(
         const command = await matchOpencodeCommand(opencode, textParts, logger)
         if (command) {
           logger.info(`Running opencode command: /${command.command}`)
-          await interruptRunningTurn(currentSessionId)
+          if (deliveryMode === "interrupt") await interruptRunningTurn(currentSessionId)
           await opencode.sendCommand(currentSessionId, command)
           return ""
         }
         await deps.ensureServer?.()
-        await interruptRunningTurn(currentSessionId)
-        await opencode.sendPrompt(currentSessionId, { text: textParts, files: fileParts.length ? fileParts : undefined })
+        if (deliveryMode === "interrupt") await interruptRunningTurn(currentSessionId)
+        const prompt = {
+          text: textParts,
+          files: fileParts.length ? fileParts : undefined,
+        }
+        if (deliveryMode === "queue") {
+          await opencode.sendPrompt(currentSessionId, prompt, { delivery: "queue" })
+        } else {
+          await opencode.sendPrompt(currentSessionId, prompt)
+        }
         return ""
       } catch (err) {
         if (err instanceof SessionGoneError) throw err
