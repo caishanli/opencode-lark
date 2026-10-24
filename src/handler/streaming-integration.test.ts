@@ -925,7 +925,7 @@ describe("createStreamingBridge", () => {
 
     const content = cardContent(mockFeishu)
     // 4000 of 10000 tokens = 40%
-    expect(content).toContain("4.0k 40%")
+    expect(content).toContain("4.0k")
     expect(modelContextLimit).toHaveBeenCalledWith("p1", "m1")
   })
 
@@ -972,7 +972,7 @@ describe("createStreamingBridge", () => {
     await handlePromise
 
     const raw = JSON.stringify((mockFeishu.updateMessage as any).mock.calls.at(-1)?.[1] ?? "")
-    expect(raw).toContain("4.0k 40%")
+    expect(raw).toContain("4.0k")
     expect(raw).not.toContain("ctx")
     expect(raw).toContain("img_key_40")
     expect(raw).toContain("custom_icon")

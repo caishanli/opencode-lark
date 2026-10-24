@@ -159,12 +159,9 @@ export function createStreamingBridge(
     const usageRight = (): string | undefined => {
       if (!lastUsage) return undefined
       const { context, sessionTotal, hit, cost } = lastUsage
-      const limit = turnContextLimit
       const parts: string[] = []
-      if (context > 0) {
-        const pct = limit && limit > 0 ? ` ${formatPercent(context / limit)}%` : ""
-        parts.push(`${formatTokens(context)}${pct}`)
-      }
+      // No percentage here: the ring's filled arc is the percentage.
+      if (context > 0) parts.push(formatTokens(context))
       parts.push(`缓存命中 ${hit}%`)
       if (sessionTotal > 0) parts.push(`Σ ${formatTokens(sessionTotal)} tok`)
       const right = parts.join(" · ")

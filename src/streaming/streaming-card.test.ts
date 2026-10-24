@@ -206,7 +206,7 @@ describe("StreamingCardSession", () => {
     const { session, feishuClient: fc } = createStartedSession()
     await session.start()
     await session.setUsage("⏱ 1.0s · 10 tok", {
-      right: "84.8k 42% · 缓存命中 97% · Σ 1.2M tok",
+      right: "84.8k · 缓存命中 97% · Σ 1.2M tok",
       icon: "img_key_42",
     })
     await session.close()
@@ -215,7 +215,7 @@ describe("StreamingCardSession", () => {
     const row = els.find((el: any) => el.tag === "column_set") as any
     expect(row).toBeTruthy()
     expect(row.columns[0].elements[0].content).toBe("✅ 已完成 · ⏱ 1.0s · 10 tok")
-    expect(row.columns[1].elements[0].content).toBe("84.8k 42% · 缓存命中 97% · Σ 1.2M tok")
+    expect(row.columns[1].elements[0].content).toBe("84.8k · 缓存命中 97% · Σ 1.2M tok")
     expect(row.columns[1].elements[0].icon).toEqual({
       tag: "custom_icon",
       img_key: "img_key_42",
