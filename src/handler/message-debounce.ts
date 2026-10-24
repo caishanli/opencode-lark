@@ -16,8 +16,8 @@ export interface BufferedMessage {
   userText: string
   event: FeishuMessageEvent
   timestamp: number
-  /** Attachment downloaded for this message, if any. */
-  attachment?: FileAttachment
+  /** Attachments downloaded for this message, if any. */
+  attachments?: FileAttachment[]
 }
 
 export interface BatchContext {

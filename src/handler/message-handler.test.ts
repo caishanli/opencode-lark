@@ -297,6 +297,46 @@ describe("createMessageHandler", () => {
     store.close()
   })
 
+  it("downloads images embedded in a post message", async () => {
+    const downloadResource = vi.fn().mockResolvedValue({ data: Buffer.from("mock-image") })
+    const deps = makeDeps({
+      feishuClient: { ...createMockFeishuClient(), downloadResource } as any,
+    })
+    const { handleMessage: handler } = createMessageHandler(deps)
+
+    const postContent = JSON.stringify({
+      title: "",
+      content: [
+        [{ tag: "img", image_key: "img_key_post_1" }],
+        [{ tag: "text", text: "看看这张图" }],
+      ],
+    })
+
+    const handlerPromise = handler(
+      makeEvent({ message: { message_type: "post", content: postContent } }),
+    )
+    await waitFor(() => {
+      expect(deps.opencode.sendPrompt).toHaveBeenCalledTimes(1)
+    })
+    ;[...(deps.eventListeners.get("ses-1") ?? [])].forEach((fn) => {
+      fn({
+        type: "session.status",
+        properties: { sessionID: "ses-1", status: { type: "idle" } },
+      })
+    })
+    await handlerPromise
+
+    expect(downloadResource).toHaveBeenCalledWith(
+      expect.any(String),
+      "img_key_post_1",
+      "image",
+    )
+    const prompt = sentPrompt(deps.opencode)
+    expect(prompt.text).toContain("看看这张图")
+    expect(prompt.files).toHaveLength(1)
+    expect(prompt.files?.[0]?.uri).toMatch(/^file:\/\//)
+  })
+
   it("ignores a redelivered message (same message_id, new event_id)", async () => {
     // Feishu's long connection redelivers events with a NEW event_id, so the
     // event_id check misses it. The message_id is the stable identity.

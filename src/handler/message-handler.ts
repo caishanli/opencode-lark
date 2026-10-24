@@ -263,42 +263,94 @@ async function handleFileOrImageMessage(
 
 // ── Helper: extract text from Feishu post rich content ──
 
-function extractTextFromPost(content: string): string {
+function parsePostContent(
+  content: string,
+): { title?: string; content?: Array<Array<{ tag: string; text?: string; image_key?: string }>> } | null {
   try {
     const parsed = JSON.parse(content) as Record<string, unknown>
-    
+
     // Determine the post data structure:
     // Format 1 (flat, from WebSocket): { title?: string, content: [[...]] }
     // Format 2 (locale-wrapped, from REST API): { zh_cn: { title?: string, content: [[...]] } }
-    let postData: { title?: string; content?: Array<Array<{ tag: string; text?: string }>> }
-    
     if (Array.isArray(parsed.content)) {
-      // Flat format — content is directly on the object
-      postData = parsed as typeof postData
-    } else {
-      // Locale-wrapped format — pick first locale value
-      const locale = Object.values(parsed)[0]
-      if (!locale || typeof locale !== "object") return ""
-      postData = locale as typeof postData
+      return parsed as ReturnType<typeof parsePostContent>
     }
-    
-    if (!postData?.content) return ""
-    
-    const lines: string[] = []
-    if (postData.title) lines.push(postData.title)
-    
-    for (const paragraph of postData.content) {
-      const lineText = paragraph
-        .filter((el) => (el.tag === "text" || el.tag === "a") && el.text)
-        .map((el) => el.text!)
-        .join("")
-      if (lineText) lines.push(lineText)
-    }
-    
-    return lines.join("\n")
+    const locale = Object.values(parsed)[0]
+    if (!locale || typeof locale !== "object") return null
+    return locale as ReturnType<typeof parsePostContent>
   } catch {
-    return ""
+    return null
   }
+}
+
+function extractTextFromPost(content: string): string {
+  const postData = parsePostContent(content)
+  if (!postData?.content) return ""
+
+  const lines: string[] = []
+  if (postData.title) lines.push(postData.title)
+
+  for (const paragraph of postData.content) {
+    const lineText = paragraph
+      .filter((el) => (el.tag === "text" || el.tag === "a") && el.text)
+      .map((el) => el.text!)
+      .join("")
+    if (lineText) lines.push(lineText)
+  }
+
+  return lines.join("\n")
+}
+
+/** Image keys embedded in a rich-text post (a screenshot with a caption). */
+function extractImageKeysFromPost(content: string): string[] {
+  const postData = parsePostContent(content)
+  if (!postData?.content) return []
+  const keys: string[] = []
+  for (const paragraph of postData.content) {
+    for (const el of paragraph) {
+      if (el.tag === "img" && el.image_key) keys.push(el.image_key)
+    }
+  }
+  return keys
+}
+
+/**
+ * Download the screenshots embedded in a post message. Feishu sends the
+ * message as one post when the user types a caption under an image; without
+ * this the image was silently dropped and only the text reached opencode.
+ */
+async function downloadPostImages(
+  content: string,
+  messageId: string,
+  feishuClient: FeishuApiClient,
+  logger: Logger,
+): Promise<FileAttachment[]> {
+  const keys = extractImageKeysFromPost(content)
+  if (keys.length === 0) return []
+
+  const downloadDir = await resolveDownloadDir()
+  const attachments: FileAttachment[] = []
+
+  for (const [index, key] of keys.entries()) {
+    try {
+      const { data } = await feishuClient.downloadResource(messageId, key, "image")
+      const safeName = sanitizeFilename(
+        `post-${messageId.slice(-10)}-${index + 1}.${detectImageExtension(data)}`,
+      )
+      const filepath = join(downloadDir, safeName)
+      if (!resolve(filepath).startsWith(resolve(downloadDir))) {
+        logger.warn("Path traversal detected in a post image name")
+        continue
+      }
+      await writeFile(filepath, data, { mode: 0o600 })
+      attachments.push({ uri: `file://${filepath}`, name: safeName })
+      logger.info(`Saved post image to ${filepath}`)
+    } catch (err) {
+      logger.warn(`Could not download a post image: ${err}`)
+    }
+  }
+
+  return attachments
 }
 
 function cleanStrippedMentionSpacing(text: string): string {
@@ -541,8 +593,8 @@ export function createMessageHandler(
     }
 
     // ── 3. Parse user text ──
-    let userText: string
-    let attachment: FileAttachment | undefined
+    let userText = ""
+    let attachments: FileAttachment[] = []
     if (messageType === "image" || messageType === "file") {
       try {
         const downloaded = await handleFileOrImageMessage(
@@ -553,7 +605,7 @@ export function createMessageHandler(
           logger,
         )
         userText = downloaded.text
-        attachment = downloaded.attachment
+        attachments = downloaded.attachment ? [downloaded.attachment] : []
       } catch (err) {
         logger.error(`Failed to handle ${messageType} message: ${err}`)
         // Forward error context to opencode instead of silently skipping
@@ -573,6 +625,18 @@ export function createMessageHandler(
       }
     } else if (messageType === "post") {
       userText = extractTextFromPost(event.message.content)
+      attachments = await downloadPostImages(
+        event.message.content,
+        event.message_id,
+        feishuClient,
+        logger,
+      )
+      if (!userText.trim() && attachments.length > 0) {
+        const count = attachments.length
+        userText =
+          `User sent ${count} image${count > 1 ? "s" : ""}. ` +
+          `Please look at the attached image${count > 1 ? "s" : ""}.`
+      }
     } else {
       try {
         const parsed = JSON.parse(event.message.content) as { text?: string }
@@ -586,7 +650,7 @@ export function createMessageHandler(
       userText = resolveMentionPlaceholders(userText, event.mentions, deps.botOpenId)
     }
 
-    if (!userText.trim()) return
+    if (!userText.trim() && attachments.length === 0) return
 
     // ── 4. Resolve feishuKey ──
     const feishuKey =
@@ -618,7 +682,7 @@ export function createMessageHandler(
           userText,
           event,
           timestamp: Date.now(),
-          attachment,
+          attachments,
         }, { startTimer: false })
 
         if (isFirst) {
@@ -752,7 +816,7 @@ export function createMessageHandler(
       .filter((p: any) => p.type === "text")
       .map((p: any) => p.text)
       .join("\n")
-    const fileParts: FileAttachment[] = attachment ? [attachment] : []
+    const fileParts: FileAttachment[] = attachments
 
     async function postToOpencode(): Promise<string> {
       try {
@@ -1100,9 +1164,7 @@ export function createMessageHandler(
       .filter((p: any) => p.type === "text")
       .map((p: any) => p.text)
       .join("\n")
-    const fileParts: FileAttachment[] = messages
-      .map((m) => m.attachment)
-      .filter((a): a is FileAttachment => Boolean(a))
+    const fileParts: FileAttachment[] = messages.flatMap((m) => m.attachments ?? [])
 
     async function postToOpencode(): Promise<string> {
       try {
