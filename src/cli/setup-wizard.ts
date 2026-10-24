@@ -228,13 +228,19 @@ export async function runSetupWizard(): Promise<void> {
       process.stdout.write(dim("Step 2/3: opencode Server") + "\n")
 
       // A custom port comes in through OPENCODE_SERVER_URL (the installer
-      // starts its temporary server there); 4096 is only the fallback.
+      // starts its temporary server there and saves the same value); 4096 is
+      // only the fallback, and when the environment already says where the
+      // server is there is nothing to ask.
       const FALLBACK_URL = "http://localhost:4096"
-      const DEFAULT_URL = process.env.OPENCODE_SERVER_URL?.trim() || FALLBACK_URL
-      const urlInput = (
-        await rl2.question(`  opencode server URL [${DEFAULT_URL}]: `)
-      ).trim()
-      const serverUrl = urlInput || DEFAULT_URL
+      let serverUrl = process.env.OPENCODE_SERVER_URL?.trim() ?? ""
+      if (serverUrl) {
+        process.stdout.write(dim(`  Using ${serverUrl} (OPENCODE_SERVER_URL)\n`))
+      } else {
+        const urlInput = (
+          await rl2.question(`  opencode server URL [${FALLBACK_URL}]: `)
+        ).trim()
+        serverUrl = urlInput || FALLBACK_URL
+      }
       const baseUrl = serverUrl.replace("localhost", "127.0.0.1")
       const serverPort = (() => {
         try {
@@ -310,7 +316,7 @@ export async function runSetupWizard(): Promise<void> {
       // Set on process.env so loadConfig() picks them up immediately
       process.env.FEISHU_APP_ID = appId
       process.env.FEISHU_APP_SECRET = appSecret
-      if (serverUrl !== DEFAULT_URL) {
+      if (serverUrl !== FALLBACK_URL) {
         process.env.OPENCODE_SERVER_URL = serverUrl
       }
 

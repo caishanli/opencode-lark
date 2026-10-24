@@ -90,7 +90,7 @@ opencode TUI
 curl -fsSL https://raw.githubusercontent.com/caishanli/opencode-lark/main/install.sh | bash
 ```
 
-会依次检查/安装 Bun 和 opencode、拉取仓库、安装依赖、跑配置向导（扫码创建飞书应用）、装好 systemd 用户服务。已经有飞书应用时可以不进向导：
+会依次检查/安装 Bun 和 opencode、拉取仓库、安装依赖、跑配置向导（扫码创建飞书应用）、装好 systemd 用户服务。第一次运行会问 opencode server 的端口（默认 4096）和密码，两者都会写进 `~/.config/opencode-lark/.env.<appId>`，桥之后用它启动 server。已经有飞书应用时可以不进向导：
 
 ```bash
 FEISHU_APP_ID=cli_xxx FEISHU_APP_SECRET=xxx OPENCODE_SERVER_PASSWORD=xxx bash install.sh

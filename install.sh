@@ -182,6 +182,24 @@ run_wizard() {
     return 1
   fi
 
+  # ── opencode server: port + password ──
+  say "配置 opencode server"
+  if [ -n "${OPENCODE_SERVER_URL:-}" ]; then
+    note "使用 OPENCODE_SERVER_URL=${OPENCODE_SERVER_URL}"
+  else
+    local port_input=""
+    read -rp "  监听端口 [4096]: " port_input < /dev/tty || port_input=""
+    port_input="${port_input:-4096}"
+    case "$port_input" in
+      ''|*[!0-9]*) die "端口必须是数字: $port_input" ;;
+    esac
+    if [ "$port_input" -lt 1 ] || [ "$port_input" -gt 65535 ]; then
+      die "端口超出范围: $port_input"
+    fi
+    SERVER_URL="http://127.0.0.1:$port_input"
+    export OPENCODE_SERVER_URL="$SERVER_URL"
+  fi
+
   say "配置飞书应用（扫码自动创建并授权，或手动输入 App ID / App Secret）"
   if [ -z "${OPENCODE_SERVER_PASSWORD:-}" ]; then
     # `curl … | bash` leaves stdin at EOF (it is the script's own pipe), so the
@@ -224,6 +242,24 @@ run_wizard() {
     (cd "$REPO" && "$BUN" run src/index.ts init)
   else
     (cd "$REPO" && "$BUN" run src/index.ts init < /dev/tty)
+  fi
+
+  # The wizard writes the Feishu credentials; the server address and password
+  # are the installer's, so make sure the saved file matches what was asked
+  # (and does not fall back to 4096 when another port was chosen).
+  local env_file
+  env_file="$(ls -t "$CONFIG_DIR"/.env.* 2>/dev/null | head -1 || true)"
+  if [ -n "$env_file" ]; then
+    local tmp="$env_file.tmp"
+    grep -v -E '^OPENCODE_SERVER_(URL|USERNAME|PASSWORD)=' "$env_file" > "$tmp" || true
+    {
+      printf 'OPENCODE_SERVER_URL=%s\n' "$SERVER_URL"
+      printf 'OPENCODE_SERVER_USERNAME=opencode\n'
+      printf 'OPENCODE_SERVER_PASSWORD=%s\n' "$OPENCODE_SERVER_PASSWORD"
+    } >> "$tmp"
+    mv "$tmp" "$env_file"
+    chmod 600 "$env_file"
+    ok "已保存: $SERVER_URL（密码已写入 $(basename "$env_file")）"
   fi
 
   chmod 600 "$CONFIG_DIR"/.env.* 2>/dev/null || true

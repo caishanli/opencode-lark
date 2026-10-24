@@ -92,7 +92,10 @@ curl -fsSL https://raw.githubusercontent.com/caishanli/opencode-lark/main/instal
 
 It installs Bun and opencode when they are missing, clones the repo, installs
 the dependencies, runs the setup wizard (QR code → Feishu app) and installs the
-systemd user service. Reusing an existing Feishu app skips the wizard:
+systemd user service. On the first run it asks for the opencode server port
+(default 4096) and password, and saves both to
+`~/.config/opencode-lark/.env.<appId>` so the bridge starts the server with the
+same values. Reusing an existing Feishu app skips the wizard:
 
 ```bash
 FEISHU_APP_ID=cli_xxx FEISHU_APP_SECRET=xxx OPENCODE_SERVER_PASSWORD=xxx bash install.sh
