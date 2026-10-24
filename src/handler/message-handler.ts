@@ -971,6 +971,11 @@ export function createMessageHandler(
       mode: "interrupt" | "queue",
       opts: { queued?: boolean } = {},
     ): Promise<void> {
+      // Wake the server before anything touches it. The bridge reads the
+      // session's cumulative usage right before the POST; on a cold server
+      // that read fails, and the turn would then report the session totals
+      // as its own. ensureServer used to run inside the POST, too late.
+      await deps.ensureServer?.()
       deliveryMode = mode
       // A steer prompt admitted right after an interrupt is attached to the
       // interrupted turn, which the web UI does not render as a new message.
@@ -1277,6 +1282,8 @@ export function createMessageHandler(
 
       // Helper: run streaming bridge for a given session, with proper listener lifecycle
       const runStreamingBridge = async (sid: string): Promise<void> => {
+        // The bridge captures the usage baseline before the POST — see deliver().
+        await deps.ensureServer?.()
         if (deps.observer) deps.observer.markSessionBusy(sid)
 
         let ownershipListener: ((ev: unknown) => void) | null = null

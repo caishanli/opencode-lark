@@ -104,6 +104,9 @@ export function createStreamingBridge(
      *  cumulatively for the whole session, so the turn's own usage is the
      *  difference between the end-of-turn total and this baseline. */
     let usageBaseline = { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
+    /** Whether the baseline above is real. A turn without it cannot report its
+     *  own usage: every delta would be the session's cumulative total. */
+    let usageBaselineKnown = false
     // The previous cumulative usage report. opencode reports the usage after
     // every STEP, so the difference between two reports is one step — and
     // the context of the last step is the size of the context window right
@@ -140,25 +143,29 @@ export function createStreamingBridge(
     const usageLine = (): string | null => {
       if (!lastUsage) return null
       const { context, total, sessionTotal, rate, hit, cost, turnMs, rounds, steps } = lastUsage
-      // Same shorthand as the opencode status bar: a clock for time, a
-      // database for the stored (session) tokens — and a spelled-out label
-      // for the cache, because any icon there just invited a guess.
-      const hitPart = ` · hit ${hit}%`
-      const timePart = turnMs > 0 ? `⏱ ${(turnMs / 1000).toFixed(1)}s · ` : ""
-      const limit = turnContextLimit
-      const used =
-        limit && limit > 0 && context > 0 ? ` (${formatPercent(context / limit)}%)` : ""
-      const contextPart = context > 0 ? ` · ctx ${formatTokens(context)}${used}` : ""
-      // What the whole session has consumed so far — labelled 总, because the
-      // turn's own total above is only a part of it.
-      const sessionPart = sessionTotal > 0 ? ` · 总 ${formatTokens(sessionTotal)} tok` : ""
+      const pieces: string[] = []
+      if (turnMs > 0) pieces.push(`⏱ ${(turnMs / 1000).toFixed(1)}s`)
       // How much work the agent did: the rounds it wrote in and the model
       // calls it took.
-      const workPart = steps > 0 ? `${rounds} 轮 ${steps} 步 · ` : ""
-      return (
-        `${timePart}${workPart}${formatTokens(total)} tok${hitPart} · ` +
-        `${formatRate(rate)} tok/s${contextPart}${sessionPart}${cost}`
-      )
+      if (steps > 0) pieces.push(`${rounds} 轮 ${steps} 步`)
+      // Without a pre-turn baseline the deltas below would be the session's
+      // cumulative totals; such a turn reports only the numbers that are
+      // exact (the cache rate and the session total) instead of lying.
+      if (total > 0) {
+        pieces.push(`${formatTokens(total)} tok`)
+        pieces.push(`hit ${hit}%`)
+        pieces.push(`${formatRate(rate)} tok/s`)
+      }
+      if (context > 0) {
+        const limit = turnContextLimit
+        const used = limit && limit > 0 ? ` (${formatPercent(context / limit)}%)` : ""
+        pieces.push(`ctx ${formatTokens(context)}${used}`)
+      }
+      // What the whole session has consumed so far — labelled 总, because the
+      // turn's own total above is only a part of it.
+      if (sessionTotal > 0) pieces.push(`总 ${formatTokens(sessionTotal)} tok`)
+      if (cost) pieces.push(cost)
+      return pieces.join(" · ")
     }
     let stepStartedAt = 0
     /** How many model calls this turn took. */
@@ -403,9 +410,10 @@ export function createStreamingBridge(
             // LAST step, and every step re-reads (almost) the whole context,
             // so it always looks like a 99% hit.
             const hit = formatPercent(cacheHitRate(now))
-            const cost = action.cost !== undefined && action.cost > 0 ? ` · $${action.cost.toFixed(4)}` : ""
+            const cost = action.cost !== undefined && action.cost > 0 ? `$${action.cost.toFixed(4)}` : ""
             logger.info(
-              `Turn usage: generated=${generated} context=${context} cacheHit=${hit}% ` +
+              `Turn usage: ${usageBaselineKnown ? "" : "(no baseline) "}` +
+              `generated=${generated} context=${context} cacheHit=${hit}% ` +
               `model=${(modelMs / 1000).toFixed(1)}s ` +
               `turn=${turnMs > 0 ? `${(turnMs / 1000).toFixed(1)}s` : "n/a"} ` +
               `(last step: input=${stepDelta.input} cacheRead=${stepDelta.cache.read})`,
@@ -426,10 +434,14 @@ export function createStreamingBridge(
               (now.cache?.read ?? 0) +
               (now.cache?.write ?? 0)
             lastUsage = {
-              context,
-              total,
+              // Without the pre-turn snapshot, every delta above is really
+              // the session's cumulative usage. Report the session total (it
+              // is exact) but hide the turn's numbers rather than show the
+              // session's as this turn's.
+              context: usageBaselineKnown ? context : 0,
+              total: usageBaselineKnown ? total : 0,
+              rate: usageBaselineKnown ? rate : 0,
               sessionTotal,
-              rate,
               hit,
               cost,
               turnMs,
@@ -699,14 +711,28 @@ export function createStreamingBridge(
 
 
       // Capture the session's cumulative usage BEFORE the turn starts, so the
-      // turn's own usage can be derived from the end-of-turn report.
+      // turn's own usage can be derived from the end-of-turn report. The
+      // caller wakes the server first; retry anyway, because a just-restarted
+      // server can refuse the first request.
       void (async () => {
-        try {
-          const snapshot = await deps.opencode?.getSession(sessionId)
-          const t = (snapshot as unknown as { tokens?: typeof usageBaseline })?.tokens
-          if (t) usageBaseline = { ...t, cache: { ...t.cache } }
-        } catch {
-          // No baseline -> the usage line falls back to the raw totals.
+        for (let attempt = 0; attempt < 3 && deps.opencode; attempt++) {
+          try {
+            const snapshot = await deps.opencode.getSession(sessionId)
+            const t = (snapshot as unknown as { tokens?: typeof usageBaseline })?.tokens
+            if (t) {
+              usageBaseline = { ...t, cache: { ...t.cache } }
+              usageBaselineKnown = true
+              break
+            }
+          } catch (err) {
+            if (attempt === 2) logger.warn(`Could not read the usage baseline: ${err}`)
+          }
+          if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 150))
+        }
+        if (!usageBaselineKnown && deps.opencode) {
+          logger.warn(
+            `No usage baseline for session ${sessionId} — hiding this turn's token count`,
+          )
         }
         sendMessage()
         .then((responseBody) => {

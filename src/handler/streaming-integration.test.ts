@@ -123,6 +123,13 @@ function makeDeps(overrides: Partial<StreamingBridgeDeps> = {}): StreamingBridge
     logger: createMockLogger(),
     seenInteractiveIds,
     interactiveCardRegistry: createMockInteractiveCardRegistry(),
+    // The bridge reads the session usage before each turn; the real gateway
+    // always has it, so the default gives a zero baseline.
+    opencode: {
+      getSession: vi.fn().mockResolvedValue({
+        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+      }),
+    } as any,
     ...overrides,
   }
 }
@@ -888,7 +895,12 @@ describe("createStreamingBridge", () => {
     const modelContextLimit = vi.fn().mockResolvedValue(10000)
     const deps = makeDeps({
       feishuClient: mockFeishu,
-      opencode: { modelContextLimit } as any,
+      opencode: {
+        modelContextLimit,
+        getSession: vi.fn().mockResolvedValue({
+          tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        }),
+      } as any,
     })
     const bridge = createStreamingBridge(deps)
 
@@ -1024,6 +1036,61 @@ describe("createStreamingBridge", () => {
     // they are only reported as the session total, clearly labelled
     expect(content).toContain("总 4.1k tok")
     expect(content).not.toContain("4.0k")
+  })
+
+  it("hides the turn's token count when the pre-turn usage is unavailable", async () => {
+    const mockFeishu = {
+      ...createMockFeishuClient(),
+      sendMessage: vi.fn().mockResolvedValue({ code: 0, data: { message_id: "msg_456" } }),
+      replyMessage: vi.fn().mockResolvedValue({ code: 0 }),
+    }
+    // The server had just restarted and could not answer the snapshot request,
+    // so the pre-turn totals are unknown.
+    const opencode = {
+      getSession: vi.fn().mockResolvedValue(null),
+    }
+    const deps = makeDeps({ feishuClient: mockFeishu, opencode } as any)
+    const bridge = createStreamingBridge(deps)
+
+    const handlePromise = bridge.handleMessage(
+      "chat-1", "ses-1", eventListeners, eventProcessor, mockSendMessage, vi.fn(), "msg_original", null,
+    )
+    await waitFor(() => {
+      expect(eventListeners.size).toBe(1)
+    })
+
+    const emit = (ev: unknown) => {
+      ;[...(eventListeners.get("ses-1") ?? [])].forEach((fn) => fn(ev))
+    }
+
+    emit({ type: "session.text.delta", data: { sessionID: "ses-1", assistantMessageID: "m-1", delta: "hello" } })
+    // The session had already consumed ~999M tokens before this turn.
+    emit({
+      type: "session.usage.updated",
+      data: {
+        sessionID: "ses-1",
+        tokens: {
+          input: 24_900_000,
+          output: 897_000,
+          reasoning: 1_031_000,
+          cache: { read: 972_000_000, write: 0 },
+        },
+      },
+    })
+    emit({ type: "session.execution.succeeded", data: { sessionID: "ses-1" } })
+
+    await handlePromise
+
+    const content = cardContent(mockFeishu)
+    // The session total is still exact and shown; the turn's own numbers are
+    // hidden instead of being the cumulative totals.
+    expect(content).toContain("总 998.8M tok")
+    expect(content).not.toContain("998.8M tok · hit")
+    expect(content).not.toContain("tok/s")
+    expect(content).not.toContain("ctx ")
+    await vi.waitFor(() =>
+      expect(deps.logger.warn).toHaveBeenCalledWith(expect.stringContaining("baseline")),
+    )
   })
 
   it("times the rate against model time (step span), not the whole turn", async () => {

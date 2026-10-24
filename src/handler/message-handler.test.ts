@@ -1203,6 +1203,26 @@ describe("createMessageHandler", () => {
     expect(observer.markSessionFree).toHaveBeenCalledWith("ses-1")
   })
 
+  it("wakes the opencode server before the streaming bridge reads the usage baseline", async () => {
+    const calls: string[] = []
+    const ensureServer = vi.fn(async () => {
+      calls.push("ensureServer")
+    })
+    const streamingBridge = {
+      handleMessage: vi.fn(async () => {
+        calls.push("bridge")
+      }),
+    }
+    const deps = makeDeps({ ensureServer, streamingBridge: streamingBridge as any })
+    const { handleMessage: handler } = createMessageHandler(deps)
+
+    await handler(makeEvent())
+
+    // The bridge snapshots the session usage before the POST; on a cold server
+    // that read fails and the turn would report the session totals as its own.
+    expect(calls).toEqual(["ensureServer", "bridge"])
+  })
+
   it("includes quoted message context when parent_id is present", async () => {
     const feishuClient = createMockFeishuClient()
     ;(feishuClient.getMessage as ReturnType<typeof vi.fn>).mockResolvedValue({
