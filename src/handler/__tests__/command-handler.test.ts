@@ -766,6 +766,51 @@ describe("createCommandHandler", () => {
       expect(buttons[1].value.command).toBe("/自动关闭 15")
     })
 
+    it("the 定时关闭 button turns the menu card into the options", async () => {
+      mockFeishuClient.replyMessage = vi.fn().mockResolvedValue({
+        code: 0, msg: "ok", data: { message_id: "card-menu" },
+      })
+      mockFeishuClient.updateMessage = vi.fn().mockResolvedValue({ code: 0, msg: "ok" })
+      const supervisor = {
+        isIdleWatchEnabled: vi.fn(() => true),
+        setIdleWatchEnabled: vi.fn(),
+        idleTimeoutMinutes: vi.fn(() => 30),
+        setIdleTimeoutMinutes: vi.fn(),
+      }
+      const handler = createHandler(undefined, mockGateway, { supervisor } as any)
+
+      await handler("chat-1", "chat-1", "msg-1", "/help")
+      const menu = JSON.parse((mockFeishuClient.replyMessage as any).mock.calls[0][1].content)
+      const menuId = menu.elements
+        .filter((el: any) => el.tag === "action")
+        .flatMap((el: any) => el.actions)[0].value.menu
+
+      await handler("chat-1", "chat-1", "msg-1", "/自动关闭", { menuId })
+
+      // The menu card itself is patched, not answered with a second card.
+      expect((mockFeishuClient.updateMessage as any).mock.calls.at(-1)[0]).toBe("card-menu")
+      expect(mockFeishuClient.replyMessage).toHaveBeenCalledTimes(1)
+    })
+
+    it("/自动关闭 typed twice posts two cards", async () => {
+      mockFeishuClient.replyMessage = vi.fn().mockResolvedValue({
+        code: 0, msg: "ok", data: { message_id: "card-stop" },
+      })
+      mockFeishuClient.updateMessage = vi.fn().mockResolvedValue({ code: 0, msg: "ok" })
+      const supervisor = {
+        isIdleWatchEnabled: vi.fn(() => true),
+        setIdleWatchEnabled: vi.fn(),
+        idleTimeoutMinutes: vi.fn(() => 30),
+        setIdleTimeoutMinutes: vi.fn(),
+      }
+      const handler = createHandler(undefined, mockGateway, { supervisor } as any)
+
+      await handler("chat-1", "chat-1", "msg-1", "/自动关闭")
+      await handler("chat-1", "chat-1", "msg-2", "/自动关闭")
+
+      expect(mockFeishuClient.replyMessage).toHaveBeenCalledTimes(2)
+    })
+
     it("/自动关闭 15 sets the timeout", async () => {
       mockFeishuClient.replyMessage = vi.fn().mockResolvedValue({ code: 0, msg: "ok" })
       const supervisor = {

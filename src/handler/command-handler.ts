@@ -994,9 +994,8 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
   // per chat so that typing /模型 again refreshes the same card.
   const modelMenus = new Map<string, ModelMenuEntry>()
   const latestMenuByChat = new Map<string, string>()
-  /** The idle stop option cards, per chat. */
+  /** The idle stop option cards. */
   const idleStopMenus = new Map<string, IdleStopMenuEntry>()
-  const latestIdleStopByChat = new Map<string, string>()
   /** The session list cards, per chat. */
   const sessionMenus = new Map<string, SessionMenuEntry>()
   const latestSessionMenuByChat = new Map<string, string>()
@@ -1633,13 +1632,12 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
 
     // Without a value: show the options.
     if (!value) {
-      // The card of this chat is refreshed instead of piling up new ones.
-      const latest = latestIdleStopByChat.get(chatId)
+      // A click turns the card it came from — usually the command menu — into
+      // the options. A typed command posts a new card instead: patching an old
+      // one leaves the user's message looking unanswered.
       const existing = menuId
-        ? idleStopMenus.get(menuId)
-        : latest
-          ? idleStopMenus.get(latest)
-          : undefined
+        ? ((idleStopMenus.get(menuId) ?? findMenuCard(menuId)) as IdleStopMenuEntry | undefined)
+        : undefined
       const id = existing?.id ?? menuId ?? newMenuId()
       const card = buildIdleStopCard(current, id)
       await publishIdleStopCard(chatId, messageId, existing, card, id)
@@ -1750,7 +1748,6 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
       chatId,
       createdAt: Date.now(),
     })
-    latestIdleStopByChat.set(chatId, menuId)
   }
 
   /** Put a simple menu card on the chat — updating the card that is there. */
