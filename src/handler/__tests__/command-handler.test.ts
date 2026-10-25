@@ -328,7 +328,7 @@ describe("createCommandHandler", () => {
       expect(commands).toContain("/sessions")
       expect(commands).toContain("/abort")
       expect(commands).toContain("/模型")
-      expect(commands).toContain("/自动关闭")
+      expect(commands).toContain("/定时关闭")
       expect(commands).toContain("/更新")
       expect(commands).toContain("/compact")
       expect(commands).toContain("/状态")
@@ -753,7 +753,7 @@ describe("createCommandHandler", () => {
       expect(result).toBe(true)
       const call = (mockFeishuClient.replyMessage as any).mock.calls[0]
       const content = JSON.parse(call[1].content)
-      expect(content.header?.title?.content).toContain("自动关闭")
+      expect(content.header?.title?.content).toContain("定时关闭")
       const buttons = content.elements
         .filter((el: any) => el.tag === "action")
         .flatMap((el: any) => el.actions)
@@ -762,8 +762,30 @@ describe("createCommandHandler", () => {
         "15 分钟",
         "✅ 30 分钟",
         "60 分钟",
+        "🧨 马上关闭",
       ])
-      expect(buttons[1].value.command).toBe("/自动关闭 15")
+      expect(buttons[1].value.command).toBe("/定时关闭 15")
+      expect(buttons[4].value.command).toBe("/定时关闭 马上")
+    })
+
+    it("马上关闭 stops the server right away", async () => {
+      mockFeishuClient.replyMessage = vi.fn().mockResolvedValue({
+        code: 0, msg: "ok", data: { message_id: "card-stop" },
+      })
+      const supervisor = {
+        isIdleWatchEnabled: vi.fn(() => true),
+        setIdleWatchEnabled: vi.fn(),
+        idleTimeoutMinutes: vi.fn(() => 30),
+        setIdleTimeoutMinutes: vi.fn(),
+        stop: vi.fn().mockResolvedValue(undefined),
+      }
+      const handler = createHandler(undefined, mockGateway, { supervisor } as any)
+
+      await handler("chat-1", "chat-1", "msg-1", "/定时关闭 马上")
+
+      expect(supervisor.stop).toHaveBeenCalled()
+      const content = JSON.parse((mockFeishuClient.replyMessage as any).mock.calls[0][1].content)
+      expect(JSON.stringify(content)).toContain("已关闭")
     })
 
     it("the 定时关闭 button turns the menu card into the options", async () => {

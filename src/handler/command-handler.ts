@@ -291,7 +291,7 @@ function buildHelpCard(
           {
             tag: "button",
             text: { tag: "plain_text", content: "🛌 定时关闭" },
-            value: { action: "command_execute", menu: menuId, command: "/自动关闭" },
+            value: { action: "command_execute", menu: menuId, command: "/定时关闭" },
           },
           {
             tag: "button",
@@ -338,7 +338,7 @@ function buildHelpCard(
       {
         tag: "markdown",
         content:
-          "_打字命令：`/状态` · `/模式 [build|plan]` · `/思考 [default|low|high|max]` · `/回复 [简洁|标准]` · `/clear` · `/bind <会话ID>` · `/connect <会话ID>` · `/模型 [provider] [页码]` · `/自动关闭 [不关闭|15|30|60]`_",
+          "_打字命令：`/状态` · `/模式 [build|plan]` · `/思考 [default|low|high|max]` · `/回复 [简洁|标准]` · `/clear` · `/bind <会话ID>` · `/connect <会话ID>` · `/模型 [provider] [页码]` · `/定时关闭 [不关闭|15|30|60|马上]`_",
       },
       ...buildOpencodeCommandElements(opencodeCommands),
     ],
@@ -413,7 +413,7 @@ function parseIdleStopValue(value: string): number | null {
 }
 
 function describeIdleStop(minutes: number): string {
-  return minutes > 0 ? `${minutes} 分钟空闲后自动关闭` : "不自动关闭（一直开着）"
+  return minutes > 0 ? `空闲 ${minutes} 分钟后关闭` : "不关闭（一直开着）"
 }
 
 /**
@@ -1612,8 +1612,8 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
   /**
    * Switch the automatic stop of the opencode server on and off.
    *
-   *   /自动关闭          → toggle
-   *   /自动关闭 on|off   → set it
+   *   /定时关闭          → show the options
+   *   /定时关闭 on|off   → set it
    */
   async function handleIdleStop(
     chatId: string,
@@ -1644,10 +1644,30 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
       return
     }
 
+    // Stop the server right now.
+    if (["马上", "立即", "now", "stop"].includes(value)) {
+      try {
+        await supervisor.stop?.()
+      } catch {
+        // the server may already be down
+      }
+      const existing = menuId
+        ? ((idleStopMenus.get(menuId) ?? findMenuCard(menuId)) as IdleStopMenuEntry | undefined)
+        : undefined
+      const id = existing?.id ?? menuId ?? newMenuId()
+      const card = buildIdleStopCard(
+        current,
+        id,
+        "✅ opencode 已关闭（下一条消息会重新启动）",
+      )
+      await publishIdleStopCard(chatId, messageId, existing, card, id)
+      return
+    }
+
     // With a value: apply it.
     const minutes = parseIdleStopValue(value)
     if (minutes === null) {
-      await replyText(chatId, messageId, "用法：/自动关闭 [不关闭|15|30|60]")
+      await replyText(chatId, messageId, "用法：/定时关闭 [不关闭|15|30|60|马上]")
       return
     }
     supervisor.setIdleTimeoutMinutes(minutes)
@@ -1680,7 +1700,7 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
         tag: "markdown",
         content: notice
           ? `${notice}\n**当前：${describeIdleStop(current)}**`
-          : `**当前：${describeIdleStop(current)}**\n空闲多久后自动关掉 opencode：`,
+          : `**当前：${describeIdleStop(current)}**\n空闲多久后关掉 opencode：`,
       },
       {
         tag: "action",
@@ -1694,10 +1714,21 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
             value: {
               action: "idle_stop",
               menu: menuId,
-              command: `/自动关闭 ${minutes}`,
+              command: `/定时关闭 ${minutes}`,
             },
           }
         }),
+      },
+      {
+        tag: "action",
+        actions: [
+          {
+            tag: "button",
+            text: { tag: "plain_text", content: "🧨 马上关闭" },
+            type: "danger",
+            value: { action: "idle_stop", menu: menuId, command: "/定时关闭 马上" },
+          },
+        ],
       },
       {
         tag: "markdown",
@@ -1709,7 +1740,7 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
       card: {
         config: { wide_screen_mode: true },
         header: {
-          title: { tag: "plain_text", content: "🛌 自动关闭" },
+          title: { tag: "plain_text", content: "🛌 定时关闭" },
           template: "blue",
         },
         elements,
@@ -2255,7 +2286,7 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
     const needsServer = ![
       "/更新", "/update",
       "/帮助", "/help", "/",
-      "/自动关闭", "/autostop",
+      "/定时关闭", "/自动关闭", "/autostop",
       "/回复", "/reply",
     ].includes(cmd)
     if (needsServer) {
@@ -2342,6 +2373,7 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
           await handleUpdate(chatId, messageId, options?.menuId, parts.slice(1).join(" "))
           return true
 
+        case "/定时关闭":
         case "/自动关闭":
         case "/autostop":
           await handleIdleStop(

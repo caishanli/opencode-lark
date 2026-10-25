@@ -16,7 +16,7 @@
 - **One card per turn** — The reply card is patched in place (`PATCH`), never replaced by a new message. The body is a chronological list of text runs and tool panels, like the opencode web UI.
 - **A status line that says what happened** — `✅ Done · ⏱ 12.4s · 3 rounds 5 steps · 341.0k toks (💾 97.42%) · 51.7 tok/s · 🧠 339.8k (33.98%) · 💰 663.9M`. The cache hit rate is the ratio of the counters the server reports.
 - **Interactive cards** — Agent questions and permission requests appear as clickable Feishu cards. Answer or approve directly from the chat — no need to switch to the TUI.
-- **Slash commands in the chat** — `/help` lists every command (the bridge's and the project's opencode commands) as buttons; `/模型` opens a two level model picker (provider → model, paged, free models first); `/自动关闭` chooses when the opencode server is stopped while it is idle.
+- **Slash commands in the chat** — `/help` lists every command (the bridge's and the project's opencode commands) as buttons; `/模型` opens a two level model picker (provider → model, paged, free models first); `/定时关闭` chooses when the opencode server is stopped while it is idle, or stops it right away.
 - **WebSocket connection** — Uses Feishu's long-lived WebSocket mode. No webhook polling, no public IP required.
 - **SSE streaming** — Consumes the opencode SSE event stream and debounces card updates to stay within rate limits. The subscription reconnects on its own, so a restarted opencode server does not leave the bridge deaf.
 - **Conversation memory** — SQLite-backed per-thread history is prepended to each message, giving the agent context across turns.
@@ -36,7 +36,7 @@ Type them in the chat, or pick them from the `/help` card.
 |---|---|
 | `/help`, `/`, `/帮助` | The command menu: every command as a button, plus the project's opencode commands (`/init`, `/review`, …) |
 | `/模型`, `/model`, `/models` | Model picker — first the provider, then its models (12 per page, free models first). Picking one switches the session to it |
-| `/自动关闭`, `/autostop` | When the opencode server is stopped while it is idle: never, 15, 30 or 60 minutes. Remembered across restarts |
+| `/定时关闭`, `/自动关闭`, `/autostop` | When the opencode server is stopped while it is idle: never, 15, 30 or 60 minutes (remembered across restarts), or 马上关闭 to stop it now |
 | `/new` | Start a new opencode session and bind the chat to it |
 | `/sessions` | List the opencode sessions of this project and connect to one |
 | `/connect <session_id>` | Connect the chat to a session by id |
@@ -425,7 +425,7 @@ Navigate to **Development Config → Event Subscriptions → Callback Subscripti
     //   "command": "opencode",
     //   "args": ["serve", "--port", "5096", "--hostname", "0.0.0.0"],
     //   // How long the server may sit idle before it is stopped (ms).
-    //   // 0 = never (the default). /自动关闭 changes it at runtime.
+    //   // 0 = never (the default). /定时关闭 changes it at runtime.
     //   "idleTimeoutMs": 1800000
     // }
   },
