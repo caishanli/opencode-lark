@@ -573,6 +573,21 @@ describe("createCommandHandler", () => {
       expect(markdown).toContain("/review")
     })
 
+    it("a typed /help always posts a new card", async () => {
+      mockFeishuClient.replyMessage = vi.fn().mockResolvedValue({
+        code: 0, msg: "ok", data: { message_id: "card-help" },
+      })
+      mockFeishuClient.updateMessage = vi.fn().mockResolvedValue({ code: 0, msg: "ok" })
+      const handler = createHandler()
+
+      await handler("chat-1", "chat-1", "msg-1", "/help")
+      await handler("chat-1", "chat-1", "msg-2", "/help")
+
+      // The old menu is far up in the chat; refreshing it looks like silence.
+      expect(mockFeishuClient.replyMessage).toHaveBeenCalledTimes(2)
+      expect(mockFeishuClient.updateMessage).not.toHaveBeenCalled()
+    })
+
     it("/帮助 is an alias for /help", async () => {
       mockFeishuClient.replyMessage = vi.fn().mockResolvedValue({ code: 0, msg: "ok" })
 

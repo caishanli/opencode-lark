@@ -1282,13 +1282,10 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
     }
 
     // The menu card is a card of its own: clicking "连接会话" turns it into
-    // the session list instead of sending another card.
-    const latest = latestMenuCardByChat.get(chatId)
-    const existing = menuId
-      ? menuCards.get(menuId)
-      : latest
-        ? menuCards.get(latest)
-        : undefined
+    // the session list instead of sending another card. A *typed* /帮助 must
+    // post a new card, though — refreshing the old one leaves the user's
+    // message without a visible answer.
+    const existing = menuId ? menuCards.get(menuId) : undefined
     const id = existing?.id ?? menuId ?? newMenuId()
     const card = buildHelpCard(opencodeCommands, id)
     await publishMenuCard(chatId, messageId, existing, card, id)
