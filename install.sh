@@ -215,7 +215,7 @@ ensure_repo() {
   fi
   command -v git >/dev/null 2>&1 || die "git is required to clone the repository"
   say "克隆 opencode-lark 到 $REPO"
-  local url="$OPENCODE_LARK_REPO_URL"
+  local url="${OPENCODE_LARK_REPO_URL:-}"
   if [ -z "$url" ]; then
     # SSH cannot use an HTTP proxy — go straight to HTTPS when one is set.
     if proxy_active; then
