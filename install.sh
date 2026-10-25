@@ -492,7 +492,10 @@ install_service() {
   sed -n '/^\[Unit\]/,$p' "$REPO/packaging/opencode-lark.service" \
     | sed -e "s#__REPO__#$REPO#g" -e "s#__BUN__#$BUN#g" -e "s#__STATE__#$HOME/.local/state#g" \
     > "$UNIT_FILE"
-  systemctl --user daemon-reload
+  if ! systemctl --user daemon-reload 2>/dev/null; then
+    warn "systemctl --user 不可用；手动启动：cd $REPO && $BUN run src/index.ts"
+    return 0
+  fi
 
   if systemctl --user is-active --quiet opencode-lark; then
     if [ "${REPO_UPDATED:-0}" = "1" ]; then
@@ -502,9 +505,11 @@ install_service() {
     else
       ok "服务已在运行（改动代码后用 $REPO/scripts/restart-when-idle.sh 重启）"
     fi
-  else
-    systemctl --user enable --now opencode-lark
+  elif systemctl --user enable --now opencode-lark; then
     ok "服务已启动"
+  else
+    warn "服务启动失败；手动启动：cd $REPO && $BUN run src/index.ts"
+    return 0
   fi
 
   if ! is_ubuntu; then
@@ -513,7 +518,7 @@ install_service() {
   fi
 
   # Ubuntu: the user manager only starts at boot with lingering enabled.
-  systemctl --user enable opencode-lark >/dev/null
+  systemctl --user enable opencode-lark >/dev/null 2>&1 || true
   if loginctl enable-linger "$USER"; then
     ok "开机自启已开启（systemd user + linger）"
   else
@@ -589,9 +594,10 @@ do_config() {
   if systemctl --user is-active --quiet opencode-lark; then
     say "重启服务以加载新配置"
     restart_bridge
-  else
-    systemctl --user start opencode-lark
+  elif systemctl --user start opencode-lark; then
     ok "服务已启动"
+  else
+    warn "服务启动失败；手动启动：cd $REPO && $BUN run src/index.ts"
   fi
 }
 
