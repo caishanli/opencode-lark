@@ -31,23 +31,44 @@ notify() {
   "$BUN" "$REPO/scripts/notify-feishu.ts" "$1" >/dev/null 2>&1 || true
 }
 
+# A message sent with "send after this turn" waits in the session's inbox.
+# Restarting while it is still there would drop the card that should show its
+# reply, so the restart waits for the inbox to drain as well.
+inbox_pending() {
+  ids=$(curl -s -m 5 -u "$USER_NAME:$PASSWORD" "$URL/api/session?limit=50" 2>/dev/null |
+    grep -o '"id":"ses_[^"]*"' | cut -d'"' -f4)
+  for id in $ids; do
+    body=$(curl -s -m 5 -u "$USER_NAME:$PASSWORD" "$URL/api/session/$id/inbox" 2>/dev/null || true)
+    case "$body" in
+      ""|*'"data":[]'*) ;;
+      *) return 0 ;;
+    esac
+  done
+  return 1
+}
+
 waited=0
 while :; do
+  busy=0
   active=$(curl -s -m 5 -u "$USER_NAME:$PASSWORD" "$URL/api/session/active" 2>/dev/null || echo "")
 
   if [ -z "$SESSION" ]; then
     # No session given: restart when NO session is running at all.
     case "$active" in
-      *'"data":{}'*|*'"data":null'*) break ;;
-      "") break ;;
+      *'"data":{}'*|*'"data":null'*|"") ;;
+      *) busy=1 ;;
     esac
   else
     # Restart when this session is not in the active (running) map.
     case "$active" in
-      *"$SESSION"*) ;;
-      *) break ;;
+      *"$SESSION"*) busy=1 ;;
     esac
   fi
+
+  if [ "$busy" -eq 0 ] && inbox_pending; then
+    busy=1
+  fi
+  [ "$busy" -eq 0 ] && break
 
   sleep 3
   waited=$((waited + 3))
@@ -57,7 +78,7 @@ while :; do
   fi
 done
 
-notify "🔄 opencode-lark 即将重启（本轮已结束），稍等…"
+notify "🔄 opencode-lark 即将重启（本轮和排队消息都已结束），稍等…"
 
 # The script dies when systemd tears down the service cgroup, so the "done"
 # message is sent by the new process: leave it a marker to read.

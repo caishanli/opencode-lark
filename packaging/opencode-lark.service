@@ -16,6 +16,10 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+# The opencode server is spawned detached, in this service's cgroup. A bridge
+# restart must not kill it: queued prompts ("send after this turn") live in
+# its memory.
+KillMode=process
 WorkingDirectory=__REPO__
 ExecStart=__BUN__ run __REPO__/src/index.ts
 Restart=on-failure
