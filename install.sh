@@ -210,24 +210,31 @@ ensure_repo() {
     update_clone
     return 0
   fi
-  if [ -e "$REPO" ] && [ -n "$(ls -A "$REPO" 2>/dev/null)" ]; then
-    die "目录 $REPO 已存在但不是 opencode-lark 仓库；删掉它，或用 OPENCODE_LARK_DIR 指定别的目录"
+  if [ -e "$REPO" ]; then
+    # An interrupted clone leaves a directory with only .git behind; clean it
+    # up so a retry can proceed.
+    if [ -d "$REPO/.git" ] || [ -z "$(ls -A "$REPO" 2>/dev/null)" ]; then
+      warn "清理未完成的克隆: $REPO"
+      rm -rf "$REPO"
+    else
+      die "目录 $REPO 已存在但不是 opencode-lark 仓库；删掉它，或用 OPENCODE_LARK_DIR 指定别的目录"
+    fi
   fi
   command -v git >/dev/null 2>&1 || die "git is required to clone the repository"
   say "克隆 opencode-lark 到 $REPO"
-  local url="${OPENCODE_LARK_REPO_URL:-}"
-  if [ -z "$url" ]; then
-    # SSH cannot use an HTTP proxy — go straight to HTTPS when one is set.
-    if proxy_active; then
-      url="https://github.com/caishanli/opencode-lark.git"
-    else
-      url="git@github.com:caishanli/opencode-lark.git"
-    fi
-  fi
+  # HTTPS by default: the repository is public, and SSH would ask for a host
+  # key / a key that may not exist, which a piped installer cannot answer.
+  local url="${OPENCODE_LARK_REPO_URL:-https://github.com/caishanli/opencode-lark.git}"
+  case "$url" in
+    git@*|ssh://*)
+      export GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -o StrictHostKeyChecking=accept-new}"
+      ;;
+  esac
   if ! git clone --depth 1 "$url" "$REPO"; then
     if [ "$url" != "https://github.com/caishanli/opencode-lark.git" ]; then
-      warn "SSH 克隆失败，改用 HTTPS"
-      git clone --depth 1 https://github.com/caishanli/opencode-lark.git "$REPO"
+      warn "克隆失败，改用 HTTPS"
+      git clone --depth 1 https://github.com/caishanli/opencode-lark.git "$REPO" ||
+        die "克隆失败（检查代理 / 网络）"
     else
       die "克隆失败（检查代理 / 网络）"
     fi
