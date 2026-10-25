@@ -41,6 +41,7 @@ import {
 import { createCommandHandler } from "./handler/command-handler.js"
 import { ReplyModeStore } from "./handler/reply-mode.js"
 import { createPendingPromptStore } from "./handler/pending-prompts.js"
+import { createWelcomeStore } from "./handler/welcome.js"
 import { buildUpgradeRestartResultCard } from "./handler/upgrade-card.js"
 import { createOutboundMediaHandler } from "./handler/outbound-media.js"
 import { createSessionObserver } from "./streaming/session-observer.js"
@@ -172,6 +173,12 @@ async function main(): Promise<void> {
   // ═══════════════════════════════════════════
   logger.info("Phase 3: Initializing database...")
   const db = initDatabase(config.dataDir)
+  // The first message in a chat gets the command menu; changing the Feishu app
+  // starts from scratch, so every chat is greeted again by the new bot.
+  const welcomeStore = createWelcomeStore(
+    path.join(config.dataDir, "welcome.json"),
+    config.feishu.appId,
+  )
 
   // ═══════════════════════════════════════════
   // Phase 4: Create Shared Services
@@ -364,6 +371,7 @@ async function main(): Promise<void> {
     ensureServer,
     larkSignature: config.larkSignature,
     pendingPrompts,
+    welcome: (chatId) => welcomeStore.shouldWelcome(chatId),
     onChatSeen: (chatId) => {
       try {
         writeFileSync(

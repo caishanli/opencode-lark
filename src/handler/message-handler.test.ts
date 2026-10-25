@@ -1203,8 +1203,29 @@ describe("createMessageHandler", () => {
     expect(observer.markSessionFree).toHaveBeenCalledWith("ses-1")
   })
 
-  it("wakes the opencode server before the streaming bridge reads the usage baseline", async () => {
-    const calls: string[] = []
+  it("sends the command menu on the first message in a chat", async () => {
+    const commandHandler = vi.fn().mockResolvedValue(false)
+    const welcome = vi.fn().mockReturnValueOnce(true).mockReturnValue(false)
+    const streamingBridge = {
+      handleMessage: vi.fn(async (_c: string, _s: string, _el: unknown, _ep: unknown, _send: () => Promise<string>, onComplete: (text: string) => void) => {
+        onComplete("done")
+      }),
+    }
+    const deps = makeDeps({ commandHandler, welcome, streamingBridge: streamingBridge as any })
+    const { handleMessage: handler } = createMessageHandler(deps)
+
+    await handler(makeEvent())
+    await waitFor(() =>
+      expect(commandHandler).toHaveBeenCalledWith("chat-1", "chat-1", "msg-1", "/帮助"),
+    )
+
+    commandHandler.mockClear()
+    await handler(makeEvent({ event_id: "evt-2", message_id: "msg-2" }))
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(commandHandler).not.toHaveBeenCalled()
+  })
+
+  it("wakes the opencode server before the streaming bridge reads the usage baseline", async () => {    const calls: string[] = []
     const ensureServer = vi.fn(async () => {
       calls.push("ensureServer")
     })

@@ -88,6 +88,9 @@ export interface HandlerDeps {
   /** Called for every accepted message, so the bridge can remember where to
    *  send service notifications (restart started / finished). */
   onChatSeen?: (chatId: string) => void
+  /** True the first time a chat talks to this bot (per Feishu app); the
+   *  command menu is sent so the user knows what is available. */
+  welcome?: (chatId: string) => boolean
   /** Set when a message should ask interrupt-or-queue while a turn is running. */
   pendingPrompts?: PendingPromptStore
   /**
@@ -701,6 +704,14 @@ export function createMessageHandler(
     if (userText.startsWith("/") && deps.commandHandler) {
       const handled = await deps.commandHandler(feishuKey, event.chat_id, event.message_id, userText.trim())
       if (handled) return
+    }
+
+    // ── 4b2. First message in this chat: show the command menu ──
+    // Commands explain themselves, so only plain messages trigger this. The
+    // menu is a reply, the answer still arrives in its own card.
+    if (deps.welcome?.(event.chat_id) && deps.commandHandler) {
+      void deps.commandHandler(feishuKey, event.chat_id, event.message_id, "/帮助")
+        .catch((err) => logger.warn(`Could not send the help menu: ${err}`))
     }
 
     // ── 4c. Debounce path (when enabled) ──
