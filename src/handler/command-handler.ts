@@ -1538,7 +1538,7 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
 
     // The CLI checks the version and fetches the installer before the tarball
     // exists; do not claim to be downloading during that.
-    await progress("⬆️ opencode 正在检查新版本…")
+    await progress(formatUpgradeProgress({ bytes: 0, phase: "preparing" }, 0))
 
     const upgrade = deps.supervisor?.upgradeOpencode
     if (!upgrade) {
@@ -2255,8 +2255,18 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
 
     logger.info(`Slash command: ${cmd} from ${feishuKey}`)
 
-    // The server may have been stopped while it was idle.
-    await deps.ensureServer?.().catch(() => {})
+    // The server may have been stopped while it was idle. Commands that do
+    // not talk to it must not wait for it to start — waking it up took ~10 s
+    // and left the 更新 card on the menu until then.
+    const needsServer = ![
+      "/更新", "/update",
+      "/帮助", "/help", "/",
+      "/自动关闭", "/autostop",
+      "/回复", "/reply",
+    ].includes(cmd)
+    if (needsServer) {
+      await deps.ensureServer?.().catch(() => {})
+    }
 
     try {
       switch (cmd) {

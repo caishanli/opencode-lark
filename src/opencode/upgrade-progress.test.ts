@@ -127,6 +127,7 @@ describe("startUpgradeProgress", () => {
 
     await new Promise((resolve) => setTimeout(resolve, 100))
     stop()
-    expect(samples).toHaveLength(0)
+    // Only the "checking" ticks — the old tarball must not be reported.
+    expect(samples.some((sample) => sample.phase !== "preparing")).toBe(false)
   })
 })

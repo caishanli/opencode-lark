@@ -524,6 +524,33 @@ describe("createCommandHandler", () => {
       expect(actions.map((action: any) => action.value.choice)).toEqual(["now", "later"])
     })
 
+    it("/更新 does not wait for the opencode server to start", async () => {
+      const ensureServer = vi.fn().mockResolvedValue(undefined)
+      const supervisor = {
+        upgradeOpencode: vi.fn().mockResolvedValue({ success: true, output: "2.1.4 is already installed" }),
+        stop: vi.fn().mockResolvedValue(undefined),
+      }
+      mockFeishuClient.replyMessage = vi.fn().mockResolvedValue({
+        code: 0, msg: "ok", data: { message_id: "card-update" },
+      })
+      const handler = createHandler(undefined, mockGateway, { ensureServer, supervisor } as any)
+
+      await handler("chat-1", "chat-1", "msg-1", "/更新")
+
+      // Waking the server first took ~10 s; the upgrade does not need it.
+      expect(ensureServer).not.toHaveBeenCalled()
+    })
+
+    it("/new wakes the opencode server first", async () => {
+      const ensureServer = vi.fn().mockResolvedValue(undefined)
+      mockGateway.createSession.mockResolvedValueOnce({ id: "ses-new" })
+      const handler = createHandler(undefined, mockGateway, { ensureServer })
+
+      await handler("chat-1", "chat-1", "msg-1", "/new")
+
+      expect(ensureServer).toHaveBeenCalled()
+    })
+
     it("/help lists the commands opencode offers in this project", async () => {
       mockFeishuClient.replyMessage = vi.fn().mockResolvedValue({ code: 0, msg: "ok" })
       ;(mockGateway.commands as ReturnType<typeof vi.fn>).mockResolvedValue([

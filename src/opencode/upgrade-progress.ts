@@ -22,8 +22,8 @@ export interface UpgradeProgressSample {
   version?: string
   /** Bytes per second, measured between two samples (smoothed). */
   bytesPerSecond?: number
-  /** Downloading the tarball, or installing it after the download. */
-  phase: "downloading" | "installing"
+  /** Checking the version / fetching the installer, downloading, installing. */
+  phase: "preparing" | "downloading" | "installing"
 }
 
 export interface UpgradeProgressOptions {
@@ -173,7 +173,9 @@ export function startUpgradeProgress(options: UpgradeProgressOptions): () => voi
     const found = findTarball(dir, startedAt)
     if (!found) {
       // The tarball was there and is gone: the installer is unpacking it.
-      if (sawTarball) options.onUpdate({ bytes: 0, phase: "installing" })
+      // Before it appears the CLI is checking the version and fetching the
+      // installer — still report, so the elapsed time keeps moving.
+      options.onUpdate({ bytes: 0, phase: sawTarball ? "installing" : "preparing" })
       return
     }
     sawTarball = true

@@ -25,6 +25,9 @@ export function formatUpgradeProgress(
   elapsedMs: number,
 ): string {
   const seconds = Math.max(1, Math.round(elapsedMs / 1000))
+  if (sample.phase === "preparing") {
+    return `⬆️ opencode 正在检查新版本… · ${seconds}s`
+  }
   if (sample.phase === "installing") {
     return `⬆️ opencode 正在安装${sample.version ? ` ${sample.version}` : ""}… · ${seconds}s`
   }

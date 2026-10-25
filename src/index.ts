@@ -487,8 +487,12 @@ async function main(): Promise<void> {
       if (cmd) {
         const chatId = action.open_chat_id
         const messageId = action.open_message_id
-        // For card callbacks, use chatId as feishuKey (best-effort for p2p)
-        await commandHandler(chatId, chatId, messageId, cmd)
+        // For card callbacks, use chatId as feishuKey (best-effort for p2p).
+        // Pass the menu id so the command turns that card in place instead of
+        // answering next to a menu that stays on screen.
+        await commandHandler(chatId, chatId, messageId, cmd, {
+          menuId: action.action?.value?.menu,
+        })
       }
       return
     }
