@@ -1003,6 +1003,29 @@ describe("createCommandHandler", () => {
       expect(patched.elements[0].content).toContain("第 2 步")
     })
 
+    it("creates a session when /模型 is the first thing a chat sends", async () => {
+      const sm = createMockSessionManager(null)
+      sm.getExisting = vi.fn().mockResolvedValue(undefined)
+      sm.getOrCreate = vi.fn().mockResolvedValue("ses-new")
+      mockFeishuClient.replyMessage = vi.fn().mockResolvedValue({
+        code: 0, msg: "ok", data: { message_id: "card-model" },
+      })
+      mockGateway.listModels.mockResolvedValue([
+        { id: "deepseek/deepseek-v4.1-flash", providerID: "command-code", name: "DeepSeek V4.1 Flash", enabled: true },
+      ])
+      mockGateway.getSession.mockResolvedValue({
+        id: "ses-new",
+        model: { id: "deepseek/deepseek-v4.1-flash", providerID: "command-code" },
+      })
+      const handler = createHandler(sm)
+
+      const result = await handler("chat-1", "chat-1", "msg-1", "/模型")
+
+      expect(result).toBe(true)
+      expect(sm.getOrCreate).toHaveBeenCalledWith("chat-1")
+      expect(mockFeishuClient.replyMessage).toHaveBeenCalled()
+    })
+
     it("a switch from the card updates the card instead of replying", async () => {
       mockFeishuClient.replyMessage = vi.fn().mockResolvedValue({
         code: 0,

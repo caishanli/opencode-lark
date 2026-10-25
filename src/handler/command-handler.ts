@@ -1811,10 +1811,12 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
     simpleMenus.set(id, { id, messageId: cardMessageId, chatId, createdAt: Date.now() })
   }
 
-  const boundSessionId = async (feishuKey: string): Promise<string | null> =>
+  // A command that needs a session creates one when the chat has none yet —
+  // on a fresh install nothing is bound until the first message is sent.
+  const boundSessionId = async (feishuKey: string): Promise<string> =>
     sessionManager.getSession(feishuKey)?.session_id ??
     (await sessionManager.getExisting(feishuKey)) ??
-    null
+    (await sessionManager.getOrCreate(feishuKey))
 
   /** /状态 — the current session, model, mode, task and context. */
   async function handleStatus(
@@ -1824,10 +1826,6 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
     menuId?: string,
   ): Promise<void> {
     const sessionId = await boundSessionId(feishuKey)
-    if (!sessionId) {
-      await replyText(chatId, messageId, "当前没有绑定的会话。")
-      return
-    }
 
     const session = await opencode.getSession(sessionId).catch(() => null)
     const statuses = await opencode
@@ -1879,10 +1877,6 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
     menuId?: string,
   ): Promise<void> {
     const sessionId = await boundSessionId(feishuKey)
-    if (!sessionId) {
-      await replyText(chatId, messageId, "当前没有绑定的会话。")
-      return
-    }
     const session = await opencode.getSession(sessionId).catch(() => null)
     const agents = (await opencode.listAgents().catch(() => [] as AgentInfo[])).filter(
       (agent) => agent.mode === "primary" && !agent.hidden,
@@ -1918,10 +1912,6 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
     menuId?: string,
   ): Promise<void> {
     const sessionId = await boundSessionId(feishuKey)
-    if (!sessionId) {
-      await replyText(chatId, messageId, "当前没有绑定的会话。")
-      return
-    }
     const session = await opencode.getSession(sessionId).catch(() => null)
     const model = session?.model
     if (!model?.id || !model.providerID) {
@@ -2022,11 +2012,10 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
     const key = existing?.feishuKey ?? feishuKey
     const activeId = existing?.id ?? newMenuId()
 
-    const sessionId = await sessionManager.getExisting(key)
-    if (!sessionId) {
-      await replyText(chatId, messageId, "当前没有绑定的会话，先发一句话或用 /new 建一个")
-      return
-    }
+    // A fresh install has no binding yet: create the session the model will
+    // be switched on, exactly like sending the first message would.
+    const sessionId =
+      (await sessionManager.getExisting(key)) ?? (await sessionManager.getOrCreate(key))
 
     // A model id carries the provider, so it is encoded as "provider|id".
     if (argument.includes("|")) {
