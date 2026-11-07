@@ -73,8 +73,10 @@ while :; do
   sleep 3
   waited=$((waited + 3))
   if [ "$waited" -ge 900 ]; then
-    echo "restart-when-idle: giving up after ${waited}s" >&2
-    break
+    # Never force it: a restart in the middle of a turn is exactly what this
+    # script exists to avoid. Whoever queued it can restart later.
+    echo "restart-when-idle: still busy after ${waited}s — not restarting" >&2
+    exit 0
   fi
 done
 
