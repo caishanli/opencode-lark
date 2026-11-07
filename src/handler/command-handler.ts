@@ -403,6 +403,39 @@ function describeCurrentModel(
   }
 }
 
+/** The result after picking a model: what is in use now, not another list. */
+function buildModelSelectedCard(options: {
+  notice: string
+  current: string
+  currentName: string
+  menuId: string
+}): Record<string, unknown> {
+  const { notice, current, currentName, menuId } = options
+  return {
+    config: { wide_screen_mode: true },
+    header: {
+      title: { tag: "plain_text", content: "🧠 模型已切换" },
+      template: "green",
+    },
+    elements: [
+      {
+        tag: "markdown",
+        content: `${notice}\n**当前模型：** ${current}\n**显示名：** ${currentName}`,
+      },
+      {
+        tag: "action",
+        actions: [
+          {
+            tag: "button",
+            text: { tag: "plain_text", content: "🔄 重新选择" },
+            value: { action: "model_menu", menu: menuId, command: "/模型" },
+          },
+        ],
+      },
+    ],
+  }
+}
+
 /** The idle stop options: 0 = never, otherwise the minutes. */
 function parseIdleStopValue(value: string): number | null {
   if (["off", "关", "关闭", "停用", "never", "不关闭", "false", "0"].includes(value)) return 0
@@ -2030,10 +2063,26 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
         return
       }
       if (existing) {
-        // The model list folds away — the card falls back to the provider
-        // level and shows the model that is now in use.
-        existing.view = { level: 1, page: 1 }
-        await renderModelMenu(existing, sessionId, `✅ 已切换到 ${providerID}/${modelId}`)
+        // Show the result: the model that is in use. Going back to the
+        // provider list made the switch look like it had not happened.
+        const session = await opencode.getSession(sessionId).catch(() => null)
+        const models = await opencode.listModels().catch(() => [] as ModelInfo[])
+        const { current, currentName } = describeCurrentModel(session, models)
+        const card = buildModelSelectedCard({
+          notice: `✅ 已切换到 ${providerID}/${modelId}`,
+          current,
+          currentName,
+          menuId: existing.id,
+        })
+        await publishModelMenu(
+          existing.chatId,
+          existing.messageId,
+          existing,
+          existing.id,
+          card,
+          { level: 1, page: 1 },
+          existing.feishuKey,
+        )
         return
       }
       await replyText(chatId, messageId, `已切换模型：${providerID}/${modelId}`)

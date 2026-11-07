@@ -1059,15 +1059,17 @@ describe("createCommandHandler", () => {
       expect(mockFeishuClient.replyMessage).toHaveBeenCalledTimes(1)
       expect(mockFeishuClient.updateMessage).toHaveBeenCalledTimes(1)
       const patched = JSON.parse((mockFeishuClient.updateMessage as any).mock.calls[0][1])
+      expect(patched.header.title.content).toContain("模型已切换")
       expect(patched.elements[0].content).toContain("已切换到")
       // the card shows the model by name
       expect(patched.elements[0].content).toContain("Flash Free")
-      // the model list folded away — the provider list is back
-      expect(patched.elements[0].content).toContain("第 1 步")
+      // …and the picker is gone: no provider list coming back
+      expect(patched.elements[0].content).not.toContain("第 1 步")
       const buttons = patched.elements
         .filter((el: any) => el.tag === "action")
         .flatMap((el: any) => el.actions)
-      expect(buttons[0].value.command).toBe("/模型 opencode")
+      expect(buttons[0].text.content).toContain("重新选择")
+      expect(buttons[0].value.command).toBe("/模型")
     })
 
     it("sorts the free models of a provider first", async () => {
