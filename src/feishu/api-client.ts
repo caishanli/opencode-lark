@@ -174,17 +174,39 @@ export function createFeishuApiClient(options: FeishuApiClientOptions): FeishuAp
     }
   }
 
-  async function refreshToken(): Promise<string> {
+  /**
+   * DNS and connection failures are usually one-off (the resolver hiccuped);
+   * a 4xx is not worth retrying. EAI_AGAIN on open.feishu.cn surfaced as a
+   * failed /帮助 command before this existed.
+   */
+  function isTransientNetworkError(err: unknown): boolean {
+    const message = err instanceof Error ? `${err.name} ${err.message}` : String(err)
+    return /EAI_AGAIN|ENOTFOUND|ECONNRESET|ECONNREFUSED|ETIMEDOUT|fetch failed|socket hang up|network/i.test(
+      message,
+    )
+  }
+
+  async function refreshToken(networkRetry = 0): Promise<string> {
     logger.info("Refreshing tenant_access_token...")
 
-    const response = await fetch(
-      `${FEISHU_BASE_URL}/auth/v3/tenant_access_token/internal`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ app_id: appId, app_secret: appSecret }),
-      },
-    )
+    let response: Response
+    try {
+      response = await fetch(
+        `${FEISHU_BASE_URL}/auth/v3/tenant_access_token/internal`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ app_id: appId, app_secret: appSecret }),
+          signal: AbortSignal.timeout(FEISHU_REQUEST_TIMEOUT_MS),
+        },
+      )
+    } catch (err) {
+      if (networkRetry < 2 && isTransientNetworkError(err)) {
+        await new Promise((resolve) => setTimeout(resolve, 300 * (networkRetry + 1)))
+        return refreshToken(networkRetry + 1)
+      }
+      throw err
+    }
 
     const data = (await response.json()) as {
       code: number
@@ -211,20 +233,30 @@ export function createFeishuApiClient(options: FeishuApiClientOptions): FeishuAp
     urlPath: string,
     body?: Record<string, unknown>,
     retryCount = 0,
+    networkRetry = 0,
   ): Promise<FeishuApiResponse> {
     const token = await getToken()
 
-    const response = await fetch(`${FEISHU_BASE_URL}${urlPath}`, {
-      method,
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-      },
-      body: body ? JSON.stringify(body) : undefined,
-      // Without a timeout a stalled request wedges every queued card update
-      // forever, and the card never reaches its final state.
-      signal: AbortSignal.timeout(FEISHU_REQUEST_TIMEOUT_MS),
-    })
+    let response: Response
+    try {
+      response = await fetch(`${FEISHU_BASE_URL}${urlPath}`, {
+        method,
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: body ? JSON.stringify(body) : undefined,
+        // Without a timeout a stalled request wedges every queued card update
+        // forever, and the card never reaches its final state.
+        signal: AbortSignal.timeout(FEISHU_REQUEST_TIMEOUT_MS),
+      })
+    } catch (err) {
+      if (networkRetry < 2 && isTransientNetworkError(err)) {
+        await new Promise((resolve) => setTimeout(resolve, 300 * (networkRetry + 1)))
+        return apiRequest(method, urlPath, body, retryCount, networkRetry + 1)
+      }
+      throw err
+    }
 
     const data = (await response.json()) as FeishuApiResponse
 
